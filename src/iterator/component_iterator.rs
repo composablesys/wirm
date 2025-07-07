@@ -210,7 +210,10 @@ impl<'b> Instrumenter<'b> for ComponentIterator<'_, 'b> {
                 .kind
             {
                 FuncKind::Import(_) => panic!("Can't inject into an imported function!"),
-                FuncKind::Local(l) => l.body.instructions[instr_idx].instr_flag.finish_instr(),
+                FuncKind::Local(l) => {
+                    l.instr_flag.finish_instr();
+                    l.body.instructions[instr_idx].instr_flag.finish_instr();
+                },
             }
         } else {
             panic!("Should have gotten Component Location and not Module Location!")

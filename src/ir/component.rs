@@ -126,15 +126,18 @@ impl<'a> Component<'a> {
     }
 
     /// Add a Module to this Component.
-    pub fn add_module(&mut self, module: Module<'a>) {
+    pub fn add_module(&mut self, module: Module<'a>) -> ModuleID {
+        let id = self.modules.len();
         self.modules.push(module);
         self.add_to_own_section(ComponentSection::Module);
         self.num_modules += 1;
+
+        ModuleID(id as u32)
     }
 
     /// Add a Global to this Component.
-    pub fn add_globals(&mut self, global: Global, module_idx: usize) -> GlobalID {
-        self.modules[module_idx].globals.add(global)
+    pub fn add_globals(&mut self, global: Global, module_idx: ModuleID) -> GlobalID {
+        self.modules[*module_idx as usize].globals.add(global)
     }
 
     fn add_to_sections(

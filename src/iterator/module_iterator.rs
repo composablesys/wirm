@@ -142,7 +142,10 @@ impl<'a> Instrumenter<'a> for ModuleIterator<'_, 'a> {
         {
             match &mut self.module.functions.get_mut(func_idx as FunctionID).kind {
                 FuncKind::Import(_) => panic!("Cannot get an instruction to an imported function"),
-                FuncKind::Local(l) => l.body.instructions[instr_idx].instr_flag.finish_instr(),
+                FuncKind::Local(l) => {
+                    l.instr_flag.finish_instr();
+                    l.body.instructions[instr_idx].instr_flag.finish_instr();
+                },
             }
         } else {
             panic!("Should have gotten Module Location and not Module Location!")
