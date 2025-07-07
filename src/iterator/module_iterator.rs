@@ -145,7 +145,7 @@ impl<'a> Instrumenter<'a> for ModuleIterator<'_, 'a> {
                 FuncKind::Local(l) => {
                     l.instr_flag.finish_instr();
                     l.body.instructions[instr_idx].instr_flag.finish_instr();
-                },
+                }
             }
         } else {
             panic!("Should have gotten Module Location and not Module Location!")
