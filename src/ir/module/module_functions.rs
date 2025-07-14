@@ -142,7 +142,6 @@ pub struct LocalFunction<'a> {
     pub instr_flag: FuncInstrFlag<'a>,
     pub body: Body<'a>,
     pub args: Vec<LocalID>,
-    pub was_added: bool,
     tag: InjectTag,
 }
 impl TagUtils for LocalFunction<'_> {
@@ -162,7 +161,6 @@ impl<'a> LocalFunction<'a> {
         function_id: FunctionID,
         body: Body<'a>,
         num_args: usize,
-        was_added: bool,
         tag: InjectTag,
     ) -> Self {
         let mut args = vec![];
@@ -175,7 +173,6 @@ impl<'a> LocalFunction<'a> {
             instr_flag: FuncInstrFlag::default(),
             body,
             args,
-            was_added,
             tag,
         }
     }

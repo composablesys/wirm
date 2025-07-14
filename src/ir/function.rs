@@ -91,7 +91,6 @@ impl<'a> FunctionBuilder<'a> {
                         FunctionID(*import_id),
                         self.body.clone(),
                         self.params.len(),
-                        true,
                         Some(tag),
                     );
                     local_func.body.name = Some(imp.name.to_string());

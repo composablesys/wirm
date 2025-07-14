@@ -32,7 +32,6 @@ fn test_fn_types() {
             FunctionID(0),
             Body::default(),
             0,
-            false,
             None
         )))
     );
@@ -43,7 +42,6 @@ fn test_fn_types() {
             FunctionID(0),
             Body::default(),
             0,
-            false,
             None
         )))
     );
