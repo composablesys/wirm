@@ -535,6 +535,7 @@ impl<'a> Module<'a> {
                     FunctionID(imports.num_funcs + index as u32),
                     (*code_sec).clone(),
                     types[&functions[index]].params().len(),
+                    false,
                     None,
                 ))),
                 (*code_sec).clone().name,
@@ -685,8 +686,15 @@ impl<'a> Module<'a> {
                     // 3. append THAT copy of the injections that now have corrected IDs to the
                     //    side effects list.
                     if pull_side_effects {
+                        // We want the injections to have the original fid of the target function.
+                        // If the function was added, it should be the actual fid of the added function.
+                        let id = if func.was_added {
+                            rel_func_idx as u32
+                        } else {
+                            rel_func_idx as u32 - self.imports.num_funcs_added
+                        };
                         func.add_corrected_special_injections(
-                            rel_func_idx as u32,
+                            id,
                             func_mapping,
                             global_mapping,
                             memory_mapping,
@@ -1672,7 +1680,14 @@ impl<'a> Module<'a> {
                 // at this point the IDs in all the function instrumentation opcodes have been corrected
                 // add the probe side effects!
                 if pull_side_effects {
-                    func.add_opcode_injections(rel_func_idx as u32, &mut side_effects);
+                    // We want the injections to have the original fid of the target function.
+                    // If the function was added, it should be the actual fid of the added function.
+                    let id = if func.was_added {
+                        rel_func_idx as u32
+                    } else {
+                        rel_func_idx as u32 - self.imports.num_funcs_added
+                    };
+                    func.add_opcode_injections(id, &mut side_effects);
                 }
                 if let Some(name) = &func.body.name {
                     function_names.append(rel_func_idx as u32, name.as_str());
@@ -1901,6 +1916,7 @@ impl<'a> Module<'a> {
             FunctionID(0), // will be fixed
             body,
             params.len(),
+            true,
             Some(tag),
         );
 
