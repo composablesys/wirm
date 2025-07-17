@@ -307,9 +307,20 @@ impl ModuleTypes {
 
         ty_id
     }
-
     /// Add a new function type to the module, returns the index of the new type. By default, encodes the supertype as `None`, shared as `true`, and `is_final` as false for now.
-    pub fn add_func_type(
+    pub fn add_func_type(&mut self, params: &[DataType], results: &[DataType]) -> TypeID {
+        self.add_func_type_with_tag(params, results, Tag::default())
+    }
+    pub fn add_func_type_with_tag(
+        &mut self,
+        params: &[DataType],
+        results: &[DataType],
+        tag: Tag,
+    ) -> TypeID {
+        self.add_func_type_internal(params, results, Some(tag))
+    }
+
+    pub(crate) fn add_func_type_internal(
         &mut self,
         param: &[DataType],
         ret: &[DataType],
@@ -335,6 +346,34 @@ impl ModuleTypes {
         super_type: Option<TypeID>,
         is_final: bool,
         shared: bool,
+    ) -> TypeID {
+        self.add_func_type_with_params_with_tag(
+            param,
+            ret,
+            super_type,
+            is_final,
+            shared,
+            Tag::default(),
+        )
+    }
+    pub fn add_func_type_with_params_with_tag(
+        &mut self,
+        param: &[DataType],
+        ret: &[DataType],
+        super_type: Option<TypeID>,
+        is_final: bool,
+        shared: bool,
+        tag: Tag,
+    ) -> TypeID {
+        self.add_func_type_with_params_internal(param, ret, super_type, is_final, shared, Some(tag))
+    }
+    pub(crate) fn add_func_type_with_params_internal(
+        &mut self,
+        param: &[DataType],
+        ret: &[DataType],
+        super_type: Option<TypeID>,
+        is_final: bool,
+        shared: bool,
         tag: InjectTag,
     ) -> TypeID {
         let ty = Types::FuncType {
@@ -353,7 +392,18 @@ impl ModuleTypes {
     }
 
     /// Add a new array type to the module. Assumes no `super_type` and `is_final` is `true`
-    pub fn add_array_type(
+    pub fn add_array_type(&mut self, field_type: DataType, mutable: bool) -> TypeID {
+        self.add_array_type_with_tag(field_type, mutable, Tag::default())
+    }
+    pub fn add_array_type_with_tag(
+        &mut self,
+        field_type: DataType,
+        mutable: bool,
+        tag: Tag,
+    ) -> TypeID {
+        self.add_array_type_internal(field_type, mutable, Some(tag))
+    }
+    pub(crate) fn add_array_type_internal(
         &mut self,
         field_type: DataType,
         mutable: bool,
@@ -379,6 +429,41 @@ impl ModuleTypes {
         super_type: Option<TypeID>,
         is_final: bool,
         shared: bool,
+    ) -> TypeID {
+        self.add_array_type_with_params_with_tag(
+            field_type,
+            mutable,
+            super_type,
+            is_final,
+            shared,
+            Tag::default(),
+        )
+    }
+    pub fn add_array_type_with_params_with_tag(
+        &mut self,
+        field_type: DataType,
+        mutable: bool,
+        super_type: Option<TypeID>,
+        is_final: bool,
+        shared: bool,
+        tag: Tag,
+    ) -> TypeID {
+        self.add_array_type_with_params_internal(
+            field_type,
+            mutable,
+            super_type,
+            is_final,
+            shared,
+            Some(tag),
+        )
+    }
+    pub(crate) fn add_array_type_with_params_internal(
+        &mut self,
+        field_type: DataType,
+        mutable: bool,
+        super_type: Option<TypeID>,
+        is_final: bool,
+        shared: bool,
         tag: InjectTag,
     ) -> TypeID {
         let ty = Types::ArrayType {
@@ -397,7 +482,18 @@ impl ModuleTypes {
     }
 
     /// Add a new struct type to the module. Assumes no `super_type` and `is_final` is `true`
-    pub fn add_struct_type(
+    pub fn add_struct_type(&mut self, field_type: Vec<DataType>, mutable: Vec<bool>) -> TypeID {
+        self.add_struct_type_with_tag(field_type, mutable, Tag::default())
+    }
+    pub fn add_struct_type_with_tag(
+        &mut self,
+        field_type: Vec<DataType>,
+        mutable: Vec<bool>,
+        tag: Tag,
+    ) -> TypeID {
+        self.add_struct_type_internal(field_type, mutable, Some(tag))
+    }
+    pub(crate) fn add_struct_type_internal(
         &mut self,
         field_type: Vec<DataType>,
         mutable: Vec<bool>,
@@ -417,6 +513,41 @@ impl ModuleTypes {
 
     /// Add a new array type with all parameters.
     pub fn add_struct_type_with_params(
+        &mut self,
+        field_type: Vec<DataType>,
+        mutable: Vec<bool>,
+        super_type: Option<TypeID>,
+        is_final: bool,
+        shared: bool,
+    ) -> TypeID {
+        self.add_struct_type_with_params_with_tag(
+            field_type,
+            mutable,
+            super_type,
+            is_final,
+            shared,
+            Tag::default(),
+        )
+    }
+    pub fn add_struct_type_with_params_with_tag(
+        &mut self,
+        field_type: Vec<DataType>,
+        mutable: Vec<bool>,
+        super_type: Option<TypeID>,
+        is_final: bool,
+        shared: bool,
+        tag: Tag,
+    ) -> TypeID {
+        self.add_struct_type_with_params_internal(
+            field_type,
+            mutable,
+            super_type,
+            is_final,
+            shared,
+            Some(tag),
+        )
+    }
+    pub(crate) fn add_struct_type_with_params_internal(
         &mut self,
         field_type: Vec<DataType>,
         mutable: Vec<bool>,

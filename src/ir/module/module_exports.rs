@@ -61,7 +61,13 @@ impl ModuleExports {
     }
 
     /// Add an exported function
-    pub fn add_export_func(&mut self, name: String, exp_id: u32, tag: InjectTag) {
+    pub fn add_export_func(&mut self, name: String, exp_id: u32) {
+        self.add_export_func_with_tag(name, exp_id, Tag::default())
+    }
+    pub fn add_export_func_with_tag(&mut self, name: String, exp_id: u32, tag: Tag) {
+        self.add_export_func_internal(name, exp_id, Some(tag))
+    }
+    pub(crate) fn add_export_func_internal(&mut self, name: String, exp_id: u32, tag: InjectTag) {
         let export = Export {
             name,
             kind: ExternalKind::Func,
@@ -73,7 +79,13 @@ impl ModuleExports {
     }
 
     /// Add an exported memory
-    pub fn add_export_mem(&mut self, name: String, exp_id: u32, tag: InjectTag) {
+    pub fn add_export_mem(&mut self, name: String, exp_id: u32) {
+        self.add_export_mem_with_tag(name, exp_id, Tag::default())
+    }
+    pub fn add_export_mem_with_tag(&mut self, name: String, exp_id: u32, tag: Tag) {
+        self.add_export_mem_internal(name, exp_id, Some(tag))
+    }
+    pub(crate) fn add_export_mem_internal(&mut self, name: String, exp_id: u32, tag: InjectTag) {
         let export = Export {
             name,
             kind: ExternalKind::Memory,

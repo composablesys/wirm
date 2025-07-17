@@ -733,9 +733,11 @@ impl<'a> Module<'a> {
                         // NOTE: This retains the tag information for function exit just in case
                         // that's necessary for the library user. This may need to be handled on
                         // the user side.
-                        let block_ty =
-                            self.types
-                                .add_func_type(&[], &func_results, on_exit.tag.clone());
+                        let block_ty = self.types.add_func_type_internal(
+                            &[],
+                            &func_results,
+                            on_exit.tag.clone(),
+                        );
                         resolve_function_exit_with_block_wrapper(&mut on_entry.instrs, block_ty);
                     }
                 }
@@ -1895,7 +1897,9 @@ impl<'a> Module<'a> {
         body: Body<'a>,
         tag: Tag,
     ) -> FunctionID {
-        let ty = self.types.add_func_type(params, results, Some(tag.clone()));
+        let ty = self
+            .types
+            .add_func_type_internal(params, results, Some(tag.clone()));
         let local_func = LocalFunction::new(
             ty,
             FunctionID(0), // will be fixed

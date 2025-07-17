@@ -12,7 +12,7 @@ use wirm::ir::id::LocalID;
 
 fn main() {
     let mut module = Module::default();
-    let log_type_id = module.types.add_func_type(&[DataType::I32], &[], None);
+    let log_type_id = module.types.add_func_type(&[DataType::I32], &[]);
     let (log_func_id, _) = module.add_import_func("env".to_string(), "log".to_string(), log_type_id);
 
     let mut factorial = FunctionBuilder::new(&[DataType::I32], &[DataType::I32]);
@@ -62,7 +62,7 @@ fn main() {
     let fact_id = factorial.finish_module(&mut module);
 
     // Export the `factorial` function.
-    module.exports.add_export_func("factorial".to_string(), *fact_id, None);
+    module.exports.add_export_func("factorial".to_string(), *fact_id);
 
     module.emit_wasm("target/out.wasm").unwrap();
 
