@@ -51,8 +51,18 @@ impl ModuleExports {
         ModuleExports { exports }
     }
 
+    /// Iterate over all the exports in the module.
+    ///     
+    /// Note that exports may have been deleted.
     pub fn iter(&self) -> std::slice::Iter<'_, Export> {
         self.exports.iter()
+    }
+
+    /// Iterate over the exports in the module.
+    ///     
+    /// Note that exports may have been deleted.
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Export> {
+        self.exports.iter_mut()
     }
 
     /// Checks if there are no exports
@@ -89,6 +99,42 @@ impl ModuleExports {
         let export = Export {
             name,
             kind: ExternalKind::Memory,
+            index: exp_id,
+            deleted: false,
+            tag,
+        };
+        self.exports.push(export)
+    }
+
+    /// Add an exported table
+    pub fn add_export_table(&mut self, name: String, exp_id: u32) {
+        self.add_export_table_with_tag(name, exp_id, Tag::default())
+    }
+    pub fn add_export_table_with_tag(&mut self, name: String, exp_id: u32, tag: Tag) {
+        self.add_export_table_internal(name, exp_id, Some(tag))
+    }
+    pub(crate) fn add_export_table_internal(&mut self, name: String, exp_id: u32, tag: InjectTag) {
+        let export = Export {
+            name,
+            kind: ExternalKind::Table,
+            index: exp_id,
+            deleted: false,
+            tag,
+        };
+        self.exports.push(export)
+    }
+
+    /// Add an exported global
+    pub fn add_export_global(&mut self, name: String, exp_id: u32) {
+        self.add_export_global_with_tag(name, exp_id, Tag::default())
+    }
+    pub fn add_export_global_with_tag(&mut self, name: String, exp_id: u32, tag: Tag) {
+        self.add_export_global_internal(name, exp_id, Some(tag))
+    }
+    pub(crate) fn add_export_global_internal(&mut self, name: String, exp_id: u32, tag: InjectTag) {
+        let export = Export {
+            name,
+            kind: ExternalKind::Global,
             index: exp_id,
             deleted: false,
             tag,

@@ -604,6 +604,48 @@ fn add_global_with_import() {
     );
 }
 
+#[test]
+fn test_elem_reindexing() {
+    let output_path = format!("{TEST_DEBUG_DIR}/test_elems.wasm");
+    // This wat inserts two table entries of type () -> ().
+    // Running "check" will trap if the table entries have the wrong type.
+    let wat = r#"
+        (module
+            (table 2 2 funcref)
+            (type $f_type (func))
+            (func $f)
+            (elem (i32.const 0) $f)
+            (elem (i32.const 1) funcref (ref.func $f))
+            (func (export "check") 
+                (call_indirect (type $f_type) (i32.const 0))
+                (call_indirect (type $f_type) (i32.const 1))
+            )
+        )"#;
+    let buff = wat::parse_str(wat).unwrap();
+    let mut module = Module::parse(&buff, false).unwrap();
+
+    // Add an import of a different type. Then the table will have entries of
+    // the wrong type unless the element section is reindexed.
+    let ty_id = module.types.add_func_type(&[DataType::I32], &[]);
+    let _ = module.add_import_func("".to_string(), "".to_string(), ty_id);
+    validate(&module.encode(), &output_path).unwrap();
+
+    // Run the check function to assert that entries in the table have the expected types.
+    let engine = wasmtime::Engine::default();
+    let mut linker = wasmtime::Linker::new(&engine);
+    let module = wasmtime::Module::from_file(&engine, &output_path).unwrap();
+    let mut store = wasmtime::Store::new(&engine, ());
+    linker
+        .func_wrap("", "", |_: wasmtime::Caller<_>, _: i32| {})
+        .unwrap();
+
+    let instance = linker.instantiate(&mut store, &module).unwrap();
+    let check_func = instance
+        .get_typed_func::<(), ()>(&mut store, "check")
+        .unwrap();
+    check_func.call(&mut store, ()).unwrap();
+}
+
 const TEST_DEBUG_DIR: &str = "output/tests/debug_me/test_module/";
 
 /// create output path if it doesn't exist

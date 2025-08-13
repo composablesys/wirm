@@ -322,6 +322,13 @@ impl<'a> Functions<'a> {
     pub fn iter(&self) -> impl Iterator<Item = &Function<'a>> {
         Iter::<Function<'a>>::iter(self)
     }
+
+    /// Iterate over functions present in the module
+    ///
+    /// Note: Functions returned by this iterator *may* be deleted.
+    pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Function<'a>> {
+        self.functions.iter_mut()
+    }
 }
 
 impl<'a> Iter<Function<'a>> for Functions<'a> {

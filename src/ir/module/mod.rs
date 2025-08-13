@@ -79,7 +79,7 @@ pub struct Module<'a> {
     /// Index of the start function.
     pub start: Option<FunctionID>,
     /// Elements
-    pub elements: Vec<Element<'a>>,
+    pub elements: Vec<Element>,
     /// Tags
     pub tags: Vec<TagType>,
     /// Custom Sections
@@ -1480,10 +1480,11 @@ impl<'a> Module<'a> {
             let mut elements = wasm_encoder::ElementSection::new();
             let mut temp_const_exprs = vec![];
             let mut element_items = vec![];
-            for element in self.elements.iter() {
+            for element in self.elements.iter_mut() {
                 temp_const_exprs.clear();
                 element_items.clear();
-                let element_items = match &element.items {
+                let (items, kind) = (&mut element.items, &mut element.kind);
+                let element_items = match items {
                     // TODO: Update the elements section based on additions/deletion
                     ElementItems::Functions(funcs) => {
                         element_items = funcs
@@ -1494,12 +1495,11 @@ impl<'a> Module<'a> {
                     }
                     ElementItems::ConstExprs { ty, exprs } => {
                         temp_const_exprs.reserve(exprs.len());
-                        for e in exprs.iter() {
-                            temp_const_exprs.push(
-                                reencode
-                                    .const_expr((*e).clone())
-                                    .expect("Unable to convert element constant expr"),
-                            );
+                        for e in exprs.iter_mut() {
+                            for i in e.exprs.iter_mut() {
+                                i.fix_id_mapping(&func_mapping, &global_mapping);
+                            }
+                            temp_const_exprs.push(e.to_wasmencoder_type());
                         }
                         wasm_encoder::Elements::Expressions(
                             wasm_encoder::RefType {
@@ -1511,7 +1511,7 @@ impl<'a> Module<'a> {
                     }
                 };
 
-                match &element.kind {
+                match kind {
                     ElementKind::Passive => {
                         elements.passive(element_items);
                     }
@@ -1519,11 +1519,12 @@ impl<'a> Module<'a> {
                         table_index,
                         offset_expr,
                     } => {
+                        for e in offset_expr.exprs.iter_mut() {
+                            e.fix_id_mapping(&func_mapping, &global_mapping);
+                        }
                         elements.active(
                             *table_index,
-                            &reencode
-                                .const_expr((*offset_expr).clone())
-                                .expect("Unable to convert offset expr"),
+                            &offset_expr.to_wasmencoder_type(),
                             element_items,
                         );
                     }

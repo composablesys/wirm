@@ -99,12 +99,13 @@ impl<'a> Table<'a> {
 }
 
 #[derive(Clone, Debug)]
-pub struct Element<'a> {
-    pub kind: ElementKind<'a>,
-    pub items: ElementItems<'a>,
+pub struct Element {
+    pub kind: ElementKind,
+    pub items: ElementItems,
     tag: InjectTag,
 }
-impl TagUtils for Element<'_> {
+
+impl TagUtils for Element {
     fn get_or_create_tag(&mut self) -> &mut Tag {
         self.tag.get_or_insert_default()
     }
@@ -113,8 +114,9 @@ impl TagUtils for Element<'_> {
         &self.tag
     }
 }
-impl<'a> Element<'a> {
-    pub fn new(kind: ElementKind<'a>, items: ElementItems<'a>, tag: InjectTag) -> Self {
+
+impl Element {
+    pub fn new(kind: ElementKind, items: ElementItems, tag: InjectTag) -> Self {
         Self { kind, items, tag }
     }
 }

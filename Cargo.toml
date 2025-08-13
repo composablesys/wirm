@@ -1,6 +1,6 @@
 [package]
 name = "wirm"
-version = "1.0.2"
+version = "1.1.0"
 edition = "2021"
 authors = ["Suhas Thalanki", "Alex Bai", "Elizabeth Gilbert"]
 description = "A lightweight WebAssembly Transformation Library for the Component Model"
@@ -26,3 +26,4 @@ wasmparser = "0.235.0"
 [dev-dependencies]
 wasmprinter = "0.235.0"
 wat = "1.227.1"
+wasmtime = "34.0.1"

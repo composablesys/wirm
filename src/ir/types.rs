@@ -776,16 +776,16 @@ impl DataSegmentKind {
 
 #[derive(Debug, Clone)]
 /// Kind of Element
-pub enum ElementKind<'a> {
+pub enum ElementKind {
     Passive,
     Active {
         table_index: Option<u32>,
-        offset_expr: ConstExpr<'a>,
+        offset_expr: InitExpr,
     },
     Declared,
 }
 
-impl ElementKind<'_> {
+impl ElementKind {
     pub(crate) fn from_wasmparser(kind: wasmparser::ElementKind) -> Result<ElementKind> {
         match kind {
             wasmparser::ElementKind::Passive => Ok(ElementKind::Passive),
@@ -795,7 +795,7 @@ impl ElementKind<'_> {
                 offset_expr,
             } => Ok(ElementKind::Active {
                 table_index,
-                offset_expr,
+                offset_expr: InitExpr::eval(&offset_expr),
             }),
         }
     }
@@ -803,15 +803,12 @@ impl ElementKind<'_> {
 
 #[derive(Debug, Clone)]
 /// Type of element
-pub enum ElementItems<'a> {
+pub enum ElementItems {
     Functions(Vec<FunctionID>),
-    ConstExprs {
-        ty: RefType,
-        exprs: Vec<ConstExpr<'a>>,
-    },
+    ConstExprs { ty: RefType, exprs: Vec<InitExpr> },
 }
 
-impl ElementItems<'_> {
+impl ElementItems {
     pub(crate) fn from_wasmparser(items: wasmparser::ElementItems) -> Result<ElementItems> {
         match items {
             wasmparser::ElementItems::Functions(reader) => {
@@ -828,7 +825,7 @@ impl ElementItems<'_> {
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 Ok(ElementItems::ConstExprs {
                     ty: ref_type,
-                    exprs,
+                    exprs: exprs.iter().map(|expr| InitExpr::eval(expr)).collect(),
                 })
             }
         }

@@ -131,6 +131,10 @@ impl Global {
     fn delete(&mut self) {
         self.deleted = true;
     }
+
+    pub fn kind(&self) -> &GlobalKind {
+        &self.kind
+    }
 }
 
 /// The globals section of a module

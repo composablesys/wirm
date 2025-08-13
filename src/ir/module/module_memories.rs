@@ -49,6 +49,20 @@ impl Memories {
         }
     }
 
+    /// Iterate over the memories in the module.
+    ///     
+    /// Note that memories may have been deleted.
+    pub fn iter(&self) -> std::slice::Iter<'_, Memory> {
+        <Self as Iter<Memory>>::iter(self)
+    }
+
+    /// Iterate over the memories in the module.
+    ///     
+    /// Note that memories may have been deleted.
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Memory> {
+        self.memories.iter_mut()
+    }
+
     /// Get a memory by its MemoryID
     pub fn get_mem_by_id(&self, mem_id: MemoryID) -> Option<&Memory> {
         if *mem_id < self.memories.len() as u32 {
