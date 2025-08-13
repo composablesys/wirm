@@ -15,7 +15,7 @@ It uses [wasmparser](https://docs.rs/wasmparser/0.214.0/wasmparser/) and [wasm_e
 
 ## Environment Setup ##
 
-Install wasm-tools:
+To install wasm-tools:
 ```shell
 $ cargo install wasm-tools
 ```
