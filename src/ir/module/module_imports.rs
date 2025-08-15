@@ -143,8 +143,6 @@ impl<'a> ModuleImports<'a> {
 
     /// Add a new import to the module.
     pub(crate) fn add<'b>(&'b mut self, import: Import<'a>) -> ImportsID {
-        // using a match instead of import.is_*() to make sure that we're
-        // exhaustive due to the compiler guarantees.
         match import.ty {
             TypeRef::Func(..) => {
                 self.num_funcs += 1;

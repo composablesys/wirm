@@ -3,18 +3,16 @@
 
 use wasm_encoder::reencode::{Reencode, ReencodeComponent, RoundtripReencoder};
 use wasm_encoder::{ComponentAliasSection, ModuleArg, ModuleSection, NestedComponentSection};
-use wasmparser::{
-    CanonicalFunction, ComponentAlias, ComponentExport, ComponentImport, ComponentInstance,
-    ComponentStartFunction, ComponentType, ComponentTypeDeclaration, CoreType, Encoding, Instance,
-    Parser, Payload,
-};
-
+use wasmparser::{CanonicalFunction, ComponentAlias, ComponentExport, ComponentExternalKind, ComponentFuncType, ComponentImport, ComponentInstance, ComponentStartFunction, ComponentType, ComponentTypeDeclaration, CoreType, Encoding, Instance, InstanceTypeDeclaration, Parser, Payload};
 use crate::error::Error;
+use crate::ir::component::alias::Aliases;
+use crate::ir::component::canons::Canons;
+use crate::ir::component::types::ComponentTypes;
 use crate::ir::helpers::{
     print_alias, print_component_export, print_component_import, print_component_type,
     print_core_type,
 };
-use crate::ir::id::{CustomSectionID, FunctionID, GlobalID, ModuleID};
+use crate::ir::id::{AliasFuncId, AliasId, CanonicalFuncId, ComponentExportId, ComponentTypeFuncId, ComponentTypeId, ComponentTypeInstanceId, CoreInstanceId, CustomSectionID, FunctionID, GlobalID, ModuleID};
 use crate::ir::module::module_functions::FuncKind;
 use crate::ir::module::module_globals::Global;
 use crate::ir::module::Module;
@@ -25,17 +23,21 @@ use crate::ir::wrappers::{
     convert_results, do_reencode, process_alias,
 };
 
+pub mod types;
+mod canons;
+mod alias;
+
 #[derive(Debug)]
 /// Intermediate Representation of a wasm component.
 pub struct Component<'a> {
     /// Modules
     pub modules: Vec<Module<'a>>,
     ///Alias
-    pub alias: Vec<ComponentAlias<'a>>,
+    pub alias: Aliases<'a>,
     /// Core Types
     pub core_types: Vec<CoreType<'a>>,
     /// Component Types
-    pub component_types: Vec<ComponentType<'a>>,
+    pub component_types: ComponentTypes<'a>,
     /// Imports
     pub imports: Vec<ComponentImport<'a>>,
     /// Exports
@@ -45,13 +47,11 @@ pub struct Component<'a> {
     /// Component Instances
     pub component_instance: Vec<ComponentInstance<'a>>,
     /// Canons
-    pub canons: Vec<CanonicalFunction>,
+    pub canons: Canons,
     /// Custom sections
     pub custom_sections: CustomSections<'a>,
     /// Nested Components
     pub components: Vec<Component<'a>>,
-    /// Number of modules
-    pub num_modules: usize,
     /// Component Start Section
     pub start_section: Vec<ComponentStartFunction>,
     /// Sections of the Component. Represented as (#num of occurrences of a section, type of section)
@@ -86,16 +86,15 @@ impl<'a> Component<'a> {
     pub fn new() -> Self {
         Component {
             modules: vec![],
-            alias: vec![],
+            alias: Aliases::default(),
             core_types: vec![],
-            component_types: vec![],
+            component_types: ComponentTypes::default(),
             imports: vec![],
             exports: vec![],
             instances: vec![],
             component_instance: vec![],
-            canons: vec![],
+            canons: Canons::default(),
             custom_sections: CustomSections::new(vec![]),
-            num_modules: 0,
             start_section: vec![],
             sections: vec![],
             num_sections: 0,
@@ -117,7 +116,7 @@ impl<'a> Component<'a> {
         }
     }
 
-    fn add_to_own_section(&mut self, section: ComponentSection) {
+    fn add_section(&mut self, section: ComponentSection) {
         if self.sections[self.num_sections - 1].1 == section {
             self.sections[self.num_sections - 1].0 += 1;
         } else {
@@ -129,8 +128,7 @@ impl<'a> Component<'a> {
     pub fn add_module(&mut self, module: Module<'a>) -> ModuleID {
         let id = self.modules.len();
         self.modules.push(module);
-        self.add_to_own_section(ComponentSection::Module);
-        self.num_modules += 1;
+        self.add_section(ComponentSection::Module);
 
         ModuleID(id as u32)
     }
@@ -138,6 +136,103 @@ impl<'a> Component<'a> {
     /// Add a Global to this Component.
     pub fn add_globals(&mut self, global: Global, module_idx: ModuleID) -> GlobalID {
         self.modules[*module_idx as usize].globals.add(global)
+    }
+    
+    pub fn add_import(&mut self, import: ComponentImport<'a>) -> u32 {
+        let id = self.imports.len();
+        self.imports.push(import);
+        self.add_section(ComponentSection::ComponentImport);
+        
+        id as u32
+    }
+
+    pub fn add_alias_func(&mut self, alias: ComponentAlias<'a>) -> (AliasFuncId, AliasId) {
+        let (item_id, alias_id) = self.alias.add(alias);
+        self.add_section(ComponentSection::Alias);
+
+        (AliasFuncId(item_id), alias_id)
+    }
+
+    pub fn add_canon_func(&mut self, canon: CanonicalFunction) -> CanonicalFuncId {
+        let id = self.canons.add(canon).1;
+        self.add_section(ComponentSection::Canon);
+
+        id
+    }
+
+    pub(crate) fn add_component_type(&mut self, component_ty: ComponentType<'a>) -> (u32, ComponentTypeId) {
+        let ids = self.component_types.add(component_ty);
+        self.add_section(ComponentSection::ComponentType);
+
+        ids
+    }
+
+    pub fn add_type_instance(&mut self, decls: Vec<InstanceTypeDeclaration<'a>>) -> (ComponentTypeInstanceId, ComponentTypeId) {
+        let (ty_inst_id, ty_id) = self.add_component_type(
+            ComponentType::Instance(decls.into_boxed_slice())
+        );
+
+        // almost account for aliased types!
+        (ComponentTypeInstanceId(ty_inst_id + self.alias.num_types as u32), ty_id)
+    }
+
+    pub fn add_type_func(&mut self, ty: ComponentFuncType<'a>) -> (ComponentTypeFuncId, ComponentTypeId) {
+        let (ty_inst_id, ty_id) = self.add_component_type(
+            ComponentType::Func(ty)
+        );
+
+        // almost account for aliased types!
+        (ComponentTypeFuncId(ty_inst_id + self.alias.num_types as u32), ty_id)
+    }
+    
+    pub fn add_core_instance(&mut self, instance: Instance<'a>) -> CoreInstanceId {
+        let inst_id = self.instances.len() as u32;
+        self.instances.push(instance);
+        self.add_section(ComponentSection::CoreInstance);
+        
+        CoreInstanceId(inst_id)
+    }
+
+    pub fn get_type_of_exported_func(&self, export_id: ComponentExportId) -> Option<&ComponentType<'a>> {
+        // TODO: cache this in a struct somehow
+        let mut canon_funcs_before = 0;
+        while !matches!(self.canons.items.get(canon_funcs_before), Some(CanonicalFunction::Lift {..}) | Some(CanonicalFunction::Lower {..})) {
+            // Handle non-lift/lower canonical functions
+            canon_funcs_before += 1;
+        }
+
+        // TODO: cache this in a struct somehow
+        let mut exported_funcs_before = 0;
+        let mut e = self.exports.get(*export_id as usize);
+        while exported_funcs_before < *export_id && e.is_some() && !matches!(e.unwrap().kind, ComponentExternalKind::Func) {
+            exported_funcs_before += 1;
+            e = self.exports.get(*export_id as usize);
+        }
+
+        if let Some(export) = self.exports.get(*export_id as usize) {
+            if let Some(CanonicalFunction::Lift {type_index: ty_id, ..}) = self.canons.items.get(export.index as usize + canon_funcs_before - exported_funcs_before as usize) {
+                // TODO: make this more efficient (cache in the struct)
+                let mut num_non_func_tys = 0;
+                while !matches!(self.component_types.items.get(num_non_func_tys), Some(ComponentType::Func(..))) {
+                    // Skip non-function types
+                    num_non_func_tys += 1;
+                }
+                let mut i = 0;
+                let mut num_aliased_types = 0;
+                while num_aliased_types < (*ty_id as usize - num_non_func_tys) && i < self.alias.items.len() {
+                    if matches!(self.alias.items.get(i), Some(ComponentAlias::InstanceExport {kind: ComponentExternalKind::Type, ..})) {
+                        // aliased types
+                        num_aliased_types += 1;
+                    }
+                    i += 1;
+                }
+                self.component_types.items.get(*ty_id as usize - num_aliased_types)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 
     fn add_to_sections(
@@ -167,7 +262,7 @@ impl<'a> Component<'a> {
     /// ```
     pub fn parse(wasm: &'a [u8], enable_multi_memory: bool) -> Result<Self, Error> {
         let parser = Parser::new(0);
-        Component::parse_comp(wasm, enable_multi_memory, parser, 0, &mut vec![])
+        Self::parse_comp(wasm, enable_multi_memory, parser, 0, &mut vec![])
     }
 
     fn parse_comp(
@@ -442,19 +537,17 @@ impl<'a> Component<'a> {
                 _ => {}
             }
         }
-        let num_modules = modules.len();
         Ok(Component {
             modules,
-            alias,
+            alias: Aliases::new(alias),
             core_types,
-            component_types,
+            component_types: ComponentTypes::new(component_types),
             imports,
             exports,
             instances,
             component_instance,
-            canons,
+            canons: Canons::new(canons),
             custom_sections: CustomSections::new(custom_sections),
-            num_modules,
             sections,
             start_section,
             num_sections,
@@ -476,7 +569,7 @@ impl<'a> Component<'a> {
         })
     }
 
-    /// Encode a `Component` to bytes..
+    /// Encode a `Component` into bytes.
     ///
     /// # Example
     ///
@@ -568,11 +661,11 @@ impl<'a> Component<'a> {
                 ComponentSection::ComponentType => {
                     assert!(
                         *num as usize + last_processed_comp_ty as usize
-                            <= self.component_types.len()
+                            <= self.component_types.items.len()
                     );
                     let mut component_ty_section = wasm_encoder::ComponentTypeSection::new();
                     for comp_ty_idx in last_processed_comp_ty..last_processed_comp_ty + num {
-                        match &self.component_types[comp_ty_idx as usize] {
+                        match &self.component_types.items[comp_ty_idx as usize] {
                             ComponentType::Defined(comp_ty) => {
                                 let enc = component_ty_section.defined_type();
                                 match comp_ty {
@@ -832,20 +925,20 @@ impl<'a> Component<'a> {
                     component.section(&instances);
                 }
                 ComponentSection::Alias => {
-                    assert!(*num as usize + last_processed_alias as usize <= self.alias.len());
+                    assert!(*num as usize + last_processed_alias as usize <= self.alias.items.len(), "{num} + {last_processed_alias} <= {}", self.alias.items.len());
                     let mut alias = ComponentAliasSection::new();
                     for a_idx in last_processed_alias..last_processed_alias + num {
-                        let a = &self.alias[a_idx as usize];
+                        let a = &self.alias.items[a_idx as usize];
                         alias.alias(process_alias(a, &mut reencode));
                         last_processed_alias += 1;
                     }
                     component.section(&alias);
                 }
                 ComponentSection::Canon => {
-                    assert!(*num as usize + last_processed_canon as usize <= self.canons.len());
+                    assert!(*num as usize + last_processed_canon as usize <= self.canons.items.len());
                     let mut canon_sec = wasm_encoder::CanonicalFunctionSection::new();
                     for canon_idx in last_processed_canon..last_processed_canon + num {
-                        let canon = &self.canons[canon_idx as usize];
+                        let canon = &self.canons.items[canon_idx as usize];
                         match canon {
                             CanonicalFunction::Lift {
                                 core_func_index,
@@ -1144,9 +1237,9 @@ impl<'a> Component<'a> {
     /// Print a rudimentary textual representation of a `Component`
     pub fn print(&self) {
         // Print Alias
-        if !self.alias.is_empty() {
+        if !self.alias.items.is_empty() {
             eprintln!("Alias Section:");
-            for alias in self.alias.iter() {
+            for alias in self.alias.items.iter() {
                 print_alias(alias);
             }
             eprintln!();
@@ -1162,9 +1255,9 @@ impl<'a> Component<'a> {
         }
 
         // Print ComponentType
-        if !self.component_types.is_empty() {
+        if !self.component_types.items.is_empty() {
             eprintln!("Component Type Section:");
-            for cty in self.component_types.iter() {
+            for cty in self.component_types.items.iter() {
                 print_component_type(cty);
             }
             eprintln!();

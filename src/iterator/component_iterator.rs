@@ -1,6 +1,5 @@
 //! Iterator to traverse a Component
 
-use crate::ir::component::Component;
 use crate::ir::id::{FunctionID, GlobalID, LocalID, ModuleID};
 use crate::ir::module::module_functions::FuncKind;
 use crate::ir::module::module_globals::Global;
@@ -12,6 +11,7 @@ use crate::subiterator::component_subiterator::ComponentSubIterator;
 use std::collections::HashMap;
 use std::iter::Iterator as StdIter;
 use wasmparser::Operator;
+use crate::Component;
 
 /// Iterator for a Component.
 pub struct ComponentIterator<'a, 'b> {
@@ -43,7 +43,7 @@ impl<'a, 'b> ComponentIterator<'a, 'b> {
             metadata.insert(ModuleID(mod_idx as u32), m.get_func_metadata());
         }
         print_metadata(&metadata);
-        let num_modules = comp.num_modules;
+        let num_modules = comp.modules.len();
         ComponentIterator {
             comp,
             comp_iterator: ComponentSubIterator::new(
