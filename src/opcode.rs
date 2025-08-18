@@ -101,7 +101,7 @@ pub trait Instrumenter<'a> {
     fn append_tag_at(&mut self, data: Vec<u8>, loc: Location) -> &mut Self;
 
     /// Get the instruction injected at index idx
-    fn get_injected_val(&self, idx: usize) -> &Operator;
+    fn get_injected_val(&self, idx: usize) -> &'_ Operator;
 }
 
 /// Defines Injection behaviour at the current location of the Iterator

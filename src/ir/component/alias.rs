@@ -1,5 +1,5 @@
-use wasmparser::{ComponentAlias, ComponentExternalKind, ExternalKind};
 use crate::ir::id::AliasId;
+use wasmparser::{ComponentAlias, ComponentExternalKind, ExternalKind};
 
 #[derive(Debug, Default)]
 pub struct Aliases<'a> {
@@ -11,26 +11,32 @@ pub struct Aliases<'a> {
     num_funcs: usize,
     num_funcs_added: usize,
     pub(crate) num_types: usize,
-    num_types_added: usize
+    num_types_added: usize,
 }
 impl<'a> Aliases<'a> {
     pub fn new(items: Vec<ComponentAlias<'a>>) -> Self {
         let (mut num_core_funcs, mut num_funcs, mut num_types) = (0, 0, 0);
         for i in items.iter() {
             match i {
-                ComponentAlias::CoreInstanceExport {kind, ..} => match kind {
+                ComponentAlias::CoreInstanceExport { kind, .. } => match kind {
                     ExternalKind::Func => num_core_funcs += 1,
                     _ => {}
-                }
-                ComponentAlias::InstanceExport {kind, ..} => match kind {
+                },
+                ComponentAlias::InstanceExport { kind, .. } => match kind {
                     ComponentExternalKind::Type => num_types += 1,
                     ComponentExternalKind::Func => num_funcs += 1,
                     _ => {}
-                }
+                },
                 _ => {}
             }
         }
-        Self { items, num_core_funcs, num_funcs, num_types, ..Self::default()}
+        Self {
+            items,
+            num_core_funcs,
+            num_funcs,
+            num_types,
+            ..Self::default()
+        }
     }
 
     pub(crate) fn add(&mut self, alias: ComponentAlias<'a>) -> (u32, AliasId) {
@@ -43,7 +49,7 @@ impl<'a> Aliases<'a> {
 
                     self.num_core_funcs - 1
                 }
-                _ => todo!()
+                _ => todo!(),
             },
             ComponentAlias::InstanceExport { kind, .. } => match kind {
                 ComponentExternalKind::Type => {
@@ -51,17 +57,17 @@ impl<'a> Aliases<'a> {
                     self.num_types_added += 1;
 
                     self.num_types - 1
-                },
+                }
                 ComponentExternalKind::Func => {
                     self.num_funcs += 1;
                     self.num_funcs_added += 1;
 
                     self.num_funcs - 1
-                },
+                }
 
-                _ => todo!("haven't supported this yet: {:#?}", kind)
-            }
-            _ => todo!()
+                _ => todo!("haven't supported this yet: {:#?}", kind),
+            },
+            _ => todo!(),
         };
 
         self.items.push(alias);

@@ -8,10 +8,10 @@ use crate::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
 use crate::module_builder::AddLocal;
 use crate::opcode::{Inject, InjectAt, Instrumenter, MacroOpcode, Opcode};
 use crate::subiterator::component_subiterator::ComponentSubIterator;
+use crate::Component;
 use std::collections::HashMap;
 use std::iter::Iterator as StdIter;
 use wasmparser::Operator;
-use crate::Component;
 
 /// Iterator for a Component.
 pub struct ComponentIterator<'a, 'b> {
