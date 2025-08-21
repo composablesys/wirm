@@ -944,7 +944,7 @@ impl<'a> FuncInstrFlag<'a> {
     }
 
     /// Get an instruction to the current FuncInstrMode's list
-    pub fn get_instr(&self, idx: usize) -> &Operator {
+    pub fn get_instr(&self, idx: usize) -> &Operator<'_> {
         match self.current_mode {
             None => {
                 panic!("Current mode is not set...cannot grab instruction without context!")
@@ -1385,7 +1385,7 @@ impl<'a> InstrumentationFlag<'a> {
     }
 
     /// Get an instruction to the current InstrumentationMode's list
-    pub fn get_instr(&self, idx: usize) -> &Operator {
+    pub fn get_instr(&self, idx: usize) -> &Operator<'_> {
         match self.current_mode {
             None => {
                 panic!("Current mode is not set...cannot grab instruction without context!")
@@ -1444,6 +1444,133 @@ pub enum Location {
     },
 }
 
+/// A sequence of Wasm instructions which may be instrumented.
+#[derive(Debug, Default, Clone)]
+pub struct Instructions<'a> {
+    instructions: Vec<Operator<'a>>,
+    flags: Option<Vec<InstrumentationFlag<'a>>>,
+}
+
+impl<'a> Instructions<'a> {
+    fn force_flags(&mut self) {
+        if self.flags.is_none() {
+            self.flags = Some(vec![
+                InstrumentationFlag::default();
+                self.instructions.len()
+            ]);
+        }
+    }
+
+    pub fn new(instructions: Vec<Operator<'a>>) -> Self {
+        Self {
+            instructions,
+            flags: None,
+        }
+    }
+
+    /// Get array of operators (instructions).
+    pub fn get_ops(&self) -> &[Operator<'a>] {
+        &self.instructions
+    }
+
+    /// Get array of instrumentation flags.
+    pub fn get_flags(&self) -> Option<&[InstrumentationFlag<'a>]> {
+        self.flags.as_ref().map(|v| &v[..])
+    }
+
+    /// Only to be used internally for encoding.
+    pub(crate) fn get_ops_flags_mut(
+        &mut self,
+    ) -> (&mut [Operator<'a>], Option<&mut [InstrumentationFlag<'a>]>) {
+        match &mut self.flags {
+            Some(flags) => (&mut self.instructions, Some(flags)),
+            None => (&mut self.instructions, None),
+        }
+    }
+
+    /// # Panics
+    ///
+    /// Directly mutating the instructions will likely invalidate the
+    /// instruction flags, so this will panic if the instructions have been
+    /// instrumented.
+    ///
+    pub fn get_ops_mut(&mut self) -> &mut Vec<Operator<'a>> {
+        if self.flags.is_some() {
+            panic!(
+                "Cannot get mutable instructions if flags are set. \
+            Mutating instructions will invalidate instrumentation flags."
+            );
+        }
+        &mut self.instructions
+    }
+
+    pub fn get_instr_flag(&self, idx: usize) -> Option<&InstrumentationFlag<'a>> {
+        self.flags.as_ref().and_then(|f| f.get(idx))
+    }
+
+    pub fn push(&mut self, op: Operator<'a>) {
+        self.instructions.push(op);
+        if let Some(flags) = &mut self.flags {
+            flags.push(InstrumentationFlag::default());
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.instructions.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.instructions.is_empty()
+    }
+
+    pub fn add_instr(&mut self, index: usize, op: Operator<'a>) -> bool {
+        self.force_flags();
+        self.flags.as_mut().unwrap()[index].add_instr(&self.instructions[index], op)
+    }
+
+    pub fn current_mode(&self, index: usize) -> Option<InstrumentationMode> {
+        self.flags.as_ref().and_then(|f| f[index].current_mode)
+    }
+
+    pub fn set_current_mode(&mut self, index: usize, mode: InstrumentationMode) {
+        self.force_flags();
+        self.flags.as_mut().unwrap()[index].current_mode = Some(mode);
+    }
+
+    pub fn finish_instr(&mut self, index: usize) {
+        self.force_flags();
+        self.flags.as_mut().unwrap()[index].finish_instr();
+    }
+
+    pub fn instr_len(&self, index: usize) -> usize {
+        self.flags
+            .as_ref()
+            .map(|f| f[index].instr_len())
+            .unwrap_or(0)
+    }
+
+    pub fn set_alternate(&mut self, index: usize, alternate: InjectedInstrs<'a>) {
+        self.force_flags();
+        self.flags.as_mut().unwrap()[index].alternate = Some(alternate);
+    }
+
+    pub fn set_block_alt(&mut self, index: usize, block_alt: InjectedInstrs<'a>) {
+        self.force_flags();
+        self.flags.as_mut().unwrap()[index].block_alt = Some(block_alt);
+    }
+
+    pub fn append_to_tag(&mut self, index: usize, data: Vec<u8>) {
+        self.force_flags();
+        self.flags.as_mut().unwrap()[index].append_to_tag(data);
+    }
+
+    pub fn clear_instr(&mut self, idx: usize, mode: InstrumentationMode) {
+        if let Some(flags) = &mut self.flags {
+            flags[idx].clear_instr(mode);
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 /// Body of a function in a wasm module
 pub struct Body<'a> {
@@ -1455,7 +1582,7 @@ pub struct Body<'a> {
     pub locals: Vec<(u32, DataType)>,
     pub num_locals: u32,
     // accessing operators by .0 is not very clear
-    pub instructions: Vec<Instruction<'a>>,
+    pub instructions: Instructions<'a>,
     pub num_instructions: usize,
     pub name: Option<String>,
 }
@@ -1467,28 +1594,8 @@ where
 {
     /// Push a new operator (instruction) to the end of the body
     pub fn push_op(&mut self, op: Operator<'b>) {
-        self.instructions.push(Instruction::new(op));
+        self.instructions.push(op);
         self.num_instructions += 1;
-    }
-
-    /// Get some operator (instruction) at the specified index of the body
-    pub fn get_op(&self, idx: usize) -> &Operator {
-        &self.instructions[idx].op
-    }
-
-    /// Get the instrumentation of some operator in the body
-    pub fn get_instr_flag(&self, idx: usize) -> &InstrumentationFlag {
-        &self.instructions[idx].instr_flag
-    }
-
-    /// Get the instrumentation of some operator in the body
-    pub fn clear_instr(&mut self, idx: usize, mode: InstrumentationMode) {
-        self.instructions[idx].instr_flag.clear_instr(mode);
-    }
-
-    /// Push an end operator (instruction) to the end of the body
-    pub fn end(&mut self) {
-        self.push_op(Operator::End);
     }
 
     pub fn locals_as_vec(&self) -> Vec<DataType> {
@@ -1499,35 +1606,6 @@ where
             }
         }
         locals
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Instruction<'a> {
-    pub op: Operator<'a>,
-    pub instr_flag: InstrumentationFlag<'a>,
-}
-impl<'a, 'b> Instruction<'a>
-where
-    'b: 'a,
-{
-    pub fn new(op: Operator<'b>) -> Self {
-        Self {
-            op,
-            instr_flag: InstrumentationFlag::default(),
-        }
-    }
-
-    pub fn add_instr(&mut self, val: Operator<'a>) -> bool {
-        self.instr_flag.add_instr(&self.op, val)
-    }
-
-    pub fn instr_len(&self) -> usize {
-        self.instr_flag.instr_len()
-    }
-
-    pub fn extract_op(&'a self) -> Operator<'a> {
-        self.op.clone()
     }
 }
 
@@ -1917,7 +1995,7 @@ impl<'a> CustomSections<'a> {
     }
 
     /// Get a custom section by its ID
-    pub fn get_by_id(&self, custom_section_id: CustomSectionID) -> &CustomSection {
+    pub fn get_by_id(&self, custom_section_id: CustomSectionID) -> &CustomSection<'_> {
         if *custom_section_id < self.custom_sections.len() as u32 {
             return &self.custom_sections[*custom_section_id as usize];
         }

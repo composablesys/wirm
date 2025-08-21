@@ -1,4 +1,4 @@
-use crate::ir::types::{Instruction, InstrumentationMode};
+use crate::ir::types::{Instructions, InstrumentationMode};
 use std::panic::{catch_unwind, UnwindSafe};
 use wasmparser::{BlockType, Operator};
 
@@ -112,9 +112,9 @@ pub fn assert_panics_with_message(func: impl FnOnce() + UnwindSafe, msg: &str) {
 }
 
 fn check_instr_op(op: &Operator, mode: InstrumentationMode) -> bool {
-    let mut instr = Instruction::new(op.clone());
-    instr.instr_flag.current_mode = Some(mode);
-    instr.add_instr(Operator::Nop); // should OR should not panic!
+    let mut instr = Instructions::new(vec![op.clone()]);
+    instr.set_current_mode(0, mode);
+    instr.add_instr(0, Operator::Nop); // should OR should not panic!
     true
 }
 

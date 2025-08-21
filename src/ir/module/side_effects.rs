@@ -1,5 +1,5 @@
 use crate::ir::module::module_types::Types;
-use crate::ir::types::{FuncInstrMode, InitExpr, Instruction, InstrumentationMode, Tag};
+use crate::ir::types::{FuncInstrMode, InitExpr, InstrumentationMode, Tag};
 use crate::{DataType, Module};
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -126,7 +126,7 @@ pub enum Injection<'a> {
         /// The function's local variables
         locals: Vec<DataType>,
         /// The body of the function (in WAT).
-        body: Vec<Instruction<'a>>,
+        body: Vec<Operator<'a>>,
         tag: Tag,
     },
     /// Represents a local variable that has been added to a module's local function.

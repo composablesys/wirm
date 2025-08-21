@@ -22,7 +22,7 @@ impl<'a> ModuleTables<'a> {
     }
 
     /// Create an iterable over the table section
-    pub fn iter(&self) -> std::slice::Iter<'_, Table> {
+    pub fn iter(&self) -> std::slice::Iter<'_, Table<'_>> {
         self.tables.iter()
     }
 

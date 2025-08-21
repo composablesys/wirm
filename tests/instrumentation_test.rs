@@ -66,7 +66,7 @@ fn no_injection() {
         } = comp_it.curr_loc().0
         {
             if *comp_it.curr_op().unwrap() == interested {
-                assert_ne!(discriminant(instr_mode), discriminant(&None));
+                assert_ne!(discriminant(&instr_mode), discriminant(&None));
             }
 
             trace!(

@@ -196,7 +196,7 @@ impl<'a> ModuleImports<'a> {
     }
 
     /// Get an Import by its `ImportsID`
-    pub fn get(&self, id: ImportsID) -> &Import {
+    pub fn get(&self, id: ImportsID) -> &Import<'_> {
         &self.imports[*id as usize]
     }
 

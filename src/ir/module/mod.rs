@@ -1,8 +1,6 @@
 //! Intermediate Representation of a wasm module.
 
-use super::types::{
-    DataType, InitExpr, InjectedInstrs, Instruction, InstrumentationMode, Tag, TagUtils,
-};
+use super::types::{DataType, InitExpr, InjectedInstrs, InstrumentationMode, Tag, TagUtils};
 use crate::error::Error;
 use crate::ir::function::FunctionModifier;
 use crate::ir::id::{DataSegmentID, FunctionID, GlobalID, ImportsID, LocalID, MemoryID, TypeID};
@@ -21,7 +19,7 @@ use crate::ir::module::side_effects::{InjectType, Injection};
 use crate::ir::types::InstrumentationMode::{BlockAlt, BlockEntry, BlockExit, SemanticAfter};
 use crate::ir::types::{
     BlockType, Body, CustomSections, DataSegment, DataSegmentKind, ElementItems, ElementKind,
-    InstrumentationFlag,
+    Instructions, InstrumentationFlag,
 };
 use crate::ir::wrappers::{
     indirect_namemap_parser2encoder, namemap_parser2encoder, refers_to_func, refers_to_global,
@@ -108,6 +106,21 @@ pub struct Module<'a> {
     pub(crate) tag_names: wasm_encoder::NameMap,
 }
 
+enum FlagsIter<'a> {
+    Flags(std::vec::IntoIter<InstrumentationFlag<'a>>),
+    Default,
+}
+
+impl<'a> Iterator for FlagsIter<'a> {
+    type Item = InstrumentationFlag<'a>;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            FlagsIter::Flags(flags) => flags.next(),
+            FlagsIter::Default => Some(InstrumentationFlag::default()),
+        }
+    }
+}
+
 impl<'a> Module<'a> {
     /// Parses a `Module` from a wasm binary.
     ///
@@ -123,6 +136,54 @@ impl<'a> Module<'a> {
     pub fn parse(wasm: &'a [u8], enable_multi_memory: bool) -> Result<Self, Error> {
         let parser = Parser::new(0);
         Module::parse_internal(wasm, enable_multi_memory, parser)
+    }
+
+    fn parse_body(
+        body: wasmparser::FunctionBody,
+        enable_multi_memory: bool,
+    ) -> Result<Body, Error> {
+        let locals_reader = body.get_locals_reader()?;
+        let locals = locals_reader.into_iter().collect::<Result<Vec<_>, _>>()?;
+        let mut num_locals = 0;
+        let locals: Vec<(u32, DataType)> = locals
+            .iter()
+            .map(|(count, val_type)| {
+                num_locals += count;
+                (*count, DataType::from(*val_type))
+            })
+            .collect();
+
+        let instructions = Instructions::new(
+            body.get_operators_reader()?
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+        if let Some(last) = instructions.get_ops().last() {
+            if let Operator::End = last {
+            } else {
+                return Err(Error::MissingFunctionEnd {
+                    func_range: body.range(),
+                });
+            }
+        }
+        if !enable_multi_memory
+            && instructions.get_ops().iter().any(|i| match i {
+                Operator::MemoryGrow { mem, .. } | Operator::MemorySize { mem, .. } => *mem != 0x00,
+                _ => false,
+            })
+        {
+            return Err(Error::InvalidMemoryReservedByte {
+                func_range: body.range(),
+            });
+        }
+
+        Ok(Body {
+            locals,
+            num_locals,
+            num_instructions: instructions.len(),
+            instructions,
+            name: None,
+        })
     }
 
     pub(crate) fn parse_internal(
@@ -319,50 +380,8 @@ impl<'a> Module<'a> {
                     code_section_count = count as usize;
                 }
                 Payload::CodeSectionEntry(body) => {
-                    let locals_reader = body.get_locals_reader()?;
-                    let locals = locals_reader.into_iter().collect::<Result<Vec<_>, _>>()?;
-                    let mut num_locals = 0;
-                    let locals: Vec<(u32, DataType)> = locals
-                        .iter()
-                        .map(|(count, val_type)| {
-                            num_locals += count;
-                            (*count, DataType::from(*val_type))
-                        })
-                        .collect();
-
-                    let instructions = body
-                        .get_operators_reader()?
-                        .into_iter()
-                        .collect::<Result<Vec<_>, _>>()?;
-                    if let Some(last) = instructions.last() {
-                        if let Operator::End = last {
-                        } else {
-                            return Err(Error::MissingFunctionEnd {
-                                func_range: body.range(),
-                            });
-                        }
-                    }
-                    if !enable_multi_memory
-                        && instructions.iter().any(|i| match i {
-                            Operator::MemoryGrow { mem, .. } | Operator::MemorySize { mem, .. } => {
-                                *mem != 0x00
-                            }
-                            _ => false,
-                        })
-                    {
-                        return Err(Error::InvalidMemoryReservedByte {
-                            func_range: body.range(),
-                        });
-                    }
-                    let instructions_bool: Vec<_> =
-                        instructions.into_iter().map(Instruction::new).collect();
-                    code_sections.push(Body {
-                        locals,
-                        num_locals,
-                        instructions: instructions_bool.clone(),
-                        num_instructions: instructions_bool.len(),
-                        name: None,
-                    });
+                    let body = Self::parse_body(body, enable_multi_memory)?;
+                    code_sections.push(body);
                 }
                 Payload::TagSection(tag_section_reader) => {
                     for tag in tag_section_reader.into_iter() {
@@ -743,16 +762,20 @@ impl<'a> Module<'a> {
                 }
                 let mut builder = self.functions.get_fn_modifier(func_idx).unwrap();
 
+                let flags = if let Some(flags) = builder.body.instructions.get_flags() {
+                    FlagsIter::Flags(flags.to_vec().into_iter())
+                } else {
+                    FlagsIter::Default
+                };
                 // Must make copy to be able to iterate over body while calling builder.* methods that mutate the instrumentation flag!
-                let readable_copy_of_body = builder.body.instructions.clone();
-                for (
-                    idx,
-                    Instruction {
-                        op,
-                        instr_flag: instrumentation,
-                    },
-                ) in readable_copy_of_body.iter().enumerate()
-                {
+                let readable_copy_of_body = builder
+                    .body
+                    .instructions
+                    .get_ops()
+                    .to_vec()
+                    .into_iter()
+                    .zip(flags.into_iter());
+                for (idx, (op, instrumentation)) in readable_copy_of_body.enumerate() {
                     // resolve function-level instrumentation
                     if let Some(on_entry) = &mut instr_func_on_entry {
                         if !on_entry.instrs.is_empty() {
@@ -761,7 +784,7 @@ impl<'a> Module<'a> {
                     }
                     if let Some(on_exit) = &mut instr_func_on_exit {
                         if !on_exit.instrs.is_empty() {
-                            resolve_function_exit(&mut on_exit.instrs, &mut builder, op, idx);
+                            resolve_function_exit(&mut on_exit.instrs, &mut builder, &op, idx);
                         }
                     }
 
@@ -779,7 +802,7 @@ impl<'a> Module<'a> {
                                         &block_alt.instrs,
                                         &mut builder,
                                         &mut retain_end,
-                                        op,
+                                        &op,
                                         idx,
                                     )
                                 {
@@ -821,7 +844,7 @@ impl<'a> Module<'a> {
                                         &block_alt.instrs,
                                         &mut builder,
                                         &mut retain_end,
-                                        op,
+                                        &op,
                                         idx,
                                     )
                                 {
@@ -926,7 +949,7 @@ impl<'a> Module<'a> {
 
                         // Handle block entry
                         if !block_entry.instrs.is_empty() {
-                            resolve_block_entry(&block_entry.instrs, &mut builder, op, idx);
+                            resolve_block_entry(&block_entry.instrs, &mut builder, &op, idx);
                             builder.clear_instr_at(
                                 Location::Module {
                                     func_idx: FunctionID(0), // not used
@@ -943,7 +966,7 @@ impl<'a> Module<'a> {
                                 &block_stack,
                                 &mut resolve_on_else_or_end,
                                 &mut resolve_on_end,
-                                op,
+                                &op,
                             );
                             builder.clear_instr_at(
                                 Location::Module {
@@ -961,7 +984,7 @@ impl<'a> Module<'a> {
                                 &mut builder,
                                 &block_stack,
                                 &mut resolve_on_end,
-                                op,
+                                &op,
                                 idx,
                             );
                             builder.clear_instr_at(
@@ -1232,7 +1255,6 @@ impl<'a> Module<'a> {
                 if *is_explicit {
                     type_sect.ty().rec(subtypes);
                 }
-                // otherwise already handled!
             }
             module.section(&type_sect);
         }
@@ -1294,7 +1316,7 @@ impl<'a> Module<'a> {
                                         sig: (sig.params(), sig.results()),
                                         locals: l.body.locals_as_vec(),
                                         tag: tag.clone(),
-                                        body: l.body.instructions.clone(),
+                                        body: l.body.instructions.get_ops().to_vec(),
                                     },
                                 );
                             }
@@ -1581,15 +1603,16 @@ impl<'a> Module<'a> {
                 }
                 let mut function = wasm_encoder::Function::new(converted_locals);
                 let instr_len = instructions.len() - 1;
-                for (
-                    idx,
-                    Instruction {
-                        op,
-                        instr_flag: instrument,
-                    },
-                ) in instructions.iter_mut().enumerate()
-                {
+                let (ops, mut flags) = instructions.get_ops_flags_mut();
+                for (idx, op) in ops.iter_mut().enumerate() {
                     fix_op_id_mapping(op, &func_mapping, &global_mapping, &memory_mapping);
+
+                    // If there are no flags, or the flags are empty, just encode the instruction.
+                    if flags.is_none() {
+                        encode(&op.clone(), &mut function, &mut reencode);
+                        continue;
+                    }
+                    let instrument = &mut flags.as_mut().unwrap()[idx];
                     if !instrument.has_instr() {
                         encode(&op.clone(), &mut function, &mut reencode);
                     } else {

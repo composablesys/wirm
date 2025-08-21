@@ -16,7 +16,7 @@ pub trait Instrumenter<'a> {
     /// Can be called after finishing some instrumentation to reset the mode.
     fn finish_instr(&mut self);
     /// Get the InstrumentType of the current location
-    fn curr_instrument_mode(&self) -> &Option<InstrumentationMode>;
+    fn curr_instrument_mode(&self) -> Option<InstrumentationMode>;
 
     /// Sets the type of Instrumentation Type of the specified location
     fn set_instrument_mode_at(&mut self, mode: InstrumentationMode, loc: Location);
@@ -99,9 +99,6 @@ pub trait Instrumenter<'a> {
     fn empty_block_alt_at(&mut self, loc: Location) -> &mut Self;
 
     fn append_tag_at(&mut self, data: Vec<u8>, loc: Location) -> &mut Self;
-
-    /// Get the instruction injected at index idx
-    fn get_injected_val(&self, idx: usize) -> &Operator;
 }
 
 /// Defines Injection behaviour at the current location of the Iterator

@@ -5,7 +5,7 @@ use crate::ir::id::{FunctionID, ImportsID, LocalID, TypeID};
 use crate::ir::module::side_effects::{InjectType, Injection};
 use crate::ir::module::{GetID, Iter, LocalOrImport, ReIndexable};
 use crate::ir::types::{
-    Body, FuncInstrFlag, HasInjectTag, InjectTag, Instruction, InstrumentationMode, Tag, TagUtils,
+    Body, FuncInstrFlag, HasInjectTag, InjectTag, InstrumentationMode, Tag, TagUtils,
 };
 use crate::DataType;
 use log::warn;
@@ -190,8 +190,7 @@ impl<'a> LocalFunction<'a> {
             // inject at function level
             self.instr_flag.add_instr(instr);
         } else {
-            // inject at instruction level
-            let is_special = self.body.instructions[instr_idx].add_instr(instr);
+            let is_special = self.body.instructions.add_instr(instr_idx, instr);
             // remember if we injected a special instrumentation (to be resolved before encoding)
             self.instr_flag.has_special_instr |= is_special;
         }
@@ -202,7 +201,7 @@ impl<'a> LocalFunction<'a> {
             // get at function level
             self.instr_flag.instr_len()
         } else {
-            self.body.instructions[instr_idx].instr_len()
+            self.body.instructions.instr_len(instr_idx)
         }
     }
 
@@ -212,14 +211,12 @@ impl<'a> LocalFunction<'a> {
             self.instr_flag.append_to_tag(data);
         } else {
             // append at instruction level
-            self.body.instructions[instr_idx]
-                .instr_flag
-                .append_to_tag(data);
+            self.body.instructions.append_to_tag(instr_idx, data);
         }
     }
 
     pub fn clear_instr_at(&mut self, instr_idx: usize, mode: InstrumentationMode) {
-        self.body.clear_instr(instr_idx, mode);
+        self.body.instructions.clear_instr(instr_idx, mode);
     }
 
     pub(crate) fn add_corrected_special_injections(
@@ -244,8 +241,10 @@ impl<'a> LocalFunction<'a> {
         rel_fid: u32,
         side_effects: &mut HashMap<InjectType, Vec<Injection<'a>>>,
     ) {
-        for (idx, Instruction { instr_flag, .. }) in self.body.instructions.iter().enumerate() {
-            instr_flag.add_injections(rel_fid, idx as u32, side_effects);
+        if let Some(flags) = self.body.instructions.get_flags() {
+            for (idx, instr_flag) in flags.iter().enumerate() {
+                instr_flag.add_injections(rel_fid, idx as u32, side_effects);
+            }
         }
     }
 }

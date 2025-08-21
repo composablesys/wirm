@@ -13,14 +13,14 @@ pub trait Iterator {
     fn reset(&mut self);
 
     /// Go to the next Instruction
-    fn next(&mut self) -> Option<&Operator>;
+    fn next(&mut self) -> Option<&Operator<'_>>;
 
     /// Returns the Current Location as a Location and a bool value that
     /// says whether the location is at the end of the function.
     fn curr_loc(&self) -> (Location, bool);
 
     /// Get the current instruction
-    fn curr_op(&self) -> Option<&Operator>;
+    fn curr_op(&self) -> Option<&Operator<'_>>;
 }
 
 /// This trait coincides with the Iterator as instrumentation occurs during Wasm visitation.

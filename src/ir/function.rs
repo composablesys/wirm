@@ -234,7 +234,7 @@ impl<'b> Inject<'b> for FunctionModifier<'_, 'b> {
         } else {
             // inject at instruction level
             if let Some(idx) = self.instr_idx {
-                let is_special = self.body.instructions[idx].add_instr(instr);
+                let is_special = self.body.instructions.add_instr(idx, instr);
                 // remember if we injected a special instrumentation (to be resolved before encoding)
                 self.instr_flag.has_special_instr |= is_special;
             } else {
@@ -261,9 +261,9 @@ impl<'b> Instrumenter<'b> for FunctionModifier<'_, 'b> {
     fn finish_instr(&mut self) {
         self.instr_flag.finish_instr();
     }
-    fn curr_instrument_mode(&self) -> &Option<InstrumentationMode> {
+    fn curr_instrument_mode(&self) -> Option<InstrumentationMode> {
         if let Some(idx) = self.instr_idx {
-            &self.body.instructions[idx].instr_flag.current_mode
+            self.body.instructions.current_mode(idx)
         } else {
             panic!("Instruction index not set");
         }
@@ -272,7 +272,7 @@ impl<'b> Instrumenter<'b> for FunctionModifier<'_, 'b> {
     fn set_instrument_mode_at(&mut self, mode: InstrumentationMode, loc: Location) {
         if let Location::Module { instr_idx, .. } = loc {
             self.instr_idx = Some(instr_idx);
-            self.body.instructions[instr_idx].instr_flag.current_mode = Some(mode);
+            self.body.instructions.set_current_mode(instr_idx, mode);
         } else {
             panic!("Should have gotten module location");
         }
@@ -294,7 +294,7 @@ impl<'b> Instrumenter<'b> for FunctionModifier<'_, 'b> {
         } else {
             // get at instruction level
             if let Some(idx) = self.instr_idx {
-                self.body.instructions[idx].instr_len()
+                self.body.instructions.instr_len(idx)
             } else {
                 panic!("Instruction index not set");
             }
@@ -303,7 +303,7 @@ impl<'b> Instrumenter<'b> for FunctionModifier<'_, 'b> {
 
     fn clear_instr_at(&mut self, loc: Location, mode: InstrumentationMode) {
         if let Location::Module { instr_idx, .. } = loc {
-            self.body.clear_instr(instr_idx, mode);
+            self.body.instructions.clear_instr(instr_idx, mode);
         } else {
             panic!("Should have gotten module location");
         }
@@ -311,7 +311,7 @@ impl<'b> Instrumenter<'b> for FunctionModifier<'_, 'b> {
 
     fn add_instr_at(&mut self, loc: Location, instr: Operator<'b>) {
         if let Location::Module { instr_idx, .. } = loc {
-            self.body.instructions[instr_idx].add_instr(instr);
+            self.body.instructions.add_instr(instr_idx, instr);
         } else {
             panic!("Should have gotten module location");
         }
@@ -319,8 +319,9 @@ impl<'b> Instrumenter<'b> for FunctionModifier<'_, 'b> {
 
     fn empty_alternate_at(&mut self, loc: Location) -> &mut Self {
         if let Location::Module { instr_idx, .. } = loc {
-            self.body.instructions[instr_idx].instr_flag.alternate =
-                Some(InjectedInstrs::default());
+            self.body
+                .instructions
+                .set_alternate(instr_idx, InjectedInstrs::default());
         } else {
             panic!("Should have gotten Component Location and not Module Location!")
         }
@@ -330,8 +331,9 @@ impl<'b> Instrumenter<'b> for FunctionModifier<'_, 'b> {
 
     fn empty_block_alt_at(&mut self, loc: Location) -> &mut Self {
         if let Location::Module { instr_idx, .. } = loc {
-            self.body.instructions[instr_idx].instr_flag.block_alt =
-                Some(InjectedInstrs::default());
+            self.body
+                .instructions
+                .set_block_alt(instr_idx, InjectedInstrs::default());
             self.instr_flag.has_special_instr |= true;
         } else {
             panic!("Should have gotten Component Location and not Module Location!")
@@ -350,15 +352,9 @@ impl<'b> Instrumenter<'b> for FunctionModifier<'_, 'b> {
         } else {
             // append at instruction level
             let (Location::Component { instr_idx, .. } | Location::Module { instr_idx, .. }) = loc;
-            self.body.instructions[instr_idx]
-                .instr_flag
-                .append_to_tag(data);
+            self.body.instructions.append_to_tag(instr_idx, data);
         }
 
         self
-    }
-
-    fn get_injected_val(&self, idx: usize) -> &Operator {
-        self.body.instructions[idx].instr_flag.get_instr(idx)
     }
 }
