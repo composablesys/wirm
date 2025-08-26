@@ -190,6 +190,9 @@ impl<'a> Module<'a> {
         enable_multi_memory: bool,
         parser: Parser,
     ) -> Result<Self, Error> {
+        #[cfg(feature = "parallel")]
+        use rayon::prelude::*;
+
         let mut imports: ModuleImports = ModuleImports::default();
         let mut types: HashMap<TypeID, Types> = HashMap::new();
         let mut recgroups = vec![];
@@ -199,7 +202,6 @@ impl<'a> Module<'a> {
         let mut functions = vec![];
         let mut elements = vec![];
         let mut code_section_count = 0;
-        let mut code_sections = vec![];
         let mut globals = vec![];
         let mut exports = vec![];
         let mut start = None;
@@ -219,6 +221,7 @@ impl<'a> Module<'a> {
         let mut data_names = wasm_encoder::NameMap::new();
         let mut field_names = wasm_encoder::IndirectNameMap::new();
         let mut tag_names = wasm_encoder::NameMap::new();
+        let mut bodies_and_names = vec![];
 
         for payload in parser.parse_all(wasm) {
             let payload = payload?;
@@ -379,8 +382,7 @@ impl<'a> Module<'a> {
                     code_section_count = count as usize;
                 }
                 Payload::CodeSectionEntry(body) => {
-                    let body = Self::parse_body(body, enable_multi_memory)?;
-                    code_sections.push(body);
+                    bodies_and_names.push((body, None));
                 }
                 Payload::TagSection(tag_section_reader) => {
                     for tag in tag_section_reader.into_iter() {
@@ -416,7 +418,7 @@ impl<'a> Module<'a> {
                                             } else {
                                                 let rel_idx = abs_idx - imports.num_funcs;
                                                 // assert!(0 < rel_idx && rel_idx < code_sections.len() as u32);
-                                                code_sections[rel_idx as usize].name =
+                                                bodies_and_names[rel_idx as usize].1 =
                                                     Some(naming.name.to_string());
                                             }
                                         }
@@ -513,6 +515,31 @@ impl<'a> Module<'a> {
                 _ => todo!(),
             }
         }
+
+        #[cfg(feature = "parallel")]
+        let code_sections = bodies_and_names
+            .into_par_iter()
+            .map(|(body, name)| {
+                let mut body = Self::parse_body(body, enable_multi_memory)?;
+                if let Some(name) = name {
+                    body.name = Some(name);
+                }
+                Ok::<_, Error>(body)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        #[cfg(not(feature = "parallel"))]
+        let code_sections = bodies_and_names
+            .into_iter()
+            .map(|(body, name)| {
+                let mut body = Self::parse_body(body, enable_multi_memory)?;
+                if let Some(name) = name {
+                    body.name = Some(name);
+                }
+                Ok::<_, Error>(body)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
         if code_section_count != code_sections.len() || code_section_count != functions.len() {
             return Err(Error::IncorrectCodeCounts {
                 function_section_count: functions.len(),
@@ -1130,6 +1157,118 @@ impl<'a> Module<'a> {
         }
     }
 
+    fn encode_function(
+        func: &mut LocalFunction,
+        func_mapping: &HashMap<u32, u32>,
+        global_mapping: &HashMap<u32, u32>,
+        memory_mapping: &HashMap<u32, u32>,
+    ) -> wasm_encoder::Function {
+        let mut reencode = RoundtripReencoder;
+        let Body {
+            instructions,
+            locals,
+            ..
+        } = &mut func.body;
+        let mut converted_locals = Vec::with_capacity(locals.len());
+        for (c, ty) in locals {
+            converted_locals.push((*c, wasm_encoder::ValType::from(&*ty)));
+        }
+        let mut function = wasm_encoder::Function::new(converted_locals);
+        let instr_len = instructions.len() - 1;
+        let (ops, mut flags) = instructions.get_ops_flags_mut();
+        for (idx, op) in ops.iter_mut().enumerate() {
+            fix_op_id_mapping(op, &func_mapping, &global_mapping, &memory_mapping);
+            if flags.is_none() {
+                encode(&op.clone(), &mut function, &mut reencode);
+                continue;
+            }
+            let instrument = &mut flags.as_mut().unwrap()[idx];
+            if !instrument.has_instr() {
+                encode(&op.clone(), &mut function, &mut reencode);
+                continue;
+            } else {
+                instrument.check_special_is_resolved();
+
+                // this instruction has instrumentation, handle it!
+                let InstrumentationFlag {
+                    current_mode: _current_mode,
+                    before,
+                    after,
+                    alternate,
+                    ..
+                } = instrument;
+
+                // If we're at the `end` of the function, drop this instrumentation
+                let at_end = idx >= instr_len;
+
+                // First encode before instructions
+                update_ids_and_encode(
+                    &mut before.instrs,
+                    &func_mapping,
+                    &global_mapping,
+                    &memory_mapping,
+                    &mut function,
+                    &mut reencode,
+                );
+
+                // If there are any alternate, encode the alternate
+                if !at_end && !alternate.is_none() {
+                    if let Some(alt) = alternate {
+                        update_ids_and_encode(
+                            &mut alt.instrs,
+                            &func_mapping,
+                            &global_mapping,
+                            &memory_mapping,
+                            &mut function,
+                            &mut reencode,
+                        );
+                    }
+                } else {
+                    encode(&op.clone(), &mut function, &mut reencode);
+                }
+
+                // Now encode the after instructions
+                if !at_end {
+                    update_ids_and_encode(
+                        &mut after.instrs,
+                        &func_mapping,
+                        &global_mapping,
+                        &memory_mapping,
+                        &mut function,
+                        &mut reencode,
+                    );
+                }
+            }
+
+            fn update_ids_and_encode(
+                instrs: &mut Vec<Operator>,
+                func_mapping: &HashMap<u32, u32>,
+                global_mapping: &HashMap<u32, u32>,
+                memory_mapping: &HashMap<u32, u32>,
+                function: &mut wasm_encoder::Function,
+                reencode: &mut RoundtripReencoder,
+            ) {
+                for instr in instrs {
+                    fix_op_id_mapping(instr, func_mapping, global_mapping, memory_mapping);
+                    encode(instr, function, reencode);
+                }
+            }
+            fn encode(
+                instr: &Operator,
+                function: &mut wasm_encoder::Function,
+                reencode: &mut RoundtripReencoder,
+            ) {
+                function.instruction(
+                    &reencode
+                        .instruction(instr.clone())
+                        .expect("Unable to convert Instruction"),
+                );
+            }
+        }
+
+        function
+    }
+
     /// Encodes an Wirm Module to a wasm_encoder Module.
     /// This requires a mutable reference to self due to the special instrumentation resolution step.
     pub(crate) fn encode_internal(
@@ -1139,6 +1278,9 @@ impl<'a> Module<'a> {
         wasm_encoder::Module,
         HashMap<InjectType, Vec<Injection<'a>>>,
     ) {
+        #[cfg(feature = "parallel")]
+        use rayon::prelude::*;
+
         // First fix the ID mappings throughout the module
         let func_mapping = if self.functions.recalculate_ids {
             Self::recalculate_ids(&mut self.functions)
@@ -1538,131 +1680,53 @@ impl<'a> Module<'a> {
 
         if !self.num_local_functions > 0 {
             let mut code = wasm_encoder::CodeSection::new();
-            for rel_func_idx in 0..self.functions.as_vec().len() {
-                if self.functions.is_deleted(FunctionID(rel_func_idx as u32)) {
-                    continue;
-                }
-                if let FuncKind::Import(_) =
-                    &self.functions.get_kind(FunctionID(rel_func_idx as u32))
-                {
-                    continue;
-                }
 
-                let func = self
-                    .functions
-                    .get_mut(FunctionID(rel_func_idx as u32))
-                    .unwrap_local_mut();
-
-                let Body {
-                    instructions,
-                    locals,
-                    ..
-                } = &mut func.body;
-                let mut converted_locals = Vec::with_capacity(locals.len());
-                for (c, ty) in locals {
-                    converted_locals.push((*c, wasm_encoder::ValType::from(&*ty)));
-                }
-                let mut function = wasm_encoder::Function::new(converted_locals);
-                let instr_len = instructions.len() - 1;
-                let (ops, mut flags) = instructions.get_ops_flags_mut();
-                for (idx, op) in ops.iter_mut().enumerate() {
-                    fix_op_id_mapping(op, &func_mapping, &global_mapping, &memory_mapping);
-
-                    // If there are no flags, or the flags are empty, just encode the instruction.
-                    if flags.is_none() {
-                        encode(&op.clone(), &mut function, &mut reencode);
-                        continue;
-                    }
-                    let instrument = &mut flags.as_mut().unwrap()[idx];
-                    if !instrument.has_instr() {
-                        encode(&op.clone(), &mut function, &mut reencode);
-                    } else {
-                        instrument.check_special_is_resolved();
-
-                        // this instruction has instrumentation, handle it!
-                        let InstrumentationFlag {
-                            current_mode: _current_mode,
-                            before,
-                            after,
-                            alternate,
-                            ..
-                        } = instrument;
-
-                        // If we're at the `end` of the function, drop this instrumentation
-                        let at_end = idx >= instr_len;
-
-                        // First encode before instructions
-                        update_ids_and_encode(
-                            &mut before.instrs,
+            #[cfg(feature = "parallel")]
+            let functions = {
+                let functions_mut = self.functions.iter_mut().collect::<Vec<_>>();
+                functions_mut
+                    .into_par_iter()
+                    .enumerate()
+                    .filter_map(|(idx, f)| {
+                        if f.is_deleted() || f.is_import() {
+                            return None;
+                        }
+                        let f = f.unwrap_local_mut();
+                        let encoded_func = Self::encode_function(
+                            f,
                             &func_mapping,
                             &global_mapping,
                             &memory_mapping,
-                            &mut function,
-                            &mut reencode,
                         );
+                        Some((idx, f, encoded_func))
+                    })
+                    .collect::<Vec<_>>()
+            };
 
-                        // If there are any alternate, encode the alternate
-                        if !at_end && !alternate.is_none() {
-                            if let Some(alt) = alternate {
-                                update_ids_and_encode(
-                                    &mut alt.instrs,
-                                    &func_mapping,
-                                    &global_mapping,
-                                    &memory_mapping,
-                                    &mut function,
-                                    &mut reencode,
-                                );
-                            }
-                        } else {
-                            encode(&op.clone(), &mut function, &mut reencode);
-                        }
-
-                        // Now encode the after instructions
-                        if !at_end {
-                            update_ids_and_encode(
-                                &mut after.instrs,
-                                &func_mapping,
-                                &global_mapping,
-                                &memory_mapping,
-                                &mut function,
-                                &mut reencode,
-                            );
-                        }
+            #[cfg(not(feature = "parallel"))]
+            let functions = self
+                .functions
+                .iter_mut()
+                .enumerate()
+                .filter_map(|(idx, f)| {
+                    if f.is_deleted() || f.is_import() {
+                        return None;
                     }
+                    let f = f.unwrap_local_mut();
+                    let encoded_func =
+                        Self::encode_function(f, &func_mapping, &global_mapping, &memory_mapping);
+                    Some((idx, f, encoded_func))
+                })
+                .collect::<Vec<_>>();
 
-                    fn update_ids_and_encode(
-                        instrs: &mut Vec<Operator>,
-                        func_mapping: &HashMap<u32, u32>,
-                        global_mapping: &HashMap<u32, u32>,
-                        memory_mapping: &HashMap<u32, u32>,
-                        function: &mut wasm_encoder::Function,
-                        reencode: &mut RoundtripReencoder,
-                    ) {
-                        for instr in instrs {
-                            fix_op_id_mapping(instr, func_mapping, global_mapping, memory_mapping);
-                            encode(instr, function, reencode);
-                        }
-                    }
-                    fn encode(
-                        instr: &Operator,
-                        function: &mut wasm_encoder::Function,
-                        reencode: &mut RoundtripReencoder,
-                    ) {
-                        function.instruction(
-                            &reencode
-                                .instruction(instr.clone())
-                                .expect("Unable to convert Instruction"),
-                        );
-                    }
-                }
-
+            for (idx, original_func, function) in functions {
                 // at this point the IDs in all the function instrumentation opcodes have been corrected
                 // add the probe side effects!
                 if pull_side_effects {
-                    func.add_opcode_injections(rel_func_idx as u32, &mut side_effects);
+                    original_func.add_opcode_injections(idx as u32, &mut side_effects);
                 }
-                if let Some(name) = &func.body.name {
-                    function_names.append(rel_func_idx as u32, name.as_str());
+                if let Some(name) = &original_func.body.name {
+                    function_names.append(idx as u32, name.as_str());
                 }
                 code.function(&function);
             }

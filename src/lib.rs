@@ -1,6 +1,18 @@
 //! Wirm is a WebAssembly Transformation Library for the Component Model. The design has been inspired by [Dfinity's IC]
 //! and [Walrus].
 //!
+//! # Features
+//!
+//! ## Parallel Parsing and Encoding
+//!
+//! Wirm supports parallel processing during module parsing and encoding to improve performance. Enable the `parallel` feature
+//! to parse and encode function bodies concurrently:
+//!
+//! ```toml
+//! [dependencies]
+//! wirm = { version = "1.1.0", features = ["parallel"] }
+//! ```
+//!
 //! [Dfinity's IC]: https://github.com/dfinity/ic/tree/master/rs/wasm_transform
 //! [Walrus]: https://github.com/rustwasm/walrus/tree/main
 
