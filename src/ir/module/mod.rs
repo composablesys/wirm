@@ -30,7 +30,6 @@ use crate::{Location, Opcode};
 use log::warn;
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::vec::IntoIter;
 use wasm_encoder::reencode::{Reencode, RoundtripReencoder};
 use wasm_encoder::TagSection;
 use wasmparser::{
@@ -547,16 +546,18 @@ impl<'a> Module<'a> {
             }
         }
         // Local Functions
-        for (index, code_sec) in code_sections.iter().enumerate() {
+        let code_sections_length = code_sections.len();
+        for (index, code_sec) in code_sections.into_iter().enumerate() {
+            let name = code_sec.name.clone();
             final_funcs.push(Function::new(
                 FuncKind::Local(Box::new(LocalFunction::new(
                     functions[index],
                     FunctionID(imports.num_funcs + index as u32),
-                    (*code_sec).clone(),
+                    code_sec,
                     types[&functions[index]].params().len(),
                     None,
                 ))),
-                (*code_sec).clone().name,
+                name,
             ));
         }
 
@@ -606,7 +607,7 @@ impl<'a> Module<'a> {
             data,
             tags,
             custom_sections: CustomSections::new(custom_sections),
-            num_local_functions: code_sections.len() as u32,
+            num_local_functions: code_sections_length as u32,
             num_local_globals: num_globals,
             num_local_tables: num_tables,
             num_local_memories: num_memories,
@@ -674,7 +675,7 @@ impl<'a> Module<'a> {
     ) {
         if !self.num_local_functions > 0 {
             for rel_func_idx in (self.imports.num_funcs - self.imports.num_funcs_added) as usize
-                ..self.functions.len()
+                ..self.functions.as_vec().len()
             {
                 let func_idx = FunctionID(rel_func_idx as u32);
                 if let FuncKind::Import(..) = &self.functions.get_kind(func_idx) {
@@ -1002,50 +1003,21 @@ impl<'a> Module<'a> {
     }
 
     /// Reorganises items (both local and imports) in the correct ordering after any potential modifications
-    pub(crate) fn reorganise_generic<T: LocalOrImport, U: ReIndexable<T>>(
-        orig_num_imported: u32,
-        items: &mut U,
-        items_read_only: IntoIter<T>,
-    ) {
-        // Location where we may have to move an import (converted from local) to
-        let mut num_imported = orig_num_imported;
-        let mut num_deleted = 0;
-
-        // Iterate over cloned list
-        for (idx, val) in items_read_only.enumerate() {
-            // If the index is less than < imported
-            if idx < orig_num_imported as usize {
-                // If it is a local, that means it was an import before
-                if val.is_local() {
-                    let f = items.remove((idx - num_deleted) as u32);
-                    items.push(f);
-                    // decrement as this is the place where we might have to move an import to
-                    num_imported -= 1;
-                    // We update it here for the following case. A , B. A is moved to a position later than B, indices will reduce by 1 and we need the offset
-                    num_deleted += 1;
-                } else if val.is_deleted() {
-                    // If val was import but was deleted
-                    items.remove((idx - num_deleted) as u32);
-                    num_imported -= 1;
-                    num_deleted += 1;
-                }
+    pub(crate) fn reorganize<T: LocalOrImport>(items: &mut Vec<T>) {
+        let mut result = vec![];
+        let mut new_local = vec![];
+        for item in items.drain(..) {
+            if item.is_deleted() {
+                continue;
+            }
+            if item.is_import() {
+                result.push(item);
             } else {
-                // If it's an import, was a local before
-                if val.is_import() {
-                    let i = items.remove((idx - num_deleted) as u32);
-                    items.insert(num_imported, i);
-                    // increment as this is the place where we might have to move an import to
-                    num_imported += 1;
-                    // We do not update it here for the following case. A , B. A is moved to a position earlier than B, indices will not change and hence no need to update
-                    // num_deleted += 1;
-                }
-                // If val was local but was deleted
-                else if val.is_deleted() {
-                    items.remove((idx - num_deleted) as u32);
-                    num_deleted += 1;
-                }
+                new_local.push(item);
             }
         }
+        result.extend(new_local);
+        *items = result;
     }
 
     /// Get the mapping of old ID -> new ID in module
@@ -1060,14 +1032,12 @@ impl<'a> Module<'a> {
         mapping
     }
 
-    pub(crate) fn recalculate_ids<T: LocalOrImport + GetID, U: Iter<T> + ReIndexable<T>>(
-        orig_num_imported: u32,
+    pub(crate) fn recalculate_ids<T: LocalOrImport + GetID, U: AsVec<T>>(
         items: &mut U,
     ) -> HashMap<u32, u32> {
-        let items_read_only = items.get_into_iter();
-        Self::reorganise_generic(orig_num_imported, items, items_read_only);
-        let id_mapping = Self::get_mapping_generic(items.iter());
-        assert_eq!(items.len(), id_mapping.len());
+        Self::reorganize(items.as_vec_mut());
+        let id_mapping = Self::get_mapping_generic(items.as_vec().iter());
+        assert_eq!(items.as_vec().len(), id_mapping.len());
         id_mapping
     }
 
@@ -1171,26 +1141,17 @@ impl<'a> Module<'a> {
     ) {
         // First fix the ID mappings throughout the module
         let func_mapping = if self.functions.recalculate_ids {
-            Self::recalculate_ids(
-                self.imports.num_funcs - self.imports.num_funcs_added,
-                &mut self.functions,
-            )
+            Self::recalculate_ids(&mut self.functions)
         } else {
-            Self::get_mapping_generic(Iter::<Function<'a>>::iter(&self.functions))
+            Self::get_mapping_generic(self.functions.as_vec().iter())
         };
         let global_mapping = if self.globals.recalculate_ids {
-            Self::recalculate_ids(
-                self.imports.num_globals - self.imports.num_globals_added,
-                &mut self.globals,
-            )
+            Self::recalculate_ids(&mut self.globals)
         } else {
             Self::get_mapping_generic(self.globals.iter())
         };
         let memory_mapping = if self.memories.recalculate_ids {
-            Self::recalculate_ids(
-                self.imports.num_memories - self.imports.num_memories_added,
-                &mut self.memories,
-            )
+            Self::recalculate_ids(&mut self.memories)
         } else {
             Self::get_mapping_generic(self.memories.iter())
         };
@@ -1577,7 +1538,7 @@ impl<'a> Module<'a> {
 
         if !self.num_local_functions > 0 {
             let mut code = wasm_encoder::CodeSection::new();
-            for rel_func_idx in 0..self.functions.len() {
+            for rel_func_idx in 0..self.functions.as_vec().len() {
                 if self.functions.is_deleted(FunctionID(rel_func_idx as u32)) {
                     continue;
                 }
@@ -1811,7 +1772,7 @@ impl<'a> Module<'a> {
 
     /// Get the memory ID of a module. Does not support multiple memories
     pub fn get_memory_id(&self) -> Option<MemoryID> {
-        if self.memories.len() > 1 {
+        if self.memories.as_vec().len() > 1 {
             panic!("multiple memories unsupported")
         }
 
@@ -1827,7 +1788,7 @@ impl<'a> Module<'a> {
             TypeRef::Func(..) => (
                 self.num_local_functions,
                 self.imports.num_funcs,
-                self.functions.len() as u32,
+                self.functions.as_vec().len() as u32,
             ),
             TypeRef::Global(..) => (
                 self.num_local_globals,
@@ -1839,7 +1800,7 @@ impl<'a> Module<'a> {
             TypeRef::Memory(..) => (
                 self.num_local_memories,
                 self.imports.num_memories,
-                self.memories.len() as u32,
+                self.memories.as_vec().len() as u32,
             ),
         };
 
@@ -2193,20 +2154,9 @@ pub trait GetID {
     fn get_id(&self) -> u32;
 }
 
-/// Facilitates iteration on types that hold `T`
-pub(crate) trait Iter<T> {
-    /// Iterate over references of `T`
-    fn iter(&self) -> std::slice::Iter<'_, T>;
-
-    /// Clone and build an iterator
-    fn get_into_iter(&self) -> IntoIter<T>;
-}
-
-pub(crate) trait ReIndexable<T> {
-    fn len(&self) -> usize;
-    fn remove(&mut self, id: u32) -> T;
-    fn insert(&mut self, id: u32, val: T);
-    fn push(&mut self, item: T);
+pub(crate) trait AsVec<T> {
+    fn as_vec(&self) -> &Vec<T>;
+    fn as_vec_mut(&mut self) -> &mut Vec<T>;
 }
 
 pub trait Push<T> {

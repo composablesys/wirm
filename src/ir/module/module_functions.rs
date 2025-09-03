@@ -3,14 +3,13 @@
 use crate::ir::function::FunctionModifier;
 use crate::ir::id::{FunctionID, ImportsID, LocalID, TypeID};
 use crate::ir::module::side_effects::{InjectType, Injection};
-use crate::ir::module::{GetID, Iter, LocalOrImport, ReIndexable};
+use crate::ir::module::{AsVec, GetID, LocalOrImport};
 use crate::ir::types::{
     Body, FuncInstrFlag, HasInjectTag, InjectTag, InstrumentationMode, Tag, TagUtils,
 };
 use crate::DataType;
 use log::warn;
 use std::collections::HashMap;
-use std::vec::IntoIter;
 use wasmparser::Operator;
 
 /// Represents a function. Local or Imported depends on the `FuncKind`.
@@ -319,7 +318,7 @@ impl<'a> Functions<'a> {
     ///
     /// Note: Functions returned by this iterator *may* be deleted.
     pub fn iter(&self) -> impl Iterator<Item = &Function<'a>> {
-        Iter::<Function<'a>>::iter(self)
+        self.functions.iter()
     }
 
     /// Iterate over functions present in the module
@@ -330,32 +329,12 @@ impl<'a> Functions<'a> {
     }
 }
 
-impl<'a> Iter<Function<'a>> for Functions<'a> {
-    /// Get an iterator for the functions.
-    fn iter(&self) -> std::slice::Iter<'_, Function<'a>> {
-        self.functions.iter()
+impl<'a> AsVec<Function<'a>> for Functions<'a> {
+    fn as_vec(&self) -> &Vec<Function<'a>> {
+        &self.functions
     }
-
-    fn get_into_iter(&self) -> IntoIter<Function<'a>> {
-        self.functions.clone().into_iter()
-    }
-}
-
-impl<'a> ReIndexable<Function<'a>> for Functions<'a> {
-    /// Get the number of functions
-    fn len(&self) -> usize {
-        self.functions.len()
-    }
-    fn remove(&mut self, function_id: u32) -> Function<'a> {
-        self.functions.remove(function_id as usize)
-    }
-
-    fn insert(&mut self, function_id: u32, func: Function<'a>) {
-        self.functions.insert(function_id as usize, func);
-    }
-    /// Add a new function
-    fn push(&mut self, func: Function<'a>) {
-        self.functions.push(func);
+    fn as_vec_mut(&mut self) -> &mut Vec<Function<'a>> {
+        &mut self.functions
     }
 }
 
@@ -500,7 +479,7 @@ impl<'a> Functions<'a> {
         let id = self.next_id();
         local_function.func_id = id;
 
-        self.push(Function::new(
+        self.functions.push(Function::new(
             FuncKind::Local(Box::new(local_function)),
             name.clone(),
         ));

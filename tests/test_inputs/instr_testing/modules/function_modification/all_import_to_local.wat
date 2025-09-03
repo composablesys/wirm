@@ -8,6 +8,18 @@
   (import "bogus" "hi" (func (;0;) (type 2))) ;; rm
   (import "wirm" "better" (func (;1;) (type 2))) ;; rm
   (import "than" "walrus" (func (;2;) (type 2))) ;; rm
+   ;; << (func $hi (;3;) (type 2) (param i32 i32)
+   ;; <<   i32.const 1
+   ;; <<   drop
+   ;; <<   )
+   ;; << (func $better (;4;) (type 2) (param i32 i32)
+   ;; <<   i32.const 2
+   ;; <<   drop
+   ;; <<   )
+   ;; << (func $walrus (;5;) (type 2) (param i32 i32)
+   ;; <<   i32.const 3
+   ;; <<   drop
+   ;; <<   )
   (func (;3;) (type 0)
     i32.const 0
     drop
@@ -21,22 +33,10 @@
     (local i32)
     i32.const 1
     i32.const 2
-    call 4 ;; < call 1
+    call 4
     drop
     )
-   ;; << (func $hi (;3;) (type 2) (param i32 i32)
-   ;; <<   i32.const 1
-   ;; <<   drop
-   ;; <<   )
-   ;; << (func $better (;4;) (type 2) (param i32 i32)
-   ;; <<   i32.const 2
-   ;; <<   drop
-   ;; <<   )
-   ;; << (func $walrus (;5;) (type 2) (param i32 i32)
-   ;; <<   i32.const 3
-   ;; <<   drop
-   ;; <<   )
   (memory (;0;) 1)
-  (export "add" (func 4)) ;; < (export "add" (func 1))
+  (export "add" (func 4))
   (export "memory" (memory 0))
 )

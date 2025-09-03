@@ -1,7 +1,6 @@
 use crate::ir::id::{ImportsID, MemoryID};
-use crate::ir::module::{GetID, Iter, LocalOrImport, ReIndexable};
+use crate::ir::module::{AsVec, GetID, LocalOrImport};
 use crate::ir::types::{InjectTag, Tag, TagUtils};
-use std::vec::IntoIter;
 use wasmparser::MemoryType;
 
 /// Intermediate representation of all the memories in a module.
@@ -11,32 +10,13 @@ pub struct Memories {
     memories: Vec<Memory>,
     pub(crate) recalculate_ids: bool,
 }
-impl ReIndexable<Memory> for Memories {
-    /// Get the number of memories
-    fn len(&self) -> usize {
-        self.memories.len()
-    }
-    fn remove(&mut self, mem_id: u32) -> Memory {
-        self.memories.remove(mem_id as usize)
-    }
 
-    fn insert(&mut self, mem_id: u32, mem: Memory) {
-        self.memories.insert(mem_id as usize, mem);
+impl AsVec<Memory> for Memories {
+    fn as_vec(&self) -> &Vec<Memory> {
+        &self.memories
     }
-    /// Add a new memory
-    fn push(&mut self, mem: Memory) {
-        self.memories.push(mem);
-    }
-}
-
-impl Iter<Memory> for Memories {
-    /// Get an iterator for the memories.
-    fn iter(&self) -> std::slice::Iter<'_, Memory> {
-        self.memories.iter()
-    }
-
-    fn get_into_iter(&self) -> IntoIter<Memory> {
-        self.memories.clone().into_iter()
+    fn as_vec_mut(&mut self) -> &mut Vec<Memory> {
+        &mut self.memories
     }
 }
 
@@ -53,7 +33,7 @@ impl Memories {
     ///     
     /// Note that memories may have been deleted.
     pub fn iter(&self) -> std::slice::Iter<'_, Memory> {
-        <Self as Iter<Memory>>::iter(self)
+        self.memories.iter()
     }
 
     /// Iterate over the memories in the module.
@@ -135,7 +115,7 @@ impl Memories {
         let id = self.next_id();
         local_mem.mem_id = id;
 
-        self.push(Memory {
+        self.memories.push(Memory {
             ty,
             kind: MemKind::Local(local_mem),
             deleted: false,

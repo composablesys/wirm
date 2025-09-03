@@ -2,7 +2,7 @@
 
 use crate::ir::id::{FunctionID, ImportsID, LocalID, ModuleID, TypeID};
 use crate::ir::module::module_functions::{add_local, add_locals, LocalFunction};
-use crate::ir::module::{Module, ReIndexable};
+use crate::ir::module::{AsVec, Module};
 use crate::ir::types::{Body, FuncInstrFlag, FuncInstrMode, Tag};
 use crate::ir::types::{DataType, InjectedInstrs};
 use crate::ir::types::{HasInjectTag, InstrumentationMode};
@@ -55,7 +55,7 @@ impl<'a> FunctionBuilder<'a> {
         );
 
         assert_eq!(
-            module.functions.len() as u32,
+            module.functions.as_vec().len() as u32,
             module.num_local_functions + module.imports.num_funcs
         );
 
@@ -135,7 +135,7 @@ impl<'a> FunctionBuilder<'a> {
         );
 
         assert_eq!(
-            comp.modules[*mod_idx as usize].functions.len() as u32,
+            comp.modules[*mod_idx as usize].functions.as_vec().len() as u32,
             comp.modules[*mod_idx as usize].num_local_functions
                 + comp.modules[*mod_idx as usize].imports.num_funcs
                 + comp.modules[*mod_idx as usize].imports.num_funcs_added
