@@ -1581,7 +1581,6 @@ pub struct Body<'a> {
     /// index 2 will refer to the local here.
     pub locals: Vec<(u32, DataType)>,
     pub num_locals: u32,
-    // accessing operators by .0 is not very clear
     pub instructions: Instructions<'a>,
     pub num_instructions: usize,
     pub name: Option<String>,
