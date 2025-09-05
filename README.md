@@ -28,7 +28,7 @@ wirm = { version = "1.1.0", features = ["parallel"] }
 
 ## Environment Setup ##
 
-To install wasm-tools:
+To install `wasm-tools`:
 ```shell
 $ cargo install wasm-tools
 ```
