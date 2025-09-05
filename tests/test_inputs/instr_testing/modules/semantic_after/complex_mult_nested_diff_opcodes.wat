@@ -97,12 +97,12 @@
     ;; <<   if ;; label = @2
     ;; <<     i32.const 78
     ;; <<     drop
-    ;; <<   end
-    ;; << else
-    ;; <<   local.get 2
-    ;; <<   if ;; label = @2
-    ;; <<     i32.const 78
-    ;; <<     drop
+    ;; <<   else
+    ;; <<     local.get 2
+    ;; <<     if ;; label = @2
+    ;; <<       i32.const 78
+    ;; <<       drop
+    ;; <<     end
     ;; <<   end
     ;; << end
     ;; << i32.const 12

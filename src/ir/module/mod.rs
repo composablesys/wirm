@@ -791,6 +791,7 @@ impl<'a> Module<'a> {
                 let mut builder = self.functions.get_fn_modifier(func_idx).unwrap();
 
                 let flags = if let Some(flags) = builder.body.instructions.get_flags() {
+                    #[allow(clippy::unnecessary_to_owned)]
                     FlagsIter::Flags(flags.to_vec().into_iter())
                 } else {
                     FlagsIter::Default
@@ -1177,7 +1178,7 @@ impl<'a> Module<'a> {
         let instr_len = instructions.len() - 1;
         let (ops, mut flags) = instructions.get_ops_flags_mut();
         for (idx, op) in ops.iter_mut().enumerate() {
-            fix_op_id_mapping(op, &func_mapping, &global_mapping, &memory_mapping);
+            fix_op_id_mapping(op, func_mapping, global_mapping, memory_mapping);
             if flags.is_none() {
                 encode(&op.clone(), &mut function, &mut reencode);
                 continue;
@@ -1204,9 +1205,9 @@ impl<'a> Module<'a> {
                 // First encode before instructions
                 update_ids_and_encode(
                     &mut before.instrs,
-                    &func_mapping,
-                    &global_mapping,
-                    &memory_mapping,
+                    func_mapping,
+                    global_mapping,
+                    memory_mapping,
                     &mut function,
                     &mut reencode,
                 );
@@ -1216,9 +1217,9 @@ impl<'a> Module<'a> {
                     if let Some(alt) = alternate {
                         update_ids_and_encode(
                             &mut alt.instrs,
-                            &func_mapping,
-                            &global_mapping,
-                            &memory_mapping,
+                            func_mapping,
+                            global_mapping,
+                            memory_mapping,
                             &mut function,
                             &mut reencode,
                         );
@@ -1231,9 +1232,9 @@ impl<'a> Module<'a> {
                 if !at_end {
                     update_ids_and_encode(
                         &mut after.instrs,
-                        &func_mapping,
-                        &global_mapping,
-                        &memory_mapping,
+                        func_mapping,
+                        global_mapping,
+                        memory_mapping,
                         &mut function,
                         &mut reencode,
                     );
@@ -2699,28 +2700,21 @@ fn resolve_bodies<'a, 'b, 'c>(
             _ => unreachable!(),
         };
 
-        if is_first {
-            // inject flag check
-            builder.local_get(*bool_flag);
-            builder.if_stmt(BlockType::Empty); // TODO -- This will break for instrumentation that returns stuff...
-        } else {
+        if !is_first {
             // injecting multiple, already have an if statement
             builder.else_stmt();
-            // inject flag check
-            builder.local_get(*bool_flag);
-            builder.if_stmt(BlockType::Empty); // nested if for the if/else flow
         }
+
+        // inject flag check
+        builder.local_get(*bool_flag);
+        builder.if_stmt(BlockType::Empty); // TODO -- This will break for instrumentation that returns stuff...
 
         // inject body
         builder.inject_all(body);
-        if !is_first {
-            // need to inject end of nested if!
-            builder.end();
-        }
         is_first = false;
     }
-    if !flagged.is_empty() {
-        // inject end of flag check (the outer if)
+    for _ in 0..flagged.len() {
+        // inject end of flag checks
         builder.end();
     }
 

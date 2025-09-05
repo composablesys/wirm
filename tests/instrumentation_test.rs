@@ -1778,6 +1778,7 @@ fn run_block_injection<'a, 'b, 'c>(
                         // has body
                         mod_it.set_instrument_mode(*mode);
                         mod_it.inject_all(body);
+                        mod_it.finish_instr();
                     } else {
                         // has no body...effectively removing
                         match mode {
