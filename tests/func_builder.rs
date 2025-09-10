@@ -74,7 +74,7 @@ fn add_import_and_local_fn_then_iterate() {
     let wasm = wat::parse_file(file_name).expect("couldn't convert the input wat to Wasm");
     let mut module = Module::parse(&wasm, false).expect("Unable to parse");
     // add an imported function AND THEN a new local function
-    module.add_import_func("new".to_string(), "import".to_string(), TypeID(0));
+    module.add_import_func("new", "import", TypeID(0));
     assert_eq!(module.num_import_func(), 1);
 
     let params = vec![];

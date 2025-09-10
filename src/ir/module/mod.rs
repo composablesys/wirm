@@ -1898,8 +1898,8 @@ impl<'a> Module<'a> {
     /// Add a local memory to the module with an appended tag.
     pub fn add_import_memory(
         &mut self,
-        module: String,
-        name: String,
+        module: &'a str,
+        name: &'a str,
         ty: MemoryType,
     ) -> (MemoryID, ImportsID) {
         self.add_import_memory_with_tag(module, name, ty, Tag::default())
@@ -1907,14 +1907,14 @@ impl<'a> Module<'a> {
     /// Add an imported memory to the module with an appended tag.
     pub fn add_import_memory_with_tag(
         &mut self,
-        module: String,
-        name: String,
+        module: &'a str,
+        name: &'a str,
         ty: MemoryType,
         tag: Tag,
     ) -> (MemoryID, ImportsID) {
         let (imp_mem_id, imp_id) = self.add_import(Import {
-            module: module.leak(),
-            name: name.clone().leak(),
+            module,
+            name,
             ty: TypeRef::Memory(ty),
             custom_name: None,
             deleted: false,
@@ -1968,8 +1968,8 @@ impl<'a> Module<'a> {
     /// - ImportsID: The ID that indexes into the import section.
     pub fn add_import_func(
         &mut self,
-        module: String,
-        name: String,
+        module: &'a str,
+        name: &'a str,
         ty_id: TypeID,
     ) -> (FunctionID, ImportsID) {
         self.add_import_func_with_tag(module, name, ty_id, Tag::default())
@@ -1981,14 +1981,14 @@ impl<'a> Module<'a> {
     /// - ImportsID: The ID that indexes into the import section.
     pub fn add_import_func_with_tag(
         &mut self,
-        module: String,
-        name: String,
+        module: &'a str,
+        name: &'a str,
         ty_id: TypeID,
         tag: Tag,
     ) -> (FunctionID, ImportsID) {
         let (imp_fn_id, imp_id) = self.add_import(Import {
-            module: module.leak(),
-            name: name.clone().leak(),
+            module,
+            name,
             ty: TypeRef::Func(*ty_id),
             custom_name: None,
             deleted: false,
@@ -1997,7 +1997,7 @@ impl<'a> Module<'a> {
 
         // Add to functions as well as it has imported functions
         self.functions
-            .add_import_func(imp_id, ty_id, Some(name), imp_fn_id);
+            .add_import_func(imp_id, ty_id, Some(name.to_string()), imp_fn_id);
         (FunctionID(imp_fn_id), imp_id)
     }
 
@@ -2042,8 +2042,8 @@ impl<'a> Module<'a> {
     pub fn convert_local_fn_to_import(
         &mut self,
         function_id: FunctionID,
-        module: String,
-        name: String,
+        module: &'a str,
+        name: &'a str,
         ty_id: TypeID,
     ) -> bool {
         self.convert_local_fn_to_import_with_tag(function_id, module, name, ty_id, Tag::default())
@@ -2055,8 +2055,8 @@ impl<'a> Module<'a> {
     pub fn convert_local_fn_to_import_with_tag(
         &mut self,
         function_id: FunctionID,
-        module: String,
-        name: String,
+        module: &'a str,
+        name: &'a str,
         ty_id: TypeID,
         tag: Tag,
     ) -> bool {
@@ -2068,8 +2068,8 @@ impl<'a> Module<'a> {
         self.delete_func(function_id);
         // Add import function to imports
         let (.., import_id) = self.add_import(Import {
-            module: module.leak(),
-            name: name.clone().leak(),
+            module,
+            name,
             ty: TypeRef::Func(*ty_id),
             custom_name: None,
             deleted: false,
@@ -2082,7 +2082,9 @@ impl<'a> Module<'a> {
                 import_fn_id: function_id,
                 ty_id,
             }));
-        assert!(self.functions.set_imported_fn_name(function_id, name));
+        assert!(self
+            .functions
+            .set_imported_fn_name(function_id, name.to_string()));
         true
     }
 
@@ -2149,8 +2151,8 @@ impl<'a> Module<'a> {
     /// - ImportsID: The ID that indexes into the import section.
     pub fn add_imported_global(
         &mut self,
-        module: String,
-        name: String,
+        module: &'a str,
+        name: &'a str,
         content_ty: DataType,
         mutable: bool,
         shared: bool,
@@ -2164,8 +2166,8 @@ impl<'a> Module<'a> {
     /// - ImportsID: The ID that indexes into the import section.
     pub fn add_imported_global_with_tag(
         &mut self,
-        module: String,
-        name: String,
+        module: &'a str,
+        name: &'a str,
         content_ty: DataType,
         mutable: bool,
         shared: bool,
@@ -2177,8 +2179,8 @@ impl<'a> Module<'a> {
             shared,
         };
         let (imp_global_id, imp_id) = self.add_import(Import {
-            module: module.leak(),
-            name: name.leak(),
+            module,
+            name,
             ty: TypeRef::Global(global_ty),
             custom_name: None,
             deleted: false,

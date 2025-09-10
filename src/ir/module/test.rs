@@ -44,7 +44,7 @@ fn test_add_import_func() {
     state_assertions(&module, &init_state, false);
 
     // add imported func
-    let (fid, imp0) = module.add_import_func("test0".to_string(), "func0".to_string(), TypeID(0));
+    let (fid, imp0) = module.add_import_func("test0", "func0", TypeID(0));
     assert_eq!(init_state.next_fid(), *fid); // zero-based, no '+ 1'
     assert_eq!(init_state.next_imp_id(), *imp0); // zero-based, no '+ 1'
     init_state.add_imported_func();
@@ -72,7 +72,7 @@ fn test_add_local_then_imported_func() {
     init_state.add_local_func();
 
     // add imported func
-    let (fid, imp0) = module.add_import_func("test0".to_string(), "func0".to_string(), TypeID(0));
+    let (fid, imp0) = module.add_import_func("test0", "func0", TypeID(0));
     assert_eq!(init_state.next_fid(), *fid); // zero-based, no '+ 1'
     assert_eq!(init_state.next_imp_id(), *imp0); // zero-based, no '+ 1'
     init_state.add_imported_func();
@@ -93,7 +93,7 @@ fn test_add_imported_then_local_func() {
     state_assertions(&module, &init_state, false);
 
     // add imported func
-    let (fid, imp0) = module.add_import_func("test0".to_string(), "func0".to_string(), TypeID(0));
+    let (fid, imp0) = module.add_import_func("test0", "func0", TypeID(0));
     assert_eq!(init_state.next_fid(), *fid); // zero-based, no '+ 1'
     assert_eq!(init_state.next_imp_id(), *imp0); // zero-based, no '+ 1'
     init_state.add_imported_func();
@@ -170,7 +170,7 @@ fn test_add_then_delete_imported_func() {
     state_assertions(&module, &init_state, false);
 
     // add imported func
-    let (fid, imp0) = module.add_import_func("test0".to_string(), "func0".to_string(), TypeID(0));
+    let (fid, imp0) = module.add_import_func("test0", "func0", TypeID(0));
     assert_eq!(init_state.next_fid(), *fid); // zero-based, no '+ 1'
     assert_eq!(init_state.next_imp_id(), *imp0); // zero-based, no '+ 1'
     init_state.add_imported_func();
@@ -269,12 +269,7 @@ fn test_convert_local_fn_to_import() {
     state_assertions(&module, &init_state, false);
 
     // convert local func to import
-    module.convert_local_fn_to_import(
-        FunctionID(52),
-        "please".to_string(),
-        "work".to_string(),
-        TypeID(1),
-    ); // unused in wat file!
+    module.convert_local_fn_to_import(FunctionID(52), "please", "work", TypeID(1)); // unused in wat file!
     init_state.local_func_to_import();
 
     is_valid(
@@ -449,13 +444,8 @@ fn test_add_imported_global() {
     state_assertions(&module, &init_state, false);
 
     // add an imported global
-    let (gid, imp_id) = module.add_imported_global(
-        "knock knock".to_string(),
-        "gimme a global".to_string(),
-        DataType::I32,
-        true,
-        false,
-    );
+    let (gid, imp_id) =
+        module.add_imported_global("knock knock", "gimme a global", DataType::I32, true, false);
     assert_eq!(init_state.next_gid(), *gid);
     assert_eq!(init_state.next_imp_id(), *imp_id);
     init_state.add_imported_global();

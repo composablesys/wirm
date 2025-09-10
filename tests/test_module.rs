@@ -328,7 +328,7 @@ fn test_add_import() {
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
     let mut module = Module::parse(&buff, false).expect("Unable to parse module");
 
-    module.add_import_func("wirm".to_string(), "better".to_string(), TypeID(2));
+    module.add_import_func("wirm", "better", TypeID(2));
 
     check_validity(
         file,
@@ -345,12 +345,7 @@ fn test_middle_local_to_import() {
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
     let mut module = Module::parse(&buff, false).expect("Unable to parse module");
 
-    module.convert_local_fn_to_import(
-        FunctionID(2),
-        "wirm".to_string(),
-        "better".to_string(),
-        TypeID(2),
-    );
+    module.convert_local_fn_to_import(FunctionID(2), "wirm", "better", TypeID(2));
 
     check_validity(
         file,
@@ -367,12 +362,7 @@ fn test_first_local_to_import() {
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
     let mut module = Module::parse(&buff, false).expect("Unable to parse module");
 
-    module.convert_local_fn_to_import(
-        FunctionID(1),
-        "wirm".to_string(),
-        "better".to_string(),
-        TypeID(2),
-    );
+    module.convert_local_fn_to_import(FunctionID(1), "wirm", "better", TypeID(2));
 
     check_validity(
         file,
@@ -389,12 +379,7 @@ fn test_last_local_to_import() {
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
     let mut module = Module::parse(&buff, false).expect("Unable to parse module");
 
-    module.convert_local_fn_to_import(
-        FunctionID(3),
-        "wirm".to_string(),
-        "better".to_string(),
-        TypeID(2),
-    );
+    module.convert_local_fn_to_import(FunctionID(3), "wirm", "better", TypeID(2));
 
     check_validity(
         file,
@@ -411,24 +396,9 @@ fn test_all_local_to_import() {
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
     let mut module = Module::parse(&buff, false).expect("Unable to parse module");
 
-    module.convert_local_fn_to_import(
-        FunctionID(3),
-        "all".to_string(),
-        "local".to_string(),
-        TypeID(2),
-    );
-    module.convert_local_fn_to_import(
-        FunctionID(4),
-        "to".to_string(),
-        "import".to_string(),
-        TypeID(2),
-    );
-    module.convert_local_fn_to_import(
-        FunctionID(5),
-        "please".to_string(),
-        "work".to_string(),
-        TypeID(2),
-    );
+    module.convert_local_fn_to_import(FunctionID(3), "all", "local", TypeID(2));
+    module.convert_local_fn_to_import(FunctionID(4), "to", "import", TypeID(2));
+    module.convert_local_fn_to_import(FunctionID(5), "please", "work", TypeID(2));
 
     check_validity(
         file,
@@ -445,18 +415,8 @@ fn test_some_local_to_import() {
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
     let mut module = Module::parse(&buff, false).expect("Unable to parse module");
 
-    module.convert_local_fn_to_import(
-        FunctionID(3),
-        "all".to_string(),
-        "local".to_string(),
-        TypeID(2),
-    );
-    module.convert_local_fn_to_import(
-        FunctionID(4),
-        "to".to_string(),
-        "import".to_string(),
-        TypeID(2),
-    );
+    module.convert_local_fn_to_import(FunctionID(3), "all", "local", TypeID(2));
+    module.convert_local_fn_to_import(FunctionID(4), "to", "import", TypeID(2));
 
     check_validity(
         file,
@@ -488,24 +448,9 @@ fn test_all_local_to_import_all_import_to_local() {
     third_builder.drop();
     third_builder.replace_import_in_module(&mut module, ImportsID(2));
 
-    module.convert_local_fn_to_import(
-        FunctionID(3),
-        "all".to_string(),
-        "local".to_string(),
-        TypeID(2),
-    );
-    module.convert_local_fn_to_import(
-        FunctionID(4),
-        "to".to_string(),
-        "import".to_string(),
-        TypeID(2),
-    );
-    module.convert_local_fn_to_import(
-        FunctionID(5),
-        "please".to_string(),
-        "work".to_string(),
-        TypeID(2),
-    );
+    module.convert_local_fn_to_import(FunctionID(3), "all", "local", TypeID(2));
+    module.convert_local_fn_to_import(FunctionID(4), "to", "import", TypeID(2));
+    module.convert_local_fn_to_import(FunctionID(5), "please", "work", TypeID(2));
 
     check_validity(
         file,
@@ -522,7 +467,7 @@ fn test_add_fns_init_exprs() {
     let mut module = Module::parse(&buff, false).expect("Unable to parse module");
 
     // add first import func
-    let (..) = module.add_import_func("test0".to_string(), "func0".to_string(), TypeID(4));
+    let (..) = module.add_import_func("test0", "func0", TypeID(4));
 
     // add first local func
     let mut first_builder = FunctionBuilder::new(&[], &[]);
@@ -554,7 +499,7 @@ fn test_add_imports_and_local_fns() {
     let mut module = Module::parse(&buff, false).expect("Unable to parse module");
 
     // add first import func
-    let (fid, ..) = module.add_import_func("test0".to_string(), "func0".to_string(), TypeID(2));
+    let (fid, ..) = module.add_import_func("test0", "func0", TypeID(2));
 
     // add first local func
     let mut first_builder = FunctionBuilder::new(&[], &[]);
@@ -571,7 +516,7 @@ fn test_add_imports_and_local_fns() {
     sec_builder.finish_module(&mut module);
 
     // add second import func
-    module.add_import_func("test1".to_string(), "func1".to_string(), TypeID(2));
+    module.add_import_func("test1", "func1", TypeID(2));
     check_validity(
         file,
         &mut module,
@@ -627,7 +572,7 @@ fn test_elem_reindexing() {
     // Add an import of a different type. Then the table will have entries of
     // the wrong type unless the element section is reindexed.
     let ty_id = module.types.add_func_type(&[DataType::I32], &[]);
-    let _ = module.add_import_func("".to_string(), "".to_string(), ty_id);
+    let _ = module.add_import_func("", "", ty_id);
     validate(&module.encode(), &output_path).unwrap();
 
     // Run the check function to assert that entries in the table have the expected types.

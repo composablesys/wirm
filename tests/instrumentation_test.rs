@@ -1697,8 +1697,8 @@ fn add_imports_when_has_start_func() {
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
     let mut module = Module::parse(&buff, false).expect("Unable to parse");
 
-    module.add_import_func("ima".to_string(), "new_import".to_string(), TypeID(0));
-    module.add_import_func("ya_dont".to_string(), "say".to_string(), TypeID(0));
+    module.add_import_func("ima", "new_import", TypeID(0));
+    module.add_import_func("ya_dont", "say", TypeID(0));
 
     let result = module.encode();
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
