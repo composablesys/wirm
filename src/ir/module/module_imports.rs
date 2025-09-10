@@ -1,5 +1,7 @@
 //! Intermediate Representation of a Module's Imports
 
+use std::borrow::Cow;
+
 use crate::ir::id::{FunctionID, ImportsID};
 use crate::ir::types::{InjectTag, Tag, TagUtils};
 use wasmparser::TypeRef;
@@ -9,9 +11,9 @@ use wasmparser::TypeRef;
 #[derive(Debug, Clone)]
 pub struct Import<'a> {
     /// The module being imported from.
-    pub module: &'a str,
+    pub module: Cow<'a, str>,
     /// The name of the imported item.
-    pub name: &'a str,
+    pub name: Cow<'a, str>,
     /// The type of the imported item.
     pub ty: TypeRef,
     /// The name (in the custom section) of the imported item.
@@ -31,8 +33,8 @@ impl TagUtils for Import<'_> {
 impl<'a> From<wasmparser::Import<'a>> for Import<'a> {
     fn from(import: wasmparser::Import<'a>) -> Self {
         Import {
-            module: import.module,
-            name: import.name,
+            module: import.module.into(),
+            name: import.name.into(),
             ty: import.ty,
             custom_name: None,
             deleted: false,

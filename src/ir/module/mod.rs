@@ -1377,8 +1377,8 @@ impl<'a> Module<'a> {
                         import_func_idx += 1;
                     }
                     imports.import(
-                        import.module,
-                        import.name,
+                        &import.module,
+                        &import.name,
                         reencode.entity_type(import.ty).unwrap(),
                     );
                 }
@@ -1913,8 +1913,8 @@ impl<'a> Module<'a> {
         tag: Tag,
     ) -> (MemoryID, ImportsID) {
         let (imp_mem_id, imp_id) = self.add_import(Import {
-            module: module.leak(),
-            name: name.clone().leak(),
+            module: module.into(),
+            name: name.into(),
             ty: TypeRef::Memory(ty),
             custom_name: None,
             deleted: false,
@@ -1987,8 +1987,8 @@ impl<'a> Module<'a> {
         tag: Tag,
     ) -> (FunctionID, ImportsID) {
         let (imp_fn_id, imp_id) = self.add_import(Import {
-            module: module.leak(),
-            name: name.clone().leak(),
+            module: module.into(),
+            name: name.clone().into(),
             ty: TypeRef::Func(*ty_id),
             custom_name: None,
             deleted: false,
@@ -2068,8 +2068,8 @@ impl<'a> Module<'a> {
         self.delete_func(function_id);
         // Add import function to imports
         let (.., import_id) = self.add_import(Import {
-            module: module.leak(),
-            name: name.clone().leak(),
+            module: module.into(),
+            name: name.clone().into(),
             ty: TypeRef::Func(*ty_id),
             custom_name: None,
             deleted: false,
@@ -2177,8 +2177,8 @@ impl<'a> Module<'a> {
             shared,
         };
         let (imp_global_id, imp_id) = self.add_import(Import {
-            module: module.leak(),
-            name: name.leak(),
+            module: module.into(),
+            name: name.into(),
             ty: TypeRef::Global(global_ty),
             custom_name: None,
             deleted: false,
