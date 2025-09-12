@@ -4,7 +4,7 @@
 use crate::error::Error;
 use crate::ir::component::alias::Aliases;
 use crate::ir::component::canons::Canons;
-use crate::ir::component::index_spaces::{IdxSpace, IdxSpaces};
+use crate::ir::component::index_spaces::{ExternalItemKind, IdxSpaces};
 use crate::ir::component::types::ComponentTypes;
 use crate::ir::helpers::{
     print_alias, print_component_export, print_component_import, print_component_type,
@@ -21,7 +21,7 @@ use crate::ir::section::ComponentSection;
 use crate::ir::types::CustomSections;
 use crate::ir::wrappers::{
     add_to_namemap, convert_component_type, convert_instance_type, convert_module_type_declaration,
-    convert_results, do_reencode, process_alias,
+    do_reencode, process_alias,
 };
 use wasm_encoder::reencode::{Reencode, ReencodeComponent, RoundtripReencoder};
 use wasm_encoder::{ComponentAliasSection, ModuleArg, ModuleSection, NestedComponentSection};
@@ -32,31 +32,37 @@ mod canons;
 mod index_spaces;
 pub mod types;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 /// Intermediate Representation of a wasm component.
 pub struct Component<'a> {
+    /// Nested Components
+    pub components: Vec<Component<'a>>,
     /// Modules
     pub modules: Vec<Module<'a>>,
-    ///Alias
-    pub alias: Aliases<'a>,
-    /// Core Types
-    pub core_types: Vec<CoreType<'a>>,
     /// Component Types
     pub component_types: ComponentTypes<'a>,
-    /// Imports
-    pub imports: Vec<ComponentImport<'a>>,
-    /// Exports
-    pub exports: Vec<ComponentExport<'a>>,
-    /// Core Instances
-    pub instances: Vec<Instance<'a>>,
     /// Component Instances
     pub component_instance: Vec<ComponentInstance<'a>>,
     /// Canons
     pub canons: Canons,
+
+    /// Alias
+    pub alias: Aliases<'a>,
+    /// Imports
+    pub imports: Vec<ComponentImport<'a>>,
+    /// Exports
+    pub exports: Vec<ComponentExport<'a>>,
+
+    /// Core Types
+    pub core_types: Vec<CoreType<'a>>,
+    /// Core Instances
+    pub instances: Vec<Instance<'a>>,
+
+    // Tracks the index spaces of this component.
+    indices: IdxSpaces,
+
     /// Custom sections
     pub custom_sections: CustomSections<'a>,
-    /// Nested Components
-    pub components: Vec<Component<'a>>,
     /// Component Start Section
     pub start_section: Vec<ComponentStartFunction>,
     /// Sections of the Component. Represented as (#num of occurrences of a section, type of section)
@@ -80,60 +86,31 @@ pub struct Component<'a> {
     pub(crate) value_names: wasm_encoder::NameMap,
 }
 
-impl Default for Component<'_> {
-    fn default() -> Self {
-        Component::new()
-    }
-}
-
 impl<'a> Component<'a> {
     /// Creates a new Empty Component
     pub fn new() -> Self {
-        Component {
-            modules: vec![],
-            alias: Aliases::default(),
-            core_types: vec![],
-            component_types: ComponentTypes::default(),
-            imports: vec![],
-            exports: vec![],
-            instances: vec![],
-            component_instance: vec![],
-            canons: Canons::default(),
-            custom_sections: CustomSections::new(vec![]),
-            start_section: vec![],
-            sections: vec![],
-            num_sections: 0,
-            components: vec![],
-            component_name: None,
-            core_func_names: wasm_encoder::NameMap::new(),
-            global_names: wasm_encoder::NameMap::new(),
-            memory_names: wasm_encoder::NameMap::new(),
-            tag_names: wasm_encoder::NameMap::new(),
-            table_names: wasm_encoder::NameMap::new(),
-            module_names: wasm_encoder::NameMap::new(),
-            core_instances_names: wasm_encoder::NameMap::new(),
-            core_type_names: wasm_encoder::NameMap::new(),
-            type_names: wasm_encoder::NameMap::new(),
-            instance_names: wasm_encoder::NameMap::new(),
-            components_names: wasm_encoder::NameMap::new(),
-            func_names: wasm_encoder::NameMap::new(),
-            value_names: wasm_encoder::NameMap::new(),
-        }
+        Self::default()
     }
 
-    fn add_section(&mut self, section: ComponentSection) {
-        if self.sections[self.num_sections - 1].1 == section {
+    fn add_section(&mut self, outer: ComponentSection, inner: ExternalItemKind, idx: usize) -> usize {
+        // get and save off the assumed id
+        let assumed_id = self.indices.assign_assumed_id(&outer, &inner, idx);
+
+        // add to section order list
+        if self.sections[self.num_sections - 1].1 == outer {
             self.sections[self.num_sections - 1].0 += 1;
         } else {
-            self.sections.push((1, section));
+            self.sections.push((1, outer));
         }
+
+        assumed_id.unwrap_or_else(|| { idx })
     }
 
     /// Add a Module to this Component.
     pub fn add_module(&mut self, module: Module<'a>) -> ModuleID {
-        let id = self.modules.len();
+        let idx = self.modules.len();
         self.modules.push(module);
-        self.add_section(ComponentSection::Module);
+        let id = self.add_section(ComponentSection::Module, ExternalItemKind::NA, idx);
 
         ModuleID(id as u32)
     }
@@ -144,25 +121,25 @@ impl<'a> Component<'a> {
     }
 
     pub fn add_import(&mut self, import: ComponentImport<'a>) -> u32 {
-        let id = self.imports.len();
+        let idx = self.imports.len();
         self.imports.push(import);
-        self.add_section(ComponentSection::ComponentImport);
 
-        id as u32
+        self.add_section(ComponentSection::ComponentImport, ExternalItemKind::NA, idx) as u32
     }
 
     pub fn add_alias_func(&mut self, alias: ComponentAlias<'a>) -> (AliasFuncId, AliasId) {
+        let kind = ExternalItemKind::from(&alias);
         let (item_id, alias_id) = self.alias.add(alias);
-        self.add_section(ComponentSection::Alias);
+        let id = self.add_section(ComponentSection::Alias, kind, *alias_id as usize);
 
-        (AliasFuncId(item_id), alias_id)
+        (AliasFuncId(id as u32), alias_id)
     }
 
     pub fn add_canon_func(&mut self, canon: CanonicalFunction) -> CanonicalFuncId {
-        let id = self.canons.add(canon).1;
-        self.add_section(ComponentSection::Canon);
+        let idx = self.canons.add(canon).1;
+        let id = self.add_section(ComponentSection::Canon, ExternalItemKind::NA, *idx as usize);
 
-        id
+        CanonicalFuncId(id as u32)
     }
 
     pub(crate) fn add_component_type(
@@ -170,9 +147,9 @@ impl<'a> Component<'a> {
         component_ty: ComponentType<'a>,
     ) -> (u32, ComponentTypeId) {
         let ids = self.component_types.add(component_ty);
-        self.add_section(ComponentSection::ComponentType);
+        let id = self.add_section(ComponentSection::ComponentType, ExternalItemKind::NA, *ids.1 as usize);
 
-        ids
+        (id as u32, ids.1)
     }
 
     pub fn add_type_instance(
@@ -184,7 +161,7 @@ impl<'a> Component<'a> {
 
         // almost account for aliased types!
         (
-            ComponentTypeInstanceId(ty_inst_id + self.alias.num_types as u32),
+            ComponentTypeInstanceId(ty_inst_id),
             ty_id,
         )
     }
@@ -197,17 +174,17 @@ impl<'a> Component<'a> {
 
         // almost account for aliased types!
         (
-            ComponentTypeFuncId(ty_inst_id + self.alias.num_types as u32),
+            ComponentTypeFuncId(ty_inst_id),
             ty_id,
         )
     }
 
     pub fn add_core_instance(&mut self, instance: Instance<'a>) -> CoreInstanceId {
-        let inst_id = self.instances.len() as u32;
+        let idx = self.instances.len();
         self.instances.push(instance);
-        self.add_section(ComponentSection::CoreInstance);
+        let id  = self.add_section(ComponentSection::CoreInstance, ExternalItemKind::NA, idx);
 
-        CoreInstanceId(inst_id)
+        CoreInstanceId(id as u32)
     }
 
     pub fn get_type_of_exported_func(
@@ -284,7 +261,7 @@ impl<'a> Component<'a> {
         sections: &mut Vec<(u32, ComponentSection)>,
         section: ComponentSection,
         num_sections: &mut usize,
-        sections_added: u32,
+        sections_added: u32
     ) {
         if *num_sections > 0 && sections[*num_sections - 1].1 == section {
             sections[*num_sections - 1].0 += sections_added;
@@ -333,6 +310,9 @@ impl<'a> Component<'a> {
         let mut start_section = vec![];
         let mut stack = vec![];
 
+        // To track the index spaces
+        let mut indices = IdxSpaces::new();
+
         // Names
         let mut component_name: Option<String> = None;
         let mut core_func_names = wasm_encoder::NameMap::new();
@@ -365,6 +345,11 @@ impl<'a> Component<'a> {
                         .into_iter()
                         .collect::<Result<_, _>>()?;
                     let l = temp.len();
+                    let num_imps = imports.len();
+                    for (i, imp) in temp.iter().enumerate() {
+                        let curr_idx = num_imps + i;
+                        indices.assign_assumed_id(&ComponentSection::ComponentImport, &ExternalItemKind::from(&imp.ty), curr_idx);
+                    }
                     imports.append(temp);
                     Self::add_to_sections(
                         &mut sections,
@@ -378,6 +363,11 @@ impl<'a> Component<'a> {
                         .into_iter()
                         .collect::<Result<_, _>>()?;
                     let l = temp.len();
+                    let num_exps = exports.len();
+                    for (i, exp) in temp.iter().enumerate() {
+                        let curr_idx = num_exps + i;
+                        indices.assign_assumed_id(&ComponentSection::ComponentExport, &ExternalItemKind::from(&exp.ty), curr_idx);
+                    }
                     exports.append(temp);
                     Self::add_to_sections(
                         &mut sections,
@@ -391,6 +381,11 @@ impl<'a> Component<'a> {
                         .into_iter()
                         .collect::<Result<_, _>>()?;
                     let l = temp.len();
+                    let num_insts = instances.len();
+                    for i in 0..temp.len() {
+                        let curr_idx = num_insts + i;
+                        indices.assign_assumed_id(&ComponentSection::CoreInstance, &ExternalItemKind::NA, curr_idx);
+                    }
                     instances.append(temp);
                     Self::add_to_sections(
                         &mut sections,
@@ -403,6 +398,11 @@ impl<'a> Component<'a> {
                     let temp: &mut Vec<CoreType> =
                         &mut core_type_reader.into_iter().collect::<Result<_, _>>()?;
                     let l = temp.len();
+                    let num_tys = core_types.len();
+                    for i in 0..temp.len() {
+                        let curr_idx = num_tys + i;
+                        indices.assign_assumed_id(&ComponentSection::CoreType, &ExternalItemKind::NA, curr_idx);
+                    }
                     core_types.append(temp);
                     Self::add_to_sections(
                         &mut sections,
@@ -416,6 +416,11 @@ impl<'a> Component<'a> {
                         .into_iter()
                         .collect::<Result<_, _>>()?;
                     let l = temp.len();
+                    let num_tys = component_types.len();
+                    for i in 0..temp.len() {
+                        let curr_idx = num_tys + i;
+                        indices.assign_assumed_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, curr_idx);
+                    }
                     component_types.append(temp);
                     Self::add_to_sections(
                         &mut sections,
@@ -428,6 +433,11 @@ impl<'a> Component<'a> {
                     let temp: &mut Vec<ComponentInstance> =
                         &mut component_instances.into_iter().collect::<Result<_, _>>()?;
                     let l = temp.len();
+                    let num_insts = component_instance.len();
+                    for i in 0..temp.len() {
+                        let curr_idx = num_insts + i;
+                        indices.assign_assumed_id(&ComponentSection::ComponentInstance, &ExternalItemKind::NA, curr_idx);
+                    }
                     component_instance.append(temp);
                     Self::add_to_sections(
                         &mut sections,
@@ -440,6 +450,11 @@ impl<'a> Component<'a> {
                     let temp: &mut Vec<ComponentAlias> =
                         &mut alias_reader.into_iter().collect::<Result<_, _>>()?;
                     let l = temp.len();
+                    let num_aliases = alias.len();
+                    for (i, alias) in temp.iter().enumerate() {
+                        let curr_idx = num_aliases + i;
+                        indices.assign_assumed_id(&ComponentSection::Alias, &ExternalItemKind::from(alias), curr_idx);
+                    }
                     alias.append(temp);
                     Self::add_to_sections(
                         &mut sections,
@@ -452,6 +467,11 @@ impl<'a> Component<'a> {
                     let temp: &mut Vec<CanonicalFunction> =
                         &mut canon_reader.into_iter().collect::<Result<_, _>>()?;
                     let l = temp.len();
+                    let num_canons = canons.len();
+                    for i in 0..temp.len() {
+                        let curr_idx = num_canons + i;
+                        indices.assign_assumed_id(&ComponentSection::Canon, &ExternalItemKind::NA, curr_idx);
+                    }
                     canons.append(temp);
                     Self::add_to_sections(
                         &mut sections,
@@ -467,6 +487,7 @@ impl<'a> Component<'a> {
                     // Indicating the start of a new module
                     parent_stack.push(Encoding::Module);
                     stack.push(Encoding::Module);
+                    indices.assign_assumed_id(&ComponentSection::Module, &ExternalItemKind::NA, modules.len());
                     modules.push(Module::parse_internal(
                         &wasm[unchecked_range.start - start..unchecked_range.end - start],
                         enable_multi_memory,
@@ -493,6 +514,7 @@ impl<'a> Component<'a> {
                         unchecked_range.start,
                         &mut stack,
                     )?;
+                    indices.assign_assumed_id(&ComponentSection::Component, &ExternalItemKind::NA, components.len());
                     components.push(cmp);
                     Self::add_to_sections(
                         &mut sections,
@@ -592,6 +614,7 @@ impl<'a> Component<'a> {
             instances,
             component_instance,
             canons: Canons::new(canons),
+            indices,
             custom_sections: CustomSections::new(custom_sections),
             sections,
             start_section,
@@ -631,93 +654,96 @@ impl<'a> Component<'a> {
     }
 
     fn encode_comp(&mut self) -> wasm_encoder::Component {
+        println!("ENCODE COMPONENT");
         let mut component = wasm_encoder::Component::new();
-        let mut idx = IdxSpaces::new();
         let mut reencode = RoundtripReencoder;
+
+        // TODO: Can I avoid this clone?
+        let mut indices = self.indices.clone();
+        indices.reset_ids();
 
         // Create a clone of the original sections to allow iterating over them (borrow issues)
         // TODO: Can I avoid this clone?
         let orig_sections = self.sections.clone();
         for (num, section) in orig_sections.iter() {
+            let start_idx = indices.visit_section(section, *num as usize);
             match section {
                 ComponentSection::Component => {
-                    self.internal_encode_component(idx.comp.curr(), *num as usize, &mut component, &mut idx);
+                    self.internal_encode_component(start_idx, *num as usize, &mut component, &mut indices);
                 }
                 ComponentSection::Module => {
-                    self.internal_encode_module(idx.module.curr(), *num as usize, &mut component, &mut idx);
+                    self.internal_encode_module(start_idx, *num as usize, &mut component, &mut indices);
                 }
                 ComponentSection::CoreType => {
                     self.internal_encode_core_type(
-                        idx.core_type.curr(),
+                        start_idx,
                         *num as usize,
                         &mut component,
-                        &mut idx,
                         &mut reencode,
+                        &mut indices
                     );
                 }
                 ComponentSection::ComponentType => {
+                    println!("in main: {}", start_idx);
                     self.internal_encode_component_type(
-                        idx.comp_type.curr(),
+                        start_idx,
                         *num as usize,
                         &mut component,
-                        &mut idx,
                         &mut reencode,
+                        &mut indices
                     );
                 }
                 ComponentSection::ComponentImport => {
                     self.internal_encode_component_import(
-                        idx.last_processed_imp,
+                        start_idx,
                         *num as usize,
                         &mut component,
-                        &mut idx,
                         &mut reencode,
+                        &mut indices
                     );
-                    idx.last_processed_imp += *num as usize;
                 }
                 ComponentSection::ComponentExport => {
                     self.internal_encode_component_export(
-                        idx.last_processed_exp,
+                        start_idx,
                         *num as usize,
                         &mut component,
-                        &mut idx,
                         &mut reencode,
+                        &mut indices
                     );
-                    idx.last_processed_exp += *num as usize;
                 }
                 ComponentSection::ComponentInstance => {
                     self.internal_encode_component_instance(
-                        idx.comp_inst.curr(),
+                        start_idx,
                         *num as usize,
                         &mut component,
-                        &mut idx,
                         &mut reencode,
+                        &mut indices
                     );
                 }
                 ComponentSection::CoreInstance => {
                     self.internal_encode_core_instance(
-                        idx.core_inst.curr(),
+                        start_idx,
                         *num as usize,
                         &mut component,
-                        &mut idx,
+                        &mut indices
                     );
                 }
                 ComponentSection::Alias => {
                     self.internal_encode_alias(
-                        idx.last_processed_alias,
+                        start_idx,
                         *num as usize,
                         &mut component,
-                        &mut idx,
                         &mut reencode,
+                        &mut indices
                     );
-                    idx.last_processed_alias += *num as usize;
                 }
                 ComponentSection::Canon => {
                     self.internal_encode_canon(
-                        idx.core_func.curr(),
+                        start_idx,
                         *num as usize,
                         &mut component,
-                        &mut idx,
                         &mut reencode,
+                        &mut indices
                     );
                 }
                 ComponentSection::ComponentStartSection => {
@@ -725,11 +751,10 @@ impl<'a> Component<'a> {
                 }
                 ComponentSection::CustomSection => {
                     self.internal_encode_custom(
-                        idx.last_processed_custom,
+                        start_idx,
                         *num as usize,
                         &mut component,
                     );
-                    idx.last_processed_custom += *num as usize;
                 }
             }
         }
@@ -766,15 +791,22 @@ impl<'a> Component<'a> {
         start: usize,
         num: usize,
         component: &mut wasm_encoder::Component,
-        idx: &mut IdxSpaces,
+        indices: &mut IdxSpaces
     ) {
-        assert!(start + num - idx.comp.curr_external() <= self.components.len());
+        println!("\ninternal_encode_component[{start}]x{num}");
+        assert!(start + num <= self.components.len());
+
+        let section = ComponentSection::Component;
         for i in 0..num {
-            let id = idx.comp.id_for(start + i);
+            let idx = start + i;
+            let kind = ExternalItemKind::NA;
+            if indices.is_encoded(&section, &kind, idx) { continue; }
             component.section(&NestedComponentSection(
-                &self.components[id].encode_comp(),
+                &self.components[idx].encode_comp(),
             ));
-            idx.comp.assign(start + i, id);
+            // let id = idx.comp.id_for(comp_idx);
+            println!("here: internal_encode_component");
+            indices.assign_actual_id(&section, &kind, idx);
         }
     }
 
@@ -783,15 +815,21 @@ impl<'a> Component<'a> {
         start: usize,
         num: usize,
         component: &mut wasm_encoder::Component,
-        idx: &mut IdxSpaces,
+        indices: &mut IdxSpaces,
     ) {
-        assert!(start + num - idx.module.curr_external() <= self.modules.len());
+        assert!(start + num <= self.modules.len());
+
+        let section = ComponentSection::Module;
         for i in 0..num {
-            let id = idx.module.id_for(start + i);
+            let idx = start + i;
+            let kind = ExternalItemKind::NA;
+            if indices.is_encoded(&section, &kind, idx) { continue; }
             component.section(&ModuleSection(
-                &self.modules[id].encode_internal(false).0,
+                &self.modules[idx].encode_internal(false).0,
             ));
-            idx.module.assign(start + i, id);
+            // let id = idx.module.id_for(mod_idx);
+            println!("here: internal_encode_module");
+            indices.assign_actual_id(&section, &kind, idx);
         }
     }
 
@@ -800,16 +838,19 @@ impl<'a> Component<'a> {
         start: usize,
         num: usize,
         component: &mut wasm_encoder::Component,
-        idx: &mut IdxSpaces,
         reencode: &mut RoundtripReencoder,
+        indices: &mut IdxSpaces
     ) {
         assert!(num + start <= self.core_types.len());
         let mut type_section = wasm_encoder::CoreTypeSection::new();
 
+        let section = ComponentSection::CoreType;
         for i in 0..num {
-            let id = idx.core_type.id_for(start + i);
+            let idx = start + i;
+            let kind = ExternalItemKind::NA;
+            if indices.is_encoded(&section, &kind, idx) { continue; }
 
-            match &self.core_types[id] {
+            match &self.core_types[idx] {
                 CoreType::Rec(recgroup) => {
                     let types = recgroup
                         .types()
@@ -830,12 +871,14 @@ impl<'a> Component<'a> {
                     }
                 }
                 CoreType::Module(module) => {
-                    // TODO: This needs to be fixed
+                    // TODO: This *might* need to be fixed, but I'm unsure
                     let enc = type_section.ty();
                     convert_module_type_declaration(module, enc, reencode);
                 }
             }
-            idx.core_type.assign(start + i, id);
+            // let id = idx.core_type.id_for(ty_idx);
+            println!("here: internal_encode_core_type");
+            indices.assign_actual_id(&section, &kind, idx);
         }
         component.section(&type_section);
     }
@@ -845,15 +888,20 @@ impl<'a> Component<'a> {
         start: usize,
         num: usize,
         component: &mut wasm_encoder::Component,
-        idx: &mut IdxSpaces,
         reencode: &mut RoundtripReencoder,
+        indices: &mut IdxSpaces
     ) {
-        assert!(num + start - idx.comp_type.curr_external() <= self.component_types.items.len());
+        println!("[internal_encode_component_type] {start} + {num} = {} <= {}", num + start, self.component_types.items.len());
+        assert!(num + start <= self.component_types.items.len(), "{num} + {start} = {} <= {}", num + start, self.component_types.items.len());
+
+        let section = ComponentSection::ComponentType;
         let mut component_ty_section = wasm_encoder::ComponentTypeSection::new();
         for i in 0..num {
-            let id = idx.comp_type.id_for(start + i);
+            let idx = start + i;
+            let kind = ExternalItemKind::NA;
+            if indices.is_encoded(&section, &kind, idx) { continue; }
 
-            match &self.component_types.items[id] {
+            match &self.component_types.items[idx] {
                 ComponentType::Defined(comp_ty) => {
                     let enc = component_ty_section.defined_type();
                     match comp_ty {
@@ -864,7 +912,7 @@ impl<'a> Component<'a> {
                             enc.record(
                                 records.iter().map(|(n, ty)| {
                                     let fixed_ty = self.lookup_component_val_type(
-                                        *ty, idx, component, reencode
+                                        *ty, component, reencode, indices
                                     );
                                     (*n, reencode.component_val_type(fixed_ty))
                                 }),
@@ -876,7 +924,7 @@ impl<'a> Component<'a> {
                                     variant.name,
                                     variant.ty.map(|ty| {
                                         let fixed_ty = self.lookup_component_val_type(
-                                            ty, idx, component, reencode
+                                            ty, component, reencode, indices
                                         );
                                         reencode.component_val_type(fixed_ty)
                                     }),
@@ -886,7 +934,7 @@ impl<'a> Component<'a> {
                         }
                         wasmparser::ComponentDefinedType::List(l) => {
                             let fixed_ty = self.lookup_component_val_type(
-                                *l, idx, component, reencode
+                                *l, component, reencode, indices
                             );
                             enc.list(reencode.component_val_type(fixed_ty))
                         }
@@ -894,7 +942,7 @@ impl<'a> Component<'a> {
                             tup.iter()
                                 .map(|val_type| {
                                     let fixed_ty = self.lookup_component_val_type(
-                                        *val_type, idx, component, reencode
+                                        *val_type, component, reencode, indices
                                     );
                                     reencode.component_val_type(fixed_ty)
                                 }),
@@ -907,36 +955,50 @@ impl<'a> Component<'a> {
                         }
                         wasmparser::ComponentDefinedType::Option(opt) => {
                             let fixed_ty = self.lookup_component_val_type(
-                                *opt, idx, component, reencode
+                                *opt, component, reencode, indices
                             );
                             enc.option(reencode.component_val_type(fixed_ty))
                         }
                         wasmparser::ComponentDefinedType::Result { ok, err } => enc.result(
                             ok.map(|val_type| {
                                 let fixed_ty = self.lookup_component_val_type(
-                                    val_type, idx, component, reencode
+                                    val_type, component, reencode, indices
                                 );
                                 reencode.component_val_type(fixed_ty)
                             }),
                             err.map(|val_type| {
                                 let fixed_ty = self.lookup_component_val_type(
-                                    val_type, idx, component, reencode
+                                    val_type, component, reencode, indices
                                 );
                                 reencode.component_val_type(fixed_ty)
                             }),
                         ),
                         wasmparser::ComponentDefinedType::Own(u) => {
-                            // TODO: This needs to be fixed
-                            enc.own(*u)
+                            let id = if let Some(id) = indices.lookup_actual_id(&section, &kind, *u as usize) {
+                                // has already been encoded
+                                *id
+                            } else {
+                                // we need to skip around and encode this type first!
+                                self.internal_encode_component_type(*u as usize, 1, component, reencode, indices);
+                                indices.lookup_actual_id_or_panic(&section, &kind, *u as usize)
+                            };
+                            enc.own(id as u32)
                         },
                         wasmparser::ComponentDefinedType::Borrow(u) => {
-                            // TODO: This needs to be fixed
-                            enc.borrow(*u)
+                            let id = if let Some(id) = indices.lookup_actual_id(&section, &kind, *u as usize) {
+                                // has already been encoded
+                                *id
+                            } else {
+                                // we need to skip around and encode this type first!
+                                self.internal_encode_component_type(*u as usize, 1, component, reencode, indices);
+                                indices.lookup_actual_id_or_panic(&section, &kind, *u as usize)
+                            };
+                            enc.borrow(id as u32)
                         },
                         wasmparser::ComponentDefinedType::Future(opt) => match opt {
                             Some(u) => {
                                 let fixed_ty = self.lookup_component_val_type(
-                                    *u, idx, component, reencode
+                                    *u, component, reencode, indices
                                 );
                                 enc.future(Some(reencode.component_val_type(fixed_ty)))
                             },
@@ -945,7 +1007,7 @@ impl<'a> Component<'a> {
                         wasmparser::ComponentDefinedType::Stream(opt) => match opt {
                             Some(u) => {
                                 let fixed_ty = self.lookup_component_val_type(
-                                    *u, idx, component, reencode
+                                    *u, component, reencode, indices
                                 );
                                 enc.stream(Some(reencode.component_val_type(fixed_ty)))
                             },
@@ -953,7 +1015,7 @@ impl<'a> Component<'a> {
                         },
                         wasmparser::ComponentDefinedType::FixedSizeList(ty, i) => {
                             let fixed_ty = self.lookup_component_val_type(
-                                *ty, idx, component, reencode
+                                *ty, component, reencode, indices
                             );
                             enc.fixed_size_list(reencode.component_val_type(fixed_ty), *i)
                         }
@@ -964,14 +1026,14 @@ impl<'a> Component<'a> {
                     enc.params(func_ty.params.iter().map(
                         |p: &(&str, wasmparser::ComponentValType)| {
                             let fixed_ty = self.lookup_component_val_type(
-                                p.1, idx, component, reencode
+                                p.1, component, reencode, indices
                             );
                             (p.0, reencode.component_val_type(fixed_ty))
                         },
                     ));
                     enc.result(func_ty.result.map(|v| {
                         let fixed_ty = self.lookup_component_val_type(
-                            v, idx, component, reencode
+                            v, component, reencode, indices
                         );
                         reencode.component_val_type(fixed_ty)
                     }));
@@ -1017,9 +1079,10 @@ impl<'a> Component<'a> {
                                 new_comp.alias(process_alias(a, reencode));
                             }
                             ComponentTypeDeclaration::Export { name, ty } => {
-                                // TODO: This needs to be fixed
+                                let fixed_ty = self.fix_component_type_ref(*ty, component, reencode, indices);
+
                                 let ty = do_reencode(
-                                    *ty,
+                                    fixed_ty,
                                     RoundtripReencoder::component_type_ref,
                                     reencode,
                                     "component type",
@@ -1027,9 +1090,10 @@ impl<'a> Component<'a> {
                                 new_comp.export(name.0, ty);
                             }
                             ComponentTypeDeclaration::Import(imp) => {
-                                // TODO: This needs to be fixed
+                                let fixed_ty = self.fix_component_type_ref(imp.ty, component, reencode, indices);
+
                                 let ty = do_reencode(
-                                    imp.ty,
+                                    fixed_ty,
                                     RoundtripReencoder::component_type_ref,
                                     reencode,
                                     "component type",
@@ -1049,7 +1113,8 @@ impl<'a> Component<'a> {
                     component_ty_section.resource(reencode.val_type(*rep).unwrap(), *dtor);
                 }
             }
-            idx.comp_type.assign(start + i, id);
+            println!("here: internal_encode_component_type");
+            indices.assign_actual_id(&section, &kind, idx);
         }
         component.section(&component_ty_section);
     }
@@ -1059,31 +1124,30 @@ impl<'a> Component<'a> {
         start: usize,
         num: usize,
         component: &mut wasm_encoder::Component,
-        idx: &mut IdxSpaces,
         reencode: &mut RoundtripReencoder,
+        indices: &mut IdxSpaces
     ) {
         assert!(start + num <= self.imports.len());
         let mut imports = wasm_encoder::ComponentImportSection::new();
+
+        let section = ComponentSection::ComponentImport;
         for i in 0..num {
-            let id = start + i;
-            let imp = &self.imports[id];
+            let idx = start + i;
+            let imp = &self.imports[idx];
+            let kind = ExternalItemKind::from(&imp.ty);
+            if indices.is_encoded(&section, &kind, idx) { continue; }
 
             // TODO: Verify this is correct!
-            let space = match imp.ty {
-                ComponentTypeRef::Component(_) => &mut idx.comp,
-                ComponentTypeRef::Module(_) => &mut idx.module,
-                ComponentTypeRef::Type(_) => &mut idx.comp_type,
-                ComponentTypeRef::Instance(_) => &mut idx.comp_inst,
-                ComponentTypeRef::Func(_) => &mut idx.comp_func,
-                ComponentTypeRef::Value(_) => &mut idx.comp_val
-            };
-            let ref_id = space.next();
-            space.assign(ref_id, ref_id);
-            space.was_external();
+            println!("here: internal_encode_component_import");
+            indices.assign_actual_id(
+                &section,
+                &kind,
+                idx
+            );
 
-            // TODO: This needs to be fixed (imp.ty)
+            let fixed_ty = self.fix_component_type_ref(imp.ty, component, reencode, indices);
             let ty = do_reencode(
-                imp.ty,
+                fixed_ty,
                 RoundtripReencoder::component_type_ref,
                 reencode,
                 "component import",
@@ -1098,40 +1162,43 @@ impl<'a> Component<'a> {
         start: usize,
         num: usize,
         component: &mut wasm_encoder::Component,
-        idx: &mut IdxSpaces,
         reencode: &mut RoundtripReencoder,
+        indices: &mut IdxSpaces
     ) {
+        println!("internal_encode_component_export");
         assert!(start + num <= self.exports.len());
         let mut exports = wasm_encoder::ComponentExportSection::new();
+
+        let section = ComponentSection::ComponentExport;
         for i in 0..num {
-            let id = start + i;
-            let exp = &self.exports[id];
+            let idx = start + i;
+            let exp = &self.exports[idx];
+            let kind = ExternalItemKind::from(&exp.ty);
+            if indices.is_encoded(&section, &kind, idx) { continue; }
+            println!("here: internal_encode_component_export");
+
+            let res = exp.ty.map(|ty| {
+                let fixed_ty = self.fix_component_type_ref(ty, component, reencode, indices);
+                do_reencode(
+                    fixed_ty,
+                    RoundtripReencoder::component_type_ref,
+                    reencode,
+                    "component export",
+                )
+            });
 
             // TODO: Verify this is correct!
-            let space = match exp.kind {
-                ComponentExternalKind::Component => &mut idx.comp,
-                ComponentExternalKind::Module => &mut idx.module,
-                ComponentExternalKind::Type =>  &mut idx.comp_type,
-                ComponentExternalKind::Instance =>  &mut idx.comp_inst,
-                ComponentExternalKind::Func => &mut idx.comp_func,
-                ComponentExternalKind::Value => &mut idx.comp_val
-            };
-            let ref_id = space.next();
-            space.assign(ref_id, ref_id);
-            space.was_external();
+            indices.assign_actual_id(
+                &section,
+                &kind,
+                idx
+            );
+
             exports.export(
                 exp.name.0,
                 reencode.component_export_kind(exp.kind),
                 exp.index,
-                exp.ty.map(|ty| {
-                    // TODO: This needs to be fixed
-                    do_reencode(
-                        ty,
-                        RoundtripReencoder::component_type_ref,
-                        reencode,
-                        "component export",
-                    )
-                }),
+                res,
             );
         }
         component.section(&exports);
@@ -1142,23 +1209,38 @@ impl<'a> Component<'a> {
         start: usize,
         num: usize,
         component: &mut wasm_encoder::Component,
-        idx: &mut IdxSpaces,
         reencode: &mut RoundtripReencoder,
+        indices: &mut IdxSpaces
     ) {
-        println!("internal_encode_component_instance");
-        assert!(start + num - idx.comp_inst.curr_external() <= self.component_instance.len());
+        println!("\ninternal_encode_component_instance[{start}]x{num}");
+        assert!(start + num <= self.component_instance.len());
         let mut instances = wasm_encoder::ComponentInstanceSection::new();
+
+        let section = ComponentSection::ComponentInstance;
         for i in 0..num {
-            let id = idx.comp_inst.id_for(start + i);
-            let instance = &self.component_instance[id];
+            let idx = start + i;
+            let kind = ExternalItemKind::NA;
+            if indices.is_encoded(&section, &kind, idx) { continue; }
+            let instance = &self.component_instance[idx];
             match instance {
                 ComponentInstance::Instantiate {
                     component_index,
                     args,
                 } => {
-                    // TODO: This needs to be fixed
+                    let section = ComponentSection::Component;
+                    let kind = ExternalItemKind::NA;
+                    let id = if let Some(id) = indices.lookup_actual_id(&section, &kind, *component_index as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        // self.internal_encode_component(*component_index as usize, 1, component, indices);
+                        // indices.lookup_actual_id_or_panic(&section, &kind, *component_index as usize)
+                        panic!("Issue with borrowing mutable self...")
+                    };
                     instances.instantiate(
-                        *component_index,
+                        id as u32,
                         args.iter().map(|arg| {
                             (
                                 arg.name,
@@ -1179,7 +1261,9 @@ impl<'a> Component<'a> {
                     }));
                 }
             }
-            idx.comp_inst.assign(start + i, id);
+            // let id = idx.comp_inst.id_for(inst_idx);
+            println!("here: internal_encode_component_instance");
+            indices.assign_actual_id(&section, &kind, idx);
         }
         component.section(&instances);
     }
@@ -1189,21 +1273,34 @@ impl<'a> Component<'a> {
         start: usize,
         num: usize,
         component: &mut wasm_encoder::Component,
-        idx: &mut IdxSpaces,
+        indices: &mut IdxSpaces
     ) {
-        println!("internal_encode_core_instance");
-        assert!(start + num <= self.instances.len());
+        println!("\ninternal_encode_core_instance[{start}]x{num}");
+        // assert!(start + num <= self.instances.len(), "{start} + {num} <= {}", self.instances.len());
         let mut instances = wasm_encoder::InstanceSection::new();
+
+        let section = ComponentSection::CoreInstance;
         for i in 0..num {
-            let id = idx.core_inst.id_for(start + i);
-            let instance = &self.instances[id];
+            let idx = start + i;
+            let kind = ExternalItemKind::NA;
+            if indices.is_encoded(&section, &kind, idx) { continue; }
+            let instance = &self.instances[idx];
             match instance {
                 Instance::Instantiate { module_index, args } => {
-                    // TODO: This needs to be fixed
                     instances.instantiate(
                         *module_index,
                         args.iter()
-                            .map(|arg| (arg.name, ModuleArg::Instance(arg.index))),
+                            .map(|arg| {
+                                let id = if let Some(id) = indices.lookup_actual_id(&section, &kind, arg.index as usize) {
+                                    // has already been encoded
+                                    *id
+                                } else {
+                                    // we need to skip around and encode this type first!
+                                    self.internal_encode_core_instance(arg.index as usize, 1, component, indices);
+                                    indices.lookup_actual_id_or_panic(&section, &kind, arg.index as usize)
+                                };
+                                (arg.name, ModuleArg::Instance(id as u32))
+                            }),
                     );
                 }
                 Instance::FromExports(exports) => {
@@ -1217,7 +1314,9 @@ impl<'a> Component<'a> {
                     }));
                 }
             }
-            idx.core_inst.assign(start + i, id);
+            // let id = idx.core_inst.id_for(instance_idx);
+            println!("here: internal_encode_core_instance");
+            indices.assign_actual_id(&section, &kind, idx);
         }
         component.section(&instances);
     }
@@ -1227,8 +1326,8 @@ impl<'a> Component<'a> {
         start: usize,
         num: usize,
         component: &mut wasm_encoder::Component,
-        idx: &mut IdxSpaces,
         reencode: &mut RoundtripReencoder,
+        indices: &mut IdxSpaces
     ) {
         assert!(
             start + num <= self.alias.items.len(),
@@ -1236,39 +1335,27 @@ impl<'a> Component<'a> {
             self.alias.items.len()
         );
         let mut alias = ComponentAliasSection::new();
-        for i in 0..num {
-            let a = &self.alias.items[start + i];
-            // TODO: This needs to be fixed (what does the alias point to?)
-            let (space, fixed_alias) = match a {
-                ComponentAlias::InstanceExport { kind, .. } => match kind {
-                    ComponentExternalKind::Module => (Some(&mut idx.module), a.clone()),
-                    ComponentExternalKind::Func => (Some(&mut idx.comp_func), a.clone()),
-                    ComponentExternalKind::Value => (Some(&mut idx.comp_val), a.clone()),
-                    ComponentExternalKind::Type => (Some(&mut idx.comp_type), a.clone()),
-                    ComponentExternalKind::Instance => (Some(&mut idx.comp_inst), a.clone()),
-                    ComponentExternalKind::Component => (Some(&mut idx.comp), a.clone()),
-                },
-                ComponentAlias::CoreInstanceExport { kind, .. } => match kind {
-                    ExternalKind::Func |
-                    ExternalKind::Memory |
-                    ExternalKind::Global |
-                    ExternalKind::Tag |
-                    ExternalKind::Table => (None, a.clone()),
-                }
-                ComponentAlias::Outer { kind, .. } => match kind {
-                    ComponentOuterAliasKind::CoreModule => (Some(&mut idx.module), a.clone()),
-                    ComponentOuterAliasKind::CoreType => (Some(&mut idx.core_type), a.clone()),
-                    ComponentOuterAliasKind::Type => (Some(&mut idx.comp_type), a.clone()),
-                    ComponentOuterAliasKind::Component => (Some(&mut idx.comp), a.clone()),
-                }
-            };
-            if let Some(space) = space {
-                let ref_id = space.next();
-                space.assign(ref_id, ref_id);
-                space.was_external();
-            }
 
-            alias.alias(process_alias(&fixed_alias, reencode));
+        let section = ComponentSection::Alias;
+        for i in 0..num {
+            let idx = start + i;
+            let a = &self.alias.items[idx];
+            let kind = ExternalItemKind::from(a);
+            if indices.is_encoded(&section, &kind, idx) { continue; }
+            // TODO: This needs to be fixed (what does the alias point to?)
+            // if let Some(space) = space {
+                // TODO - this doesn't work since we're incrementing BOTH next and was_external
+                // results in assigning the same key to multiple different values
+                // see: "assigning 8 to" in the output
+                println!("here: internal_encode_alias");
+                indices.assign_actual_id(
+                    &section,
+                    &kind,
+                    idx
+                );
+            // }
+
+            alias.alias(process_alias(&a, reencode));
         }
         component.section(&alias);
     }
@@ -1278,24 +1365,46 @@ impl<'a> Component<'a> {
         start: usize,
         num: usize,
         component: &mut wasm_encoder::Component,
-        idx: &mut IdxSpaces,
         reencode: &mut RoundtripReencoder,
+        indices: &mut IdxSpaces
     ) {
         assert!(start + num <= self.canons.items.len());
         let mut canon_sec = wasm_encoder::CanonicalFunctionSection::new();
+
+        let section = ComponentSection::Canon;
         for i in 0..num {
-            let id = idx.core_func.id_for(start + i);
-            let canon = &self.canons.items[id];
+            // let id = idx.core_func.id_for(start + i);
+            let idx = start + i;
+            let kind = ExternalItemKind::NA;
+            if indices.is_encoded(&section, &kind, idx) { continue; }
+            let canon = &self.canons.items[idx];
             match canon {
                 CanonicalFunction::Lift {
                     core_func_index,
                     type_index,
                     options,
                 } => {
-                    // TODO: This needs to be fixed
+                    let func_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::Canon, &ExternalItemKind::NA, *core_func_index as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*core_func_index as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *core_func_index as usize)
+                    };
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *type_index as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*type_index as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *type_index as usize)
+                    };
                     canon_sec.lift(
-                        *core_func_index,
-                        *type_index,
+                        func_id as u32,
+                        ty_id as u32,
                         options.iter().map(|canon| {
                             do_reencode(
                                 *canon,
@@ -1310,9 +1419,17 @@ impl<'a> Component<'a> {
                     func_index,
                     options,
                 } => {
-                    // TODO: This needs to be fixed
+                    let func_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::Canon, &ExternalItemKind::NA, *func_index as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*func_index as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *func_index as usize)
+                    };
                     canon_sec.lower(
-                        *func_index,
+                        func_id as u32,
                         options.iter().map(|canon| {
                             do_reencode(
                                 *canon,
@@ -1324,20 +1441,52 @@ impl<'a> Component<'a> {
                     );
                 }
                 CanonicalFunction::ResourceNew { resource } => {
-                    // TODO: This needs to be fixed
-                    canon_sec.resource_new(*resource);
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *resource as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*resource as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *resource as usize)
+                    };
+                    canon_sec.resource_new(ty_id as u32);
                 }
                 CanonicalFunction::ResourceDrop { resource } => {
-                    // TODO: This needs to be fixed
-                    canon_sec.resource_drop(*resource);
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *resource as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*resource as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *resource as usize)
+                    };
+                    canon_sec.resource_drop(ty_id as u32);
                 }
                 CanonicalFunction::ResourceRep { resource } => {
-                    // TODO: This needs to be fixed
-                    canon_sec.resource_rep(*resource);
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *resource as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*resource as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *resource as usize)
+                    };
+                    canon_sec.resource_rep(ty_id as u32);
                 }
                 CanonicalFunction::ResourceDropAsync { resource } => {
-                    // TODO: This needs to be fixed
-                    canon_sec.resource_drop_async(*resource);
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *resource as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*resource as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *resource as usize)
+                    };
+                    canon_sec.resource_drop_async(ty_id as u32);
                 }
                 CanonicalFunction::ThreadAvailableParallelism => {
                     canon_sec.thread_available_parallelism();
@@ -1352,7 +1501,12 @@ impl<'a> Component<'a> {
                         .cloned()
                         .map(|v| v.into())
                         .collect::<Vec<_>>();
-                    let result = result.map(|v| v.into());
+                    let result = result.map(|v| {
+                        let fixed_ty = self.lookup_component_val_type(
+                            v, component, reencode, indices
+                        );
+                        fixed_ty.into()
+                    });
                     canon_sec.task_return(result, options);
                 }
                 CanonicalFunction::Yield { async_ } => {
@@ -1377,13 +1531,29 @@ impl<'a> Component<'a> {
                     canon_sec.subtask_drop();
                 }
                 CanonicalFunction::StreamNew { ty } => {
-                    // TODO: This needs to be fixed
-                    canon_sec.stream_new(*ty);
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
+                    };
+                    canon_sec.stream_new(ty_id as u32);
                 }
                 CanonicalFunction::StreamRead { ty, options } => {
-                    // TODO: This needs to be fixed
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
+                    };
                     canon_sec.stream_read(
-                        *ty,
+                        ty_id as u32,
                         options
                             .into_iter()
                             .map(|t| {
@@ -1398,9 +1568,17 @@ impl<'a> Component<'a> {
                     );
                 }
                 CanonicalFunction::StreamWrite { ty, options } => {
-                    // TODO: This needs to be fixed
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
+                    };
                     canon_sec.stream_write(
-                        *ty,
+                        ty_id as u32,
                         options
                             .into_iter()
                             .map(|t| {
@@ -1415,21 +1593,53 @@ impl<'a> Component<'a> {
                     );
                 }
                 CanonicalFunction::StreamCancelRead { ty, async_ } => {
-                    // TODO: This needs to be fixed
-                    canon_sec.stream_cancel_read(*ty, *async_);
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
+                    };
+                    canon_sec.stream_cancel_read(ty_id as u32, *async_);
                 }
                 CanonicalFunction::StreamCancelWrite { ty, async_ } => {
-                    // TODO: This needs to be fixed
-                    canon_sec.stream_cancel_write(*ty, *async_);
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
+                    };
+                    canon_sec.stream_cancel_write(ty_id as u32, *async_);
                 }
                 CanonicalFunction::FutureNew { ty } => {
-                    // TODO: This needs to be fixed
-                    canon_sec.future_new(*ty);
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
+                    };
+                    canon_sec.future_new(ty_id as u32);
                 }
                 CanonicalFunction::FutureRead { ty, options } => {
-                    // TODO: This needs to be fixed
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
+                    };
                     canon_sec.future_read(
-                        *ty,
+                        ty_id as u32,
                         options
                             .into_iter()
                             .map(|t| {
@@ -1444,9 +1654,17 @@ impl<'a> Component<'a> {
                     );
                 }
                 CanonicalFunction::FutureWrite { ty, options } => {
-                    // TODO: This needs to be fixed
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
+                    };
                     canon_sec.future_write(
-                        *ty,
+                        ty_id as u32,
                         options
                             .into_iter()
                             .map(|t| {
@@ -1461,12 +1679,28 @@ impl<'a> Component<'a> {
                     );
                 }
                 CanonicalFunction::FutureCancelRead { ty, async_ } => {
-                    // TODO: This needs to be fixed
-                    canon_sec.future_cancel_read(*ty, *async_);
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
+                    };
+                    canon_sec.future_cancel_read(ty_id as u32, *async_);
                 }
                 CanonicalFunction::FutureCancelWrite { ty, async_ } => {
-                    // TODO: This needs to be fixed
-                    canon_sec.future_cancel_write(*ty, *async_);
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
+                    };
+                    canon_sec.future_cancel_write(ty_id as u32, *async_);
                 }
                 CanonicalFunction::ErrorContextNew { options } => {
                     // TODO: This needs to be fixed
@@ -1504,15 +1738,32 @@ impl<'a> Component<'a> {
                     canon_sec.error_context_drop();
                 }
                 CanonicalFunction::ThreadSpawnRef { func_ty_index } => {
-                    // TODO: This needs to be fixed
-                    canon_sec.thread_spawn_ref(*func_ty_index);
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *func_ty_index as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*func_ty_index as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *func_ty_index as usize)
+                    };
+                    canon_sec.thread_spawn_ref(ty_id as u32);
                 }
                 CanonicalFunction::ThreadSpawnIndirect {
                     func_ty_index,
                     table_index,
                 } => {
                     // TODO: This needs to be fixed
-                    canon_sec.thread_spawn_indirect(*func_ty_index, *table_index);
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *func_ty_index as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*func_ty_index as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *func_ty_index as usize)
+                    };
+                    canon_sec.thread_spawn_indirect(ty_id as u32, *table_index);
                 }
                 CanonicalFunction::TaskCancel => {
                     canon_sec.task_cancel();
@@ -1527,23 +1778,56 @@ impl<'a> Component<'a> {
                     canon_sec.subtask_cancel(*async_);
                 }
                 CanonicalFunction::StreamDropReadable { ty } => {
-                    // TODO: This needs to be fixed
-                    canon_sec.stream_drop_readable(*ty);
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
+                    };
+                    canon_sec.stream_drop_readable(ty_id as u32);
                 }
                 CanonicalFunction::StreamDropWritable { ty } => {
-                    // TODO: This needs to be fixed
-                    canon_sec.stream_drop_writable(*ty);
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
+                    };
+                    canon_sec.stream_drop_writable(ty_id as u32);
                 }
                 CanonicalFunction::FutureDropReadable { ty } => {
-                    // TODO: This needs to be fixed
-                    canon_sec.future_drop_readable(*ty);
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
+                    };
+                    canon_sec.future_drop_readable(ty_id as u32);
                 }
                 CanonicalFunction::FutureDropWritable { ty } => {
-                    // TODO: This needs to be fixed
-                    canon_sec.future_drop_writable(*ty);
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                        // has already been encoded
+                        *id
+                    } else {
+                        // we need to skip around and encode this type first!
+                        println!("here");
+                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
+                    };
+                    canon_sec.future_drop_writable(ty_id as u32);
                 }
             }
-            idx.core_func.assign(start + i, id);
+            println!("here: internal_encode_canon");
+            indices.assign_actual_id(&section, &kind, idx);
         }
         component.section(&canon_sec);
     }
@@ -1561,15 +1845,93 @@ impl<'a> Component<'a> {
         component.section(&start_sec);
     }
 
-    fn lookup_component_val_type(&self, ty: ComponentValType, idx: &mut IdxSpaces,
-                                 component: &mut wasm_encoder::Component,
-                                 reencode: &mut RoundtripReencoder,) -> ComponentValType{
-        if let ComponentValType::Type(ty_id) = ty {
-            if idx.comp_type.ooo(ty_id as usize) {
-                // we need to skip around and encode this type first!
-                self.internal_encode_component_type(ty_id as usize, 1, component, idx, reencode);
+    fn fix_component_type_ref(&self, ty: ComponentTypeRef,
+                              component: &mut wasm_encoder::Component,
+                              reencode: &mut RoundtripReencoder,
+                              indices: &mut IdxSpaces) -> ComponentTypeRef {
+        match ty {
+            ComponentTypeRef::Module(id) => {
+                let section = ComponentSection::Module;
+                let kind = ExternalItemKind::NA;
+                let id = if let Some(id) = indices.lookup_actual_id(&section, &kind, id as usize) {
+                    // has already been encoded
+                    *id
+                } else {
+                    // we need to skip around and encode this type first!
+                    println!("here");
+                    // self.internal_encode_module(id as usize, 1, component, indices);
+                    // indices.lookup_actual_id_or_panic(&section, &kind, id as usize)
+                    panic!("couldn't encode due to borrow issues")
+                };
+                ComponentTypeRef::Module(id as u32)
             }
-            ComponentValType::Type(idx.comp_type.lookup(ty_id as usize) as u32)
+            ComponentTypeRef::Func(id) => {
+                let section = ComponentSection::Canon;
+                let kind = ExternalItemKind::NA;
+                let id = if let Some(id) = indices.lookup_actual_id(&section, &kind, id as usize) {
+                    // has already been encoded
+                    *id
+                } else {
+                    // we need to skip around and encode this type first!
+                    println!("here");
+                    self.internal_encode_canon(id as usize, 1, component, reencode, indices);
+                    indices.lookup_actual_id_or_panic(&section, &kind, id as usize)
+                };
+                ComponentTypeRef::Func(id as u32)
+            }
+            ComponentTypeRef::Value(ty) => ComponentTypeRef::Value(self.lookup_component_val_type(ty, component, reencode, indices)),
+            ComponentTypeRef::Type(_) => ty, // nothing to do
+            ComponentTypeRef::Instance(id) => {
+                // TODO -- no idea if this section is right...
+                let section = ComponentSection::ComponentInstance;
+                let kind = ExternalItemKind::NA;
+                let id = if let Some(id) = indices.lookup_actual_id(&section, &kind, id as usize) {
+                    // has already been encoded
+                    *id
+                } else {
+                    // we need to skip around and encode this type first!
+                    println!("here");
+                    self.internal_encode_component_instance(id as usize, 1, component, reencode, indices);
+                    indices.lookup_actual_id_or_panic(&section, &kind, id as usize)
+                };
+                ComponentTypeRef::Func(id as u32)
+            }
+            ComponentTypeRef::Component(id) => {
+                // TODO -- no idea if this section is right...
+                let section = ComponentSection::ComponentType;
+                let kind = ExternalItemKind::NA;
+                let id = if let Some(id) = indices.lookup_actual_id(&section, &kind, id as usize) {
+                    // has already been encoded
+                    *id
+                } else {
+                    // we need to skip around and encode this type first!
+                    println!("here");
+                    self.internal_encode_component_type(id as usize, 1, component, reencode, indices);
+                    indices.lookup_actual_id_or_panic(&section, &kind, id as usize)
+                };
+                ComponentTypeRef::Func(id as u32)
+            }
+        }
+    }
+
+    fn lookup_component_val_type(&self, ty: ComponentValType,
+                                 component: &mut wasm_encoder::Component,
+                                 reencode: &mut RoundtripReencoder,
+                                 indices: &mut IdxSpaces) -> ComponentValType{
+        let section = ComponentSection::ComponentType;
+        let kind = ExternalItemKind::NA;
+
+        if let ComponentValType::Type(ty_id) = ty {
+            let id = if let Some(id) = indices.lookup_actual_id(&section, &kind, ty_id as usize) {
+                // has already been encoded
+                *id
+            } else {
+                // we need to skip around and encode this type first!
+                println!("here");
+                self.internal_encode_component_type(ty_id as usize, 1, component, reencode, indices);
+                indices.lookup_actual_id_or_panic(&section, &kind, ty_id as usize)
+            };
+            ComponentValType::Type(id as u32)
         } else {
             ty
         }

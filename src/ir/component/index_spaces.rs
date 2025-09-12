@@ -1,6 +1,8 @@
 use std::collections::HashMap;
+use wasmparser::{ComponentAlias, ComponentExternalKind, ComponentOuterAliasKind, ComponentTypeRef};
+use crate::ir::section::ComponentSection;
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct IdxSpaces {
     // Component-level spaces
     pub comp_func: IdxSpace,
@@ -17,11 +19,18 @@ pub(crate) struct IdxSpaces {
     pub core_type: IdxSpace,
     pub core_func: IdxSpace, // these are canonical function decls!
 
-    // General trackers for indices without semantic index spaces
-    pub last_processed_imp: usize,
-    pub last_processed_exp: usize,
-    pub last_processed_alias: usize,
-    pub last_processed_custom: usize,
+    // General trackers for indices of item vectors
+    last_processed_module: usize,
+    last_processed_alias: usize,
+    last_processed_core_ty: usize,
+    last_processed_comp_ty: usize,
+    last_processed_imp: usize,
+    last_processed_exp: usize,
+    last_processed_core_inst: usize,
+    last_processed_comp_inst: usize,
+    last_processed_canon: usize,
+    last_processed_component: usize,
+    last_processed_custom: usize,
 }
 impl IdxSpaces {
     pub fn new() -> Self {
@@ -40,82 +49,344 @@ impl IdxSpaces {
             ..Self::default()
         }
     }
+
+    pub fn is_encoded(&self, outer: &ComponentSection, inner: &ExternalItemKind, idx: usize) -> bool {
+        if let Some(space) = self.get_space(outer, inner) {
+            space.is_encoded(idx)
+        } else {
+            panic!("[{:?}::{:?}] Should be able to find a matching space for this!", outer, inner);
+        }
+    }
+
+    pub fn assign_actual_id(&mut self, outer: &ComponentSection, inner: &ExternalItemKind, vec_idx: usize) {
+        if let Some(space) = self.get_space_mut(outer, inner) {
+            let assumed_id = if let Some(assumed_id) = space.lookup_assumed_id(outer, vec_idx) {
+                *assumed_id
+            } else {
+                panic!("[{:?}] No assumed ID for index: {}", outer, vec_idx)
+            };
+            space.assign_actual_id(assumed_id);
+        }
+    }
+
+    pub fn assign_assumed_id(&mut self, outer: &ComponentSection, inner: &ExternalItemKind, curr_idx: usize) -> Option<usize> {
+        if let Some(space) = self.get_space_mut(outer, inner) {
+            Some(space.assign_assumed_id(outer, curr_idx))
+        } else {
+            None
+        }
+    }
+    
+    pub fn lookup_actual_id(&self, outer: &ComponentSection, inner: &ExternalItemKind, assumed_id: usize) -> Option<&usize> {
+        if let Some(space) = self.get_space(outer, inner) {
+            space.lookup_actual_id(assumed_id)
+        } else {
+            None
+        }
+    }
+
+    pub fn lookup_actual_id_or_panic(&self, outer: &ComponentSection, inner: &ExternalItemKind, assumed_id: usize) -> usize {
+        if let Some(space) = self.get_space(outer, inner) {
+            if let Some(actual_id) = space.lookup_actual_id(assumed_id) {
+                return *actual_id;
+            }
+        }
+        panic!("[{:?}::{:?}] Can't find assumed id {assumed_id} in id-tracker", outer, inner);
+    }
+
+    pub fn visit_section(&mut self, section: &ComponentSection, num: usize) -> usize {
+        let tracker = match section {
+            ComponentSection::Module => &mut self.last_processed_module,
+            ComponentSection::Alias => &mut self.last_processed_alias,
+            ComponentSection::CoreType => &mut self.last_processed_core_ty,
+            ComponentSection::ComponentType => &mut self.last_processed_comp_ty,
+            ComponentSection::ComponentImport => &mut self.last_processed_imp,
+            ComponentSection::ComponentExport => &mut self.last_processed_exp,
+            ComponentSection::CoreInstance => &mut self.last_processed_core_inst,
+            ComponentSection::ComponentInstance => &mut self.last_processed_comp_inst,
+            ComponentSection::Canon => &mut self.last_processed_canon,
+            ComponentSection::CustomSection => &mut self.last_processed_custom,
+            ComponentSection::Component => &mut self.last_processed_component,
+            ComponentSection::ComponentStartSection => panic!("No need to call this function for the start section!")
+        };
+
+        let curr = *tracker;
+        *tracker += num;
+        curr
+    }
+
+    pub fn reset_ids(&mut self) {
+        self.comp_func.reset_ids();
+        self.comp_val.reset_ids();
+        self.comp_type.reset_ids();
+        self.comp_inst.reset_ids();
+        self.comp.reset_ids();
+
+        self.core_inst.reset_ids();
+        self.module.reset_ids();
+
+        self.core_type.reset_ids();
+        self.core_func.reset_ids();
+    }
+
+    // ===================
+    // ==== UTILITIES ====
+    // ===================
+
+    fn get_space_mut(&mut self, outer: &ComponentSection, inner: &ExternalItemKind) -> Option<&mut IdxSpace> {
+        let space = match outer {
+            ComponentSection::Module => &mut self.module,
+            ComponentSection::CoreType => &mut self.core_type,
+            ComponentSection::ComponentType => &mut self.comp_type,
+            ComponentSection::CoreInstance => &mut self.core_inst,
+            ComponentSection::ComponentInstance => &mut self.comp_inst,
+            ComponentSection::Canon => &mut self.core_func,
+            ComponentSection::Component => &mut self.comp,
+
+            // These manipulate other index spaces!
+            ComponentSection::Alias |
+            ComponentSection::ComponentImport |
+            ComponentSection::ComponentExport => match inner {
+                ExternalItemKind::CompFunc => &mut self.comp_func,
+                ExternalItemKind::CompVal => &mut self.comp_val,
+                ExternalItemKind::CompType => &mut self.comp_type,
+                ExternalItemKind::CompInst => &mut self.comp_inst,
+                ExternalItemKind::Comp => &mut self.comp,
+                ExternalItemKind::CoreInst => &mut self.core_inst,
+                ExternalItemKind::Module => &mut self.module,
+                ExternalItemKind::CoreType => &mut self.core_type,
+                ExternalItemKind::CoreFunc => &mut self.core_func,
+                ExternalItemKind::NA => return None // nothing to do
+            }
+            ComponentSection::ComponentStartSection |
+            ComponentSection::CustomSection => return None // nothing to do for custom or start sections
+        };
+        Some(space)
+    }
+
+    fn get_space(&self, outer: &ComponentSection, inner: &ExternalItemKind) -> Option<&IdxSpace> {
+        let space = match outer {
+            ComponentSection::Module => &self.module,
+            ComponentSection::CoreType => &self.core_type,
+            ComponentSection::ComponentType => &self.comp_type,
+            ComponentSection::CoreInstance => &self.core_inst,
+            ComponentSection::ComponentInstance => &self.comp_inst,
+            ComponentSection::Canon => &self.core_func,
+            ComponentSection::Component => &self.comp,
+
+            // These manipulate other index spaces!
+            ComponentSection::Alias |
+            ComponentSection::ComponentImport |
+            ComponentSection::ComponentExport => match inner {
+                ExternalItemKind::CompFunc => &self.comp_func,
+                ExternalItemKind::CompVal => &self.comp_val,
+                ExternalItemKind::CompType => &self.comp_type,
+                ExternalItemKind::CompInst => &self.comp_inst,
+                ExternalItemKind::Comp => &self.comp,
+                ExternalItemKind::CoreInst => &self.core_inst,
+                ExternalItemKind::Module => &self.module,
+                ExternalItemKind::CoreType => &self.core_type,
+                ExternalItemKind::CoreFunc => &self.core_func,
+                ExternalItemKind::NA => return None // nothing to do
+            }
+            ComponentSection::ComponentStartSection |
+            ComponentSection::CustomSection => return None // nothing to do for custom or start sections
+        };
+        Some(space)
+    }
 }
 
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct IdxSpace {
-    current: usize,
-    // This represents the number of external structures that contribute to
-    // the current ID
-    // (e.g. component type indices come from the (type ...) and (export ...) expressions
-    num_external: usize,
-    map: HashMap<usize, usize>,
-    name: String
+    /// The name of this index space (primarily for debugging purposes)
+    name: String,
+    /// This is the current ID that we've reached associated with this index space.
+    current_id: usize,
+    // TODO: we might not need the below if we just track the current_id
+    //       at both parse and instrument time!
+    // /// This represents the number of items from the main vector that
+    // /// contribute to this index space.
+    // /// (e.g. the number of (type ...) items we've encountered for the component type index space.)
+    // num_main: usize,
+    // /// This represents the number of external structures that contribute to
+    // /// the current ID
+    // /// (e.g. component type indices come from the (type ...) AND the (export ...) expressions
+    // num_external: usize,
+
+    /// This is used at encode time. It tracks the actual ID that has been assigned
+    /// to some item by allowing for lookup of the assumed ID: `assumed_id -> actual_id`
+    /// This is important since we know what ID should be associated with something only at encode time,
+    /// since instrumentation has finished at that point and encoding of component items
+    /// can be done out-of-order to satisfy possible forward-references injected during instrumentation.
+    actual_ids: HashMap<usize, usize>,
+
+    /// Tracks the index in the MAIN item vector to the ID we've assumed for it: `main_idx -> assumed_id`
+    /// This ID will be used to reference that item in the IR.
+    main_assumed_ids: HashMap<usize, usize>,
+
+    // The below maps are to track assumed IDs for item vectors that index into this index space.
+
+    /// Tracks the index in the ALIAS item vector to the ID we've assumed for it: `alias_idx -> assumed_id`
+    /// This ID will be used to reference that item in the IR.
+    alias_assumed_ids: HashMap<usize, usize>,
+    /// Tracks the index in the IMPORT item vector to the ID we've assumed for it: `imports_idx -> assumed_id`
+    /// This ID will be used to reference that item in the IR.
+    imports_assumed_ids: HashMap<usize, usize>,
+    /// Tracks the index in the EXPORT item vector to the ID we've assumed for it: `exports_idx -> assumed_id`
+    /// This ID will be used to reference that item in the IR.
+    exports_assumed_ids: HashMap<usize, usize>,
 }
 impl IdxSpace {
     pub fn new(name: String) -> Self {
         Self {
             name,
-            current: 0,
             ..Default::default()
         }
     }
-    pub fn ooo(&mut self, id: usize) -> bool {
-        id > self.current
+
+    pub fn reset_ids(&mut self) {
+        self.current_id = 0;
     }
 
-    pub fn id_for(&mut self, to_check: usize) -> usize {
-        // let id = if to_check == self.current - 1 {
-        let id = if to_check == self.current {
-            // we've reached the end of the current index space
-            // self.next() - 1
-            self.next()
-        } else if self.ooo(to_check) {
-            panic!("[{}] we're going out of order, but we're not handling it! checking: {to_check}, current: {}", self.name, self.current)
-        } else {
-            // we're skipping around!
-            println!("[{}] skipping around: {to_check}? -- {}!", self.name, self.current);
-            to_check
-        };
-        id - self.curr_external()
+    pub fn curr_id(&self) -> usize {
+        // This returns the ID that we've reached thus far while encoding
+        self.current_id
     }
 
-    pub fn next(&mut self) -> usize {
-        println!("[{}] {} >> {}", self.name, self.current, self.current + 1);
-        let curr = self.current;
-        self.current += 1;
+    pub fn assign_actual_id(&mut self, assumed_id: usize) {
+        let id = self.curr_id();
+        println!("[{}] assigning {} to {}", self.name, assumed_id, id);
+
+        self.actual_ids.insert(assumed_id, id);
+        self.next();
+    }
+
+    fn next(&mut self) -> usize {
+        println!("[{}] {} >> {}", self.name, self.current_id, self.current_id + 1);
+        let curr = self.current_id;
+        self.current_id += 1;
         curr
     }
 
-    pub fn curr(&self) -> usize {
-        // account for the zero-based indexing
-        // self.current - 1
-        self.current
+    pub fn lookup_assumed_id(&mut self, section: &ComponentSection, vec_idx: usize) -> Option<&usize> {
+        let vector = match section {
+            ComponentSection::ComponentImport => &self.imports_assumed_ids,
+            ComponentSection::ComponentExport => &self.exports_assumed_ids,
+            ComponentSection::Alias => &self.alias_assumed_ids,
+
+            ComponentSection::Module |
+            ComponentSection::CoreType |
+            ComponentSection::ComponentType |
+            ComponentSection::CoreInstance |
+            ComponentSection::ComponentInstance |
+            ComponentSection::Canon |
+            ComponentSection::CustomSection |
+            ComponentSection::Component |
+            ComponentSection::ComponentStartSection => &self.main_assumed_ids
+        };
+
+        vector.get(&vec_idx)
     }
 
-    pub fn curr_external(&self) -> usize {
-        self.num_external
+    pub fn assign_assumed_id(&mut self, section: &ComponentSection, vec_idx: usize) -> usize {
+        let assumed_id = self.curr_id();
+        let to_update = match section {
+            ComponentSection::ComponentImport => &mut self.imports_assumed_ids,
+            ComponentSection::ComponentExport => &mut self.exports_assumed_ids,
+            ComponentSection::Alias => &mut self.alias_assumed_ids,
+
+            ComponentSection::Module |
+            ComponentSection::CoreType |
+            ComponentSection::ComponentType |
+            ComponentSection::CoreInstance |
+            ComponentSection::ComponentInstance |
+            ComponentSection::Canon |
+            ComponentSection::CustomSection |
+            ComponentSection::Component |
+            ComponentSection::ComponentStartSection => &mut self.main_assumed_ids
+        };
+        to_update.insert(vec_idx, assumed_id);
+
+        assumed_id
     }
 
-    pub fn was_external(&mut self) {
-        self.num_external += 1;
+    pub fn is_encoded(&self, id: usize) -> bool {
+        self.actual_ids.contains_key(&id)
     }
 
-    pub fn assign(&mut self, from: usize, to: usize) {
-        // account for the zero-based indexing
-        // println!("[{}] assigning {} to {}", self.name, from + 1, to + 1);
-        // self.map.insert(from + 1, to + 1);
-        println!("[{}] assigning {} to {}", self.name, from, to + self.num_external);
-        self.map.insert(from, to + self.num_external);
-    }
-
-    pub fn lookup(&self, id: usize) -> usize {
+    pub fn lookup_actual_id(&self, id: usize) -> Option<&usize> {
         // account for the zero-based indexing
         // if let Some(to) = self.map.get(&(id + 1)) {
-        if let Some(to) = self.map.get(&(id)) {
-            *to
+        // if let Some(to) = self.map.get(&(id)) {
+        //     *to
+        // } else {
+        //     panic!("[{}] Can't find id {} in id-tracker...current: {}", self.name, id, self.current);
+        // }
+        println!("[{}] {}??", self.name, id);
+        self.actual_ids.get(&id)
+    }
+}
+
+#[derive(Debug)]
+pub(crate) enum ExternalItemKind {
+    // Component-level spaces
+    CompFunc,
+    CompVal,
+    CompType,
+    CompInst,
+    Comp,
+
+    // Core space (added by component model)
+    CoreInst,
+    Module,
+
+    // Core spaces that exist at the component-level
+    CoreType,
+    CoreFunc,
+
+    // Does not impact an index space
+    NA
+}
+
+impl From<&ComponentTypeRef> for ExternalItemKind {
+    fn from(value: &ComponentTypeRef) -> Self {
+        match value {
+            ComponentTypeRef::Module(_) => Self::Module,
+            ComponentTypeRef::Func(_) => Self::CompFunc,
+            ComponentTypeRef::Value(_) => Self::CompVal,
+            ComponentTypeRef::Type(_) => Self::CompType,
+            ComponentTypeRef::Instance(_) => Self::CompInst,
+            ComponentTypeRef::Component(_) => Self::Comp
+        }
+    }
+}
+impl From<&Option<ComponentTypeRef>> for ExternalItemKind {
+    fn from(value: &Option<ComponentTypeRef>) -> Self {
+        if let Some(value) = value {
+            Self::from(value)
         } else {
-            panic!("[{}] Can't find id {} in id-tracker...current: {}", self.name, id, self.current);
+            Self::NA
+        }
+    }
+}
+impl From<&ComponentAlias<'_>> for ExternalItemKind {
+    fn from(value: &ComponentAlias) -> Self {
+        match value {
+            ComponentAlias::InstanceExport { kind, .. } => match kind {
+                ComponentExternalKind::Module => Self::Module,
+                ComponentExternalKind::Func => Self::CompFunc,
+                ComponentExternalKind::Value => Self::CompVal,
+                ComponentExternalKind::Type => Self::CompType,
+                ComponentExternalKind::Instance => Self::CompInst,
+                ComponentExternalKind::Component => Self::Comp
+            },
+            ComponentAlias::Outer { kind, .. } => match kind {
+                ComponentOuterAliasKind::CoreModule => Self::Module,
+                ComponentOuterAliasKind::CoreType => Self::CoreType,
+                ComponentOuterAliasKind::Type => Self::CompType,
+                ComponentOuterAliasKind::Component => Self::Comp
+            },
+            ComponentAlias::CoreInstanceExport { kind, .. } => Self::CoreInst
         }
     }
 }
