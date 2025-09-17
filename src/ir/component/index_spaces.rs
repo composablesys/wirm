@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use wasmparser::{ComponentAlias, ComponentExternalKind, ComponentOuterAliasKind, ComponentTypeRef};
+use wasmparser::{ComponentAlias, ComponentExternalKind, ComponentOuterAliasKind, ComponentTypeRef, ExternalKind};
 use crate::ir::section::ComponentSection;
 
 #[derive(Clone, Debug, Default)]
@@ -50,22 +50,15 @@ impl IdxSpaces {
         }
     }
 
-    pub fn is_encoded(&self, outer: &ComponentSection, inner: &ExternalItemKind, idx: usize) -> bool {
+    pub fn is_encoded(&self, outer: &ComponentSection, inner: &ExternalItemKind, vec_idx: usize) -> bool {
+        let assumed_id = self.lookup_assumed_id(outer, inner, vec_idx);
         if let Some(space) = self.get_space(outer, inner) {
-            space.is_encoded(idx)
+            let res = space.is_encoded(assumed_id);
+            println!("[{:?}::{:?}] is_encoded? {vec_idx} -- {res}", outer, inner);
+
+            res
         } else {
             panic!("[{:?}::{:?}] Should be able to find a matching space for this!", outer, inner);
-        }
-    }
-
-    pub fn assign_actual_id(&mut self, outer: &ComponentSection, inner: &ExternalItemKind, vec_idx: usize) {
-        if let Some(space) = self.get_space_mut(outer, inner) {
-            let assumed_id = if let Some(assumed_id) = space.lookup_assumed_id(outer, vec_idx) {
-                *assumed_id
-            } else {
-                panic!("[{:?}] No assumed ID for index: {}", outer, vec_idx)
-            };
-            space.assign_actual_id(assumed_id);
         }
     }
 
@@ -74,6 +67,36 @@ impl IdxSpaces {
             Some(space.assign_assumed_id(outer, curr_idx))
         } else {
             None
+        }
+    }
+
+    pub fn lookup_assumed_id(&self, outer: &ComponentSection, inner: &ExternalItemKind, vec_idx: usize) -> usize {
+        if let Some(space) = self.get_space(outer, inner) {
+            if let Some(assumed_id) = space.lookup_assumed_id(outer, vec_idx) {
+                return *assumed_id
+            }
+        }
+        panic!("[{:?}::{:?}] No assumed ID for index: {}", outer, inner, vec_idx)
+    }
+
+    pub fn index_from_assumed_id(&self, outer: &ComponentSection, inner: &ExternalItemKind, assumed_id: usize) -> (SpaceSubtype, usize) {
+        // TODO -- this is incredibly inefficient...i just want to move on with my life...
+        if let Some(space) = self.get_space(outer, inner) {
+            if let Some((ty, idx)) = space.index_from_assumed_id(outer, assumed_id) {
+                return (ty, idx)
+            } else {
+                println!("couldn't find idx");
+            }
+        } else {
+            println!("couldn't find space");
+        }
+        panic!("[{:?}::{:?}] No index for assumed ID: {}", outer, inner, assumed_id)
+    }
+
+    pub fn assign_actual_id(&mut self, outer: &ComponentSection, inner: &ExternalItemKind, vec_idx: usize) {
+        let assumed_id = self.lookup_assumed_id(outer, inner, vec_idx);
+        if let Some(space) = self.get_space_mut(outer, inner) {
+            space.assign_actual_id(assumed_id);
         }
     }
     
@@ -268,11 +291,11 @@ impl IdxSpace {
         curr
     }
 
-    pub fn lookup_assumed_id(&mut self, section: &ComponentSection, vec_idx: usize) -> Option<&usize> {
-        let vector = match section {
-            ComponentSection::ComponentImport => &self.imports_assumed_ids,
-            ComponentSection::ComponentExport => &self.exports_assumed_ids,
-            ComponentSection::Alias => &self.alias_assumed_ids,
+    pub fn lookup_assumed_id(&self, section: &ComponentSection, vec_idx: usize) -> Option<&usize> {
+        let (group, vector) = match section {
+            ComponentSection::ComponentImport => ("imports", &self.imports_assumed_ids),
+            ComponentSection::ComponentExport => ("exports", &self.exports_assumed_ids),
+            ComponentSection::Alias => ("aliases", &self.alias_assumed_ids),
 
             ComponentSection::Module |
             ComponentSection::CoreType |
@@ -282,14 +305,48 @@ impl IdxSpace {
             ComponentSection::Canon |
             ComponentSection::CustomSection |
             ComponentSection::Component |
-            ComponentSection::ComponentStartSection => &self.main_assumed_ids
+            ComponentSection::ComponentStartSection => ("main", &self.main_assumed_ids)
         };
 
-        vector.get(&vec_idx)
+        let assumed = vector.get(&vec_idx);
+
+        println!("[{}::{group}] idx: {}, assumed_id: {}", self.name, vec_idx, if let Some(a) = assumed {
+            &format!("{}", a)
+        } else {
+            "none"
+        });
+        assumed
+    }
+
+    pub fn index_from_assumed_id(&self, section: &ComponentSection, assumed_id: usize) -> Option<(SpaceSubtype, usize)> {
+        let (subty, map) = match section {
+            ComponentSection::ComponentImport => (SpaceSubtype::Import, &self.imports_assumed_ids),
+            ComponentSection::ComponentExport => (SpaceSubtype::Export, &self.exports_assumed_ids),
+            ComponentSection::Alias => (SpaceSubtype::Alias, &self.alias_assumed_ids),
+
+            ComponentSection::Module |
+            ComponentSection::CoreType |
+            ComponentSection::ComponentType |
+            ComponentSection::CoreInstance |
+            ComponentSection::ComponentInstance |
+            ComponentSection::Canon |
+            ComponentSection::CustomSection |
+            ComponentSection::Component |
+            ComponentSection::ComponentStartSection => (SpaceSubtype::Main, &self.main_assumed_ids)
+        };
+
+        for (idx, assumed) in map.iter() {
+            // println!("{group} checking: {} -> {}", idx, assumed);
+            if *assumed == assumed_id {
+                return Some((subty, *idx));
+            }
+        }
+        None
     }
 
     pub fn assign_assumed_id(&mut self, section: &ComponentSection, vec_idx: usize) -> usize {
         let assumed_id = self.curr_id();
+        self.next();
         let to_update = match section {
             ComponentSection::ComponentImport => &mut self.imports_assumed_ids,
             ComponentSection::ComponentExport => &mut self.exports_assumed_ids,
@@ -305,13 +362,14 @@ impl IdxSpace {
             ComponentSection::Component |
             ComponentSection::ComponentStartSection => &mut self.main_assumed_ids
         };
+        // println!("[{}] idx: {}, assumed_id: {}", self.name, vec_idx, assumed_id);
         to_update.insert(vec_idx, assumed_id);
 
         assumed_id
     }
 
-    pub fn is_encoded(&self, id: usize) -> bool {
-        self.actual_ids.contains_key(&id)
+    pub fn is_encoded(&self, assumed_id: usize) -> bool {
+        self.actual_ids.contains_key(&assumed_id)
     }
 
     pub fn lookup_actual_id(&self, id: usize) -> Option<&usize> {
@@ -322,9 +380,18 @@ impl IdxSpace {
         // } else {
         //     panic!("[{}] Can't find id {} in id-tracker...current: {}", self.name, id, self.current);
         // }
-        println!("[{}] {}??", self.name, id);
-        self.actual_ids.get(&id)
+        let res = self.actual_ids.get(&id);
+        println!("[{}] actual id for {}?? --> {:?}", self.name, id, res);
+
+        res
     }
+}
+
+pub(crate) enum SpaceSubtype {
+    Export,
+    Import,
+    Alias,
+    Main
 }
 
 #[derive(Debug)]
@@ -360,6 +427,29 @@ impl From<&ComponentTypeRef> for ExternalItemKind {
         }
     }
 }
+impl From<&ExternalKind> for ExternalItemKind {
+    fn from(value: &ExternalKind) -> Self {
+        match value {
+            ExternalKind::Func => ExternalItemKind::CoreFunc,
+            ExternalKind::Table |
+            ExternalKind::Memory |
+            ExternalKind::Global |
+            ExternalKind::Tag => todo!("I have no idea what to do for this")
+        }
+    }
+}
+impl From<&ComponentExternalKind> for ExternalItemKind {
+    fn from(value: &ComponentExternalKind) -> Self {
+        match value {
+            ComponentExternalKind::Module => Self::Module,
+            ComponentExternalKind::Func => Self::CompFunc,
+            ComponentExternalKind::Value => Self::CompVal,
+            ComponentExternalKind::Type => Self::CompType,
+            ComponentExternalKind::Instance => Self::CompInst,
+            ComponentExternalKind::Component => Self::Comp
+        }
+    }
+}
 impl From<&Option<ComponentTypeRef>> for ExternalItemKind {
     fn from(value: &Option<ComponentTypeRef>) -> Self {
         if let Some(value) = value {
@@ -374,9 +464,15 @@ impl From<&ComponentAlias<'_>> for ExternalItemKind {
         match value {
             ComponentAlias::InstanceExport { kind, .. } => match kind {
                 ComponentExternalKind::Module => Self::Module,
-                ComponentExternalKind::Func => Self::CompFunc,
+                ComponentExternalKind::Func => {
+                    println!("Assigned to comp-func");
+                    Self::CompFunc
+                },
                 ComponentExternalKind::Value => Self::CompVal,
-                ComponentExternalKind::Type => Self::CompType,
+                ComponentExternalKind::Type => {
+                    println!("Assigned to comp-type");
+                    Self::CompType
+                },
                 ComponentExternalKind::Instance => Self::CompInst,
                 ComponentExternalKind::Component => Self::Comp
             },
@@ -386,7 +482,21 @@ impl From<&ComponentAlias<'_>> for ExternalItemKind {
                 ComponentOuterAliasKind::Type => Self::CompType,
                 ComponentOuterAliasKind::Component => Self::Comp
             },
-            ComponentAlias::CoreInstanceExport { kind, .. } => Self::CoreInst
+            ComponentAlias::CoreInstanceExport { kind, .. } => {
+                match kind {
+                    ExternalKind::Func => {
+                        println!("[CoreInstanceExport] Assigned to core-func");
+                        Self::CoreFunc
+                    },
+                    ExternalKind::Table |
+                    ExternalKind::Memory |
+                    ExternalKind::Global |
+                    ExternalKind::Tag => {
+                        println!("[CoreInstanceExport] Assigned to core-type");
+                        Self::CoreType
+                    },
+                }
+            }
         }
     }
 }

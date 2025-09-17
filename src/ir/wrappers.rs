@@ -173,24 +173,30 @@ pub fn process_alias<'a>(
             kind,
             instance_index,
             name,
-        } => Alias::InstanceExport {
-            instance: *instance_index,
-            kind: reencode.component_export_kind(*kind),
-            name,
+        } => {
+            println!("[process_alias::InstanceExport] with name: {name}");
+            Alias::InstanceExport {
+                instance: *instance_index,
+                kind: reencode.component_export_kind(*kind),
+                name,
+            }
         },
         ComponentAlias::CoreInstanceExport {
             kind,
             instance_index,
             name,
-        } => Alias::CoreInstanceExport {
-            instance: *instance_index,
-            kind: do_reencode(
-                *kind,
-                RoundtripReencoder::export_kind,
-                reencode,
-                "export kind",
-            ),
-            name,
+        } => {
+            println!("[process_alias::CoreInstanceExport] with name: {name}");
+            Alias::CoreInstanceExport {
+                instance: *instance_index,
+                kind: do_reencode(
+                    *kind,
+                    RoundtripReencoder::export_kind,
+                    reencode,
+                    "export kind",
+                ),
+                name,
+            }
         },
         ComponentAlias::Outer { kind, count, index } => Alias::Outer {
             kind: reencode.component_outer_alias_kind(*kind),

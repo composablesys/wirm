@@ -4,7 +4,7 @@
 use crate::error::Error;
 use crate::ir::component::alias::Aliases;
 use crate::ir::component::canons::Canons;
-use crate::ir::component::index_spaces::{ExternalItemKind, IdxSpaces};
+use crate::ir::component::index_spaces::{ExternalItemKind, IdxSpaces, SpaceSubtype};
 use crate::ir::component::types::ComponentTypes;
 use crate::ir::helpers::{
     print_alias, print_component_export, print_component_import, print_component_type,
@@ -103,6 +103,7 @@ impl<'a> Component<'a> {
             self.sections.push((1, outer));
         }
 
+        println!("assumed: {:?}", assumed_id);
         assumed_id.unwrap_or_else(|| { idx })
     }
 
@@ -123,21 +124,38 @@ impl<'a> Component<'a> {
     pub fn add_import(&mut self, import: ComponentImport<'a>) -> u32 {
         let idx = self.imports.len();
         self.imports.push(import);
+        let kind = ExternalItemKind::from(&import.ty);
 
-        self.add_section(ComponentSection::ComponentImport, ExternalItemKind::NA, idx) as u32
+        self.add_section(ComponentSection::ComponentImport, kind, idx) as u32
     }
 
     pub fn add_alias_func(&mut self, alias: ComponentAlias<'a>) -> (AliasFuncId, AliasId) {
         let kind = ExternalItemKind::from(&alias);
+        print!("[add_alias_func] '{}', from instance {}, curr-len: {}, ",
+                 if let ComponentAlias::InstanceExport {name, ..} | ComponentAlias::CoreInstanceExport {name, ..} = &alias {
+                    name
+                } else {
+                    "no-name"
+                },
+                 if let ComponentAlias::InstanceExport {instance_index, ..} | ComponentAlias::CoreInstanceExport {instance_index, ..} = &alias {
+                     &format!("{instance_index}")
+                 } else {
+                     "NA"
+                 },
+                self.canons.items.len()
+        );
         let (item_id, alias_id) = self.alias.add(alias);
         let id = self.add_section(ComponentSection::Alias, kind, *alias_id as usize);
+        println!("   --> @{}", id);
 
         (AliasFuncId(id as u32), alias_id)
     }
 
     pub fn add_canon_func(&mut self, canon: CanonicalFunction) -> CanonicalFuncId {
+        print!("[add_canon_func] {:?}", canon);
         let idx = self.canons.add(canon).1;
         let id = self.add_section(ComponentSection::Canon, ExternalItemKind::NA, *idx as usize);
+        println!("   --> @{}", id);
 
         CanonicalFuncId(id as u32)
     }
@@ -183,6 +201,7 @@ impl<'a> Component<'a> {
         let idx = self.instances.len();
         self.instances.push(instance);
         let id  = self.add_section(ComponentSection::CoreInstance, ExternalItemKind::NA, idx);
+        println!("[add_core_instance] id: {id}");
 
         CoreInstanceId(id as u32)
     }
@@ -366,7 +385,7 @@ impl<'a> Component<'a> {
                     let num_exps = exports.len();
                     for (i, exp) in temp.iter().enumerate() {
                         let curr_idx = num_exps + i;
-                        indices.assign_assumed_id(&ComponentSection::ComponentExport, &ExternalItemKind::from(&exp.ty), curr_idx);
+                        indices.assign_assumed_id(&ComponentSection::ComponentExport, &ExternalItemKind::from(&exp.kind), curr_idx);
                     }
                     exports.append(temp);
                     Self::add_to_sections(
@@ -604,6 +623,8 @@ impl<'a> Component<'a> {
                 _ => {}
             }
         }
+
+        println!("Number of core instances: {}", instances.len());
         Ok(Component {
             modules,
             alias: Aliases::new(alias),
@@ -654,7 +675,7 @@ impl<'a> Component<'a> {
     }
 
     fn encode_comp(&mut self) -> wasm_encoder::Component {
-        println!("ENCODE COMPONENT");
+        println!("\n\n==========================\n==== ENCODE COMPONENT ====\n==========================");
         let mut component = wasm_encoder::Component::new();
         let mut reencode = RoundtripReencoder;
 
@@ -684,7 +705,7 @@ impl<'a> Component<'a> {
                     );
                 }
                 ComponentSection::ComponentType => {
-                    println!("in main: {}", start_idx);
+                    println!("[ComponentType] called in main, target idx: {}", start_idx);
                     self.internal_encode_component_type(
                         start_idx,
                         *num as usize,
@@ -725,6 +746,7 @@ impl<'a> Component<'a> {
                         start_idx,
                         *num as usize,
                         &mut component,
+                        &mut reencode,
                         &mut indices
                     );
                 }
@@ -783,6 +805,8 @@ impl<'a> Component<'a> {
         // Add the name section back to the component
         component.section(&name_sec);
 
+
+        println!("\n\n====================\n==== END ENCODE ====\n====================");
         component
     }
 
@@ -1127,6 +1151,7 @@ impl<'a> Component<'a> {
         reencode: &mut RoundtripReencoder,
         indices: &mut IdxSpaces
     ) {
+        println!("\ninternal_encode_component_import[{start}]x{num}");
         assert!(start + num <= self.imports.len());
         let mut imports = wasm_encoder::ComponentImportSection::new();
 
@@ -1138,7 +1163,6 @@ impl<'a> Component<'a> {
             if indices.is_encoded(&section, &kind, idx) { continue; }
 
             // TODO: Verify this is correct!
-            println!("here: internal_encode_component_import");
             indices.assign_actual_id(
                 &section,
                 &kind,
@@ -1165,7 +1189,7 @@ impl<'a> Component<'a> {
         reencode: &mut RoundtripReencoder,
         indices: &mut IdxSpaces
     ) {
-        println!("internal_encode_component_export");
+        println!("\ninternal_encode_component_export[{start}]x{num}");
         assert!(start + num <= self.exports.len());
         let mut exports = wasm_encoder::ComponentExportSection::new();
 
@@ -1173,7 +1197,8 @@ impl<'a> Component<'a> {
         for i in 0..num {
             let idx = start + i;
             let exp = &self.exports[idx];
-            let kind = ExternalItemKind::from(&exp.ty);
+            let kind = ExternalItemKind::from(&exp.kind);
+            println!("internal_encode_component_export: {:?}::{:?}", section, kind);
             if indices.is_encoded(&section, &kind, idx) { continue; }
             println!("here: internal_encode_component_export");
 
@@ -1273,6 +1298,7 @@ impl<'a> Component<'a> {
         start: usize,
         num: usize,
         component: &mut wasm_encoder::Component,
+        reencode: &mut RoundtripReencoder,
         indices: &mut IdxSpaces
     ) {
         println!("\ninternal_encode_core_instance[{start}]x{num}");
@@ -1283,7 +1309,10 @@ impl<'a> Component<'a> {
         for i in 0..num {
             let idx = start + i;
             let kind = ExternalItemKind::NA;
-            if indices.is_encoded(&section, &kind, idx) { continue; }
+            if indices.is_encoded(&section, &kind, idx) {
+                println!("[internal_encode_core_instance] SKIPPED: {:?}@{}", kind, idx);
+                continue;
+            }
             let instance = &self.instances[idx];
             match instance {
                 Instance::Instantiate { module_index, args } => {
@@ -1293,10 +1322,14 @@ impl<'a> Component<'a> {
                             .map(|arg| {
                                 let id = if let Some(id) = indices.lookup_actual_id(&section, &kind, arg.index as usize) {
                                     // has already been encoded
+                                    println!("[internal_encode_core_instance::{:?}] instantiating module #{}, already encoded dependency: {}-->{}", kind, module_index, arg.index, id);
                                     *id
                                 } else {
                                     // we need to skip around and encode this type first!
-                                    self.internal_encode_core_instance(arg.index as usize, 1, component, indices);
+                                    println!("[internal_encode_core_instance::{:?}] instantiating module #{}, must encode dependency: @{}", kind, module_index, arg.index);
+                                    // TODO -- the assumed_id seems wrong! should be 17 i think (check instrument funcs)
+                                    let (_, idx) = indices.index_from_assumed_id(&section, &kind, arg.index as usize);
+                                    self.internal_encode_core_instance(idx, 1, component, reencode, indices);
                                     indices.lookup_actual_id_or_panic(&section, &kind, arg.index as usize)
                                 };
                                 (arg.name, ModuleArg::Instance(id as u32))
@@ -1306,10 +1339,29 @@ impl<'a> Component<'a> {
                 Instance::FromExports(exports) => {
                     instances.export_items(exports.iter().map(|export| {
                         // TODO: This needs to be fixed (export.kind)
+                        let section = ComponentSection::ComponentExport;
+                        let kind = ExternalItemKind::from(&export.kind);
+                        println!("[{:?}:{:?}] handling: {}", section, kind, export.name);
+                        let id = if let Some(id) = indices.lookup_actual_id(&section, &kind, export.index as usize) {
+                            // has already been encoded
+                            println!("[internal_encode_core_instance::{:?}] already encoded dependency: {}-->{}", kind, export.index, id);
+                            *id
+                        } else {
+                            // we need to skip around and encode this type first!
+                            println!("[internal_encode_core_instance::{:?}] must encode dependency: @{}", kind, export.index);
+                            let (idx_sect, idx_kind) = match &export.kind {
+                                ExternalKind::Func => (ComponentSection::Canon, ExternalItemKind::NA),
+                                _ => todo!("don't know what to do in this situation")
+                            };
+                            let (_, idx) = indices.index_from_assumed_id(&idx_sect, &idx_kind, export.index as usize);
+                            println!("    ==> using idx: {idx}");
+                            self.internal_encode_canon(idx, 1, component, reencode, indices);
+                            indices.lookup_actual_id_or_panic(&section, &kind, export.index as usize)
+                        };
                         (
                             export.name,
                             wasm_encoder::ExportKind::from(export.kind),
-                            export.index,
+                            id as u32,
                         )
                     }));
                 }
@@ -1329,6 +1381,7 @@ impl<'a> Component<'a> {
         reencode: &mut RoundtripReencoder,
         indices: &mut IdxSpaces
     ) {
+        println!("\ninternal_encode_alias[{start}]x{num}");
         assert!(
             start + num <= self.alias.items.len(),
             "{start} + {num} <= {}",
@@ -1341,19 +1394,17 @@ impl<'a> Component<'a> {
             let idx = start + i;
             let a = &self.alias.items[idx];
             let kind = ExternalItemKind::from(a);
-            if indices.is_encoded(&section, &kind, idx) { continue; }
+            println!("here: internal_encode_alias");
+            if indices.is_encoded(&section, &kind, idx) {
+                println!("[internal_encode_alias] SKIPPED: {:?}@{}", kind, idx);
+                continue;
+            }
             // TODO: This needs to be fixed (what does the alias point to?)
-            // if let Some(space) = space {
-                // TODO - this doesn't work since we're incrementing BOTH next and was_external
-                // results in assigning the same key to multiple different values
-                // see: "assigning 8 to" in the output
-                println!("here: internal_encode_alias");
-                indices.assign_actual_id(
-                    &section,
-                    &kind,
-                    idx
-                );
-            // }
+            indices.assign_actual_id(
+                &section,
+                &kind,
+                idx
+            );
 
             alias.alias(process_alias(&a, reencode));
         }
@@ -1368,6 +1419,7 @@ impl<'a> Component<'a> {
         reencode: &mut RoundtripReencoder,
         indices: &mut IdxSpaces
     ) {
+        println!("\ninternal_encode_canon[{start}]x{num}");
         assert!(start + num <= self.canons.items.len());
         let mut canon_sec = wasm_encoder::CanonicalFunctionSection::new();
 
@@ -1390,16 +1442,20 @@ impl<'a> Component<'a> {
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*core_func_index as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.comp_func.index_from_assumed_id(&section, *core_func_index as usize).unwrap();
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *core_func_index as usize)
                     };
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *type_index as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *type_index as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*type_index as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *type_index as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *type_index as usize)
                     };
                     canon_sec.lift(
@@ -1419,14 +1475,22 @@ impl<'a> Component<'a> {
                     func_index,
                     options,
                 } => {
-                    let func_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::Canon, &ExternalItemKind::NA, *func_index as usize) {
+                    // TODO -- this assumes that we're needing to lookup as an alias!
+                    let func_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::Alias, &ExternalItemKind::CompFunc, *func_index as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*func_index as usize, 1, component, reencode, indices);
-                        indices.lookup_actual_id_or_panic(&section, &kind, *func_index as usize)
+                        let (ty, idx) = indices.index_from_assumed_id(&ComponentSection::Alias, &ExternalItemKind::CompFunc, *func_index as usize);
+                        println!("    ==> using idx: {idx}");
+                        match ty {
+                            SpaceSubtype::Export => self.internal_encode_component_export(idx, 1, component, reencode, indices),
+                            SpaceSubtype::Import => self.internal_encode_component_import(idx, 1, component, reencode, indices),
+                            SpaceSubtype::Alias => self.internal_encode_alias(idx, 1, component, reencode, indices),
+                            SpaceSubtype::Main => self.internal_encode_canon(idx, 1, component, reencode, indices)
+                        }
+                        indices.lookup_actual_id_or_panic(&ComponentSection::Alias, &ExternalItemKind::CompFunc, *func_index as usize)
                     };
                     canon_sec.lower(
                         func_id as u32,
@@ -1441,49 +1505,59 @@ impl<'a> Component<'a> {
                     );
                 }
                 CanonicalFunction::ResourceNew { resource } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *resource as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *resource as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*resource as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *resource as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *resource as usize)
                     };
                     canon_sec.resource_new(ty_id as u32);
                 }
                 CanonicalFunction::ResourceDrop { resource } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *resource as usize) {
+                    println!("[CanonicalFunction::ResourceDrop] here@{resource}");
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *resource as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
-                        println!("here");
-                        self.internal_encode_canon(*resource as usize, 1, component, reencode, indices);
-                        indices.lookup_actual_id_or_panic(&section, &kind, *resource as usize)
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *resource as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_core_type(idx, 1, component, reencode, indices);
+                        indices.lookup_actual_id_or_panic(&ComponentSection::ComponentType, &kind, *resource as usize)
+                        // self.internal_encode_canon(*resource as usize, 1, component, reencode, indices);
+                        // indices.lookup_actual_id_or_panic(&section, &kind, *resource as usize)
                     };
                     canon_sec.resource_drop(ty_id as u32);
                 }
                 CanonicalFunction::ResourceRep { resource } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *resource as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *resource as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*resource as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *resource as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *resource as usize)
                     };
                     canon_sec.resource_rep(ty_id as u32);
                 }
                 CanonicalFunction::ResourceDropAsync { resource } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *resource as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *resource as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*resource as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *resource as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *resource as usize)
                     };
                     canon_sec.resource_drop_async(ty_id as u32);
@@ -1531,25 +1605,29 @@ impl<'a> Component<'a> {
                     canon_sec.subtask_drop();
                 }
                 CanonicalFunction::StreamNew { ty } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *ty as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *ty as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
                     };
                     canon_sec.stream_new(ty_id as u32);
                 }
                 CanonicalFunction::StreamRead { ty, options } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *ty as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *ty as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
                     };
                     canon_sec.stream_read(
@@ -1568,13 +1646,15 @@ impl<'a> Component<'a> {
                     );
                 }
                 CanonicalFunction::StreamWrite { ty, options } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *ty as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *ty as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
                     };
                     canon_sec.stream_write(
@@ -1593,49 +1673,57 @@ impl<'a> Component<'a> {
                     );
                 }
                 CanonicalFunction::StreamCancelRead { ty, async_ } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *ty as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *ty as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
                     };
                     canon_sec.stream_cancel_read(ty_id as u32, *async_);
                 }
                 CanonicalFunction::StreamCancelWrite { ty, async_ } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *ty as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *ty as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
                     };
                     canon_sec.stream_cancel_write(ty_id as u32, *async_);
                 }
                 CanonicalFunction::FutureNew { ty } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *ty as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *ty as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
                     };
                     canon_sec.future_new(ty_id as u32);
                 }
                 CanonicalFunction::FutureRead { ty, options } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *ty as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *ty as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
                     };
                     canon_sec.future_read(
@@ -1654,13 +1742,15 @@ impl<'a> Component<'a> {
                     );
                 }
                 CanonicalFunction::FutureWrite { ty, options } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *ty as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *ty as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
                     };
                     canon_sec.future_write(
@@ -1679,25 +1769,29 @@ impl<'a> Component<'a> {
                     );
                 }
                 CanonicalFunction::FutureCancelRead { ty, async_ } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *ty as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *ty as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
                     };
                     canon_sec.future_cancel_read(ty_id as u32, *async_);
                 }
                 CanonicalFunction::FutureCancelWrite { ty, async_ } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *ty as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *ty as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
                     };
                     canon_sec.future_cancel_write(ty_id as u32, *async_);
@@ -1738,13 +1832,15 @@ impl<'a> Component<'a> {
                     canon_sec.error_context_drop();
                 }
                 CanonicalFunction::ThreadSpawnRef { func_ty_index } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *func_ty_index as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *func_ty_index as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*func_ty_index as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *func_ty_index as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *func_ty_index as usize)
                     };
                     canon_sec.thread_spawn_ref(ty_id as u32);
@@ -1754,13 +1850,15 @@ impl<'a> Component<'a> {
                     table_index,
                 } => {
                     // TODO: This needs to be fixed
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *func_ty_index as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *func_ty_index as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*func_ty_index as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *func_ty_index as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *func_ty_index as usize)
                     };
                     canon_sec.thread_spawn_indirect(ty_id as u32, *table_index);
@@ -1778,49 +1876,57 @@ impl<'a> Component<'a> {
                     canon_sec.subtask_cancel(*async_);
                 }
                 CanonicalFunction::StreamDropReadable { ty } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *ty as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *ty as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
                     };
                     canon_sec.stream_drop_readable(ty_id as u32);
                 }
                 CanonicalFunction::StreamDropWritable { ty } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *ty as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *ty as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
                     };
                     canon_sec.stream_drop_writable(ty_id as u32);
                 }
                 CanonicalFunction::FutureDropReadable { ty } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *ty as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *ty as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
                     };
                     canon_sec.future_drop_readable(ty_id as u32);
                 }
                 CanonicalFunction::FutureDropWritable { ty } => {
-                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::CoreType, &ExternalItemKind::NA, *ty as usize) {
+                    let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *ty as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        self.internal_encode_canon(*ty as usize, 1, component, reencode, indices);
+                        let (_, idx) = indices.index_from_assumed_id(&section, &kind, *ty as usize);
+                        println!("    ==> using idx: {idx}");
+                        self.internal_encode_canon(idx, 1, component, reencode, indices);
                         indices.lookup_actual_id_or_panic(&section, &kind, *ty as usize)
                     };
                     canon_sec.future_drop_writable(ty_id as u32);
@@ -1865,36 +1971,29 @@ impl<'a> Component<'a> {
                 };
                 ComponentTypeRef::Module(id as u32)
             }
-            ComponentTypeRef::Func(id) => {
-                let section = ComponentSection::Canon;
-                let kind = ExternalItemKind::NA;
-                let id = if let Some(id) = indices.lookup_actual_id(&section, &kind, id as usize) {
-                    // has already been encoded
-                    *id
-                } else {
-                    // we need to skip around and encode this type first!
-                    println!("here");
-                    self.internal_encode_canon(id as usize, 1, component, reencode, indices);
-                    indices.lookup_actual_id_or_panic(&section, &kind, id as usize)
-                };
-                ComponentTypeRef::Func(id as u32)
-            }
             ComponentTypeRef::Value(ty) => ComponentTypeRef::Value(self.lookup_component_val_type(ty, component, reencode, indices)),
             ComponentTypeRef::Type(_) => ty, // nothing to do
+            ComponentTypeRef::Func(id) |
             ComponentTypeRef::Instance(id) => {
                 // TODO -- no idea if this section is right...
-                let section = ComponentSection::ComponentInstance;
+                let section = ComponentSection::ComponentType;
                 let kind = ExternalItemKind::NA;
                 let id = if let Some(id) = indices.lookup_actual_id(&section, &kind, id as usize) {
                     // has already been encoded
                     *id
                 } else {
                     // we need to skip around and encode this type first!
-                    println!("here");
-                    self.internal_encode_component_instance(id as usize, 1, component, reencode, indices);
+                    println!("from comp-type-ref");
+                    let (_, idx) = indices.index_from_assumed_id(&section, &kind, id as usize);
+                    println!("    ==> using idx: {idx}");
+                    self.internal_encode_component_type(idx, 1, component, reencode, indices);
                     indices.lookup_actual_id_or_panic(&section, &kind, id as usize)
                 };
-                ComponentTypeRef::Func(id as u32)
+                if matches!(ty, ComponentTypeRef::Func(_)) {
+                    ComponentTypeRef::Func(id as u32)
+                } else {
+                    ComponentTypeRef::Instance(id as u32)
+                }
             }
             ComponentTypeRef::Component(id) => {
                 // TODO -- no idea if this section is right...
@@ -1906,7 +2005,9 @@ impl<'a> Component<'a> {
                 } else {
                     // we need to skip around and encode this type first!
                     println!("here");
-                    self.internal_encode_component_type(id as usize, 1, component, reencode, indices);
+                    let (_, idx) = indices.index_from_assumed_id(&section, &kind, id as usize);
+                    println!("    ==> using idx: {idx}");
+                    self.internal_encode_component_type(idx, 1, component, reencode, indices);
                     indices.lookup_actual_id_or_panic(&section, &kind, id as usize)
                 };
                 ComponentTypeRef::Func(id as u32)
@@ -1928,7 +2029,9 @@ impl<'a> Component<'a> {
             } else {
                 // we need to skip around and encode this type first!
                 println!("here");
-                self.internal_encode_component_type(ty_id as usize, 1, component, reencode, indices);
+                let (_, idx) = indices.index_from_assumed_id(&section, &kind, ty_id as usize);
+                println!("    ==> using idx: {idx}");
+                self.internal_encode_component_type(idx, 1, component, reencode, indices);
                 indices.lookup_actual_id_or_panic(&section, &kind, ty_id as usize)
             };
             ComponentValType::Type(id as u32)
