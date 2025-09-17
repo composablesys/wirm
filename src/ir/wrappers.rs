@@ -198,10 +198,12 @@ pub fn process_alias<'a>(
                 name,
             }
         },
-        ComponentAlias::Outer { kind, count, index } => Alias::Outer {
-            kind: reencode.component_outer_alias_kind(*kind),
-            count: *count,
-            index: *index,
+        ComponentAlias::Outer { kind, count, index } => {
+            Alias::Outer {
+                kind: reencode.component_outer_alias_kind(*kind),
+                count: *count,
+                index: *index,
+            }
         },
     }
 }

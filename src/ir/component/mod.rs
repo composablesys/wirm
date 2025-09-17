@@ -1351,7 +1351,7 @@ impl<'a> Component<'a> {
                             println!("[internal_encode_core_instance::{:?}] must encode dependency: @{}", kind, export.index);
                             let (idx_sect, idx_kind) = match &export.kind {
                                 ExternalKind::Func => (ComponentSection::Canon, ExternalItemKind::NA),
-                                _ => todo!("don't know what to do in this situation")
+                                _ => (section.clone(), kind)
                             };
                             let (_, idx) = indices.index_from_assumed_id(&idx_sect, &idx_kind, export.index as usize);
                             println!("    ==> using idx: {idx}");

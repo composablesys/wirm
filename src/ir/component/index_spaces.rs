@@ -18,6 +18,10 @@ pub(crate) struct IdxSpaces {
     // Core spaces that exist at the component-level
     pub core_type: IdxSpace,
     pub core_func: IdxSpace, // these are canonical function decls!
+    pub core_memory: IdxSpace,
+    pub core_table: IdxSpace,
+    pub core_global: IdxSpace,
+    pub core_tag: IdxSpace,
 
     // General trackers for indices of item vectors
     last_processed_module: usize,
@@ -46,6 +50,10 @@ impl IdxSpaces {
 
             core_type: IdxSpace::new("core_types".to_string()),
             core_func: IdxSpace::new("core_functions".to_string()),
+            core_table: IdxSpace::new("core_tables".to_string()),
+            core_memory: IdxSpace::new("core_memories".to_string()),
+            core_global: IdxSpace::new("core_globals".to_string()),
+            core_tag: IdxSpace::new("core_tags".to_string()),
             ..Self::default()
         }
     }
@@ -150,6 +158,10 @@ impl IdxSpaces {
 
         self.core_type.reset_ids();
         self.core_func.reset_ids();
+        self.core_table.reset_ids();
+        self.core_memory.reset_ids();
+        self.core_global.reset_ids();
+        self.core_tag.reset_ids();
     }
 
     // ===================
@@ -179,6 +191,10 @@ impl IdxSpaces {
                 ExternalItemKind::Module => &mut self.module,
                 ExternalItemKind::CoreType => &mut self.core_type,
                 ExternalItemKind::CoreFunc => &mut self.core_func,
+                ExternalItemKind::CoreTable => &mut self.core_table,
+                ExternalItemKind::CoreMemory => &mut self.core_memory,
+                ExternalItemKind::CoreGlobal => &mut self.core_global,
+                ExternalItemKind::CoreTag => &mut self.core_tag,
                 ExternalItemKind::NA => return None // nothing to do
             }
             ComponentSection::ComponentStartSection |
@@ -210,6 +226,10 @@ impl IdxSpaces {
                 ExternalItemKind::Module => &self.module,
                 ExternalItemKind::CoreType => &self.core_type,
                 ExternalItemKind::CoreFunc => &self.core_func,
+                ExternalItemKind::CoreTable => &self.core_table,
+                ExternalItemKind::CoreMemory => &self.core_memory,
+                ExternalItemKind::CoreGlobal => &self.core_global,
+                ExternalItemKind::CoreTag => &self.core_tag,
                 ExternalItemKind::NA => return None // nothing to do
             }
             ComponentSection::ComponentStartSection |
@@ -394,7 +414,7 @@ pub(crate) enum SpaceSubtype {
     Main
 }
 
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum ExternalItemKind {
     // Component-level spaces
     CompFunc,
@@ -410,6 +430,10 @@ pub(crate) enum ExternalItemKind {
     // Core spaces that exist at the component-level
     CoreType,
     CoreFunc,
+    CoreTable,
+    CoreMemory,
+    CoreGlobal,
+    CoreTag,
 
     // Does not impact an index space
     NA
@@ -431,10 +455,10 @@ impl From<&ExternalKind> for ExternalItemKind {
     fn from(value: &ExternalKind) -> Self {
         match value {
             ExternalKind::Func => ExternalItemKind::CoreFunc,
-            ExternalKind::Table |
-            ExternalKind::Memory |
-            ExternalKind::Global |
-            ExternalKind::Tag => todo!("I have no idea what to do for this")
+            ExternalKind::Table => ExternalItemKind::CoreTable,
+            ExternalKind::Memory => ExternalItemKind::CoreMemory,
+            ExternalKind::Global => ExternalItemKind::CoreGlobal,
+            ExternalKind::Tag => ExternalItemKind::CoreTag
         }
     }
 }
@@ -488,13 +512,17 @@ impl From<&ComponentAlias<'_>> for ExternalItemKind {
                         println!("[CoreInstanceExport] Assigned to core-func");
                         Self::CoreFunc
                     },
-                    ExternalKind::Table |
-                    ExternalKind::Memory |
-                    ExternalKind::Global |
-                    ExternalKind::Tag => {
-                        println!("[CoreInstanceExport] Assigned to core-type");
-                        Self::CoreType
-                    },
+                    ExternalKind::Table => Self::CoreTable,
+                    ExternalKind::Memory => Self::CoreMemory,
+                    ExternalKind::Global => Self::CoreGlobal,
+                    ExternalKind::Tag => Self::CoreTag,
+                    // ExternalKind::Table |
+                    // ExternalKind::Memory |
+                    // ExternalKind::Global |
+                    // ExternalKind::Tag => {
+                    //     println!("[CoreInstanceExport] Assigned to core-type");
+                    //     Self::CoreType
+                    // },
                 }
             }
         }
