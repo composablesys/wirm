@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use wasmparser::{ComponentAlias, ComponentExternalKind, ComponentOuterAliasKind, ComponentTypeRef, ExternalKind};
+use wasmparser::{CanonicalFunction, ComponentAlias, ComponentExternalKind, ComponentOuterAliasKind, ComponentTypeRef, ExternalKind};
 use crate::ir::section::ComponentSection;
 
 #[derive(Clone, Debug, Default)]
@@ -90,7 +90,7 @@ impl IdxSpaces {
     pub fn index_from_assumed_id(&self, outer: &ComponentSection, inner: &ExternalItemKind, assumed_id: usize) -> (SpaceSubtype, usize) {
         // TODO -- this is incredibly inefficient...i just want to move on with my life...
         if let Some(space) = self.get_space(outer, inner) {
-            if let Some((ty, idx)) = space.index_from_assumed_id(outer, assumed_id) {
+            if let Some((ty, idx)) = space.index_from_assumed_id(assumed_id) {
                 return (ty, idx)
             } else {
                 println!("couldn't find idx");
@@ -175,7 +175,11 @@ impl IdxSpaces {
             ComponentSection::ComponentType => &mut self.comp_type,
             ComponentSection::CoreInstance => &mut self.core_inst,
             ComponentSection::ComponentInstance => &mut self.comp_inst,
-            ComponentSection::Canon => &mut self.core_func,
+            ComponentSection::Canon => match inner {
+                ExternalItemKind::CompFunc => &mut self.comp_func,
+                ExternalItemKind::CoreFunc => &mut self.core_func,
+                _ => panic!("shouldn't get here")
+            },
             ComponentSection::Component => &mut self.comp,
 
             // These manipulate other index spaces!
@@ -210,7 +214,11 @@ impl IdxSpaces {
             ComponentSection::ComponentType => &self.comp_type,
             ComponentSection::CoreInstance => &self.core_inst,
             ComponentSection::ComponentInstance => &self.comp_inst,
-            ComponentSection::Canon => &self.core_func,
+            ComponentSection::Canon => match inner {
+                ExternalItemKind::CompFunc => &self.comp_func,
+                ExternalItemKind::CoreFunc => &self.core_func,
+                _ => panic!("shouldn't get here")
+            },
             ComponentSection::Component => &self.comp,
 
             // These manipulate other index spaces!
@@ -338,27 +346,31 @@ impl IdxSpace {
         assumed
     }
 
-    pub fn index_from_assumed_id(&self, section: &ComponentSection, assumed_id: usize) -> Option<(SpaceSubtype, usize)> {
-        let (subty, map) = match section {
-            ComponentSection::ComponentImport => (SpaceSubtype::Import, &self.imports_assumed_ids),
-            ComponentSection::ComponentExport => (SpaceSubtype::Export, &self.exports_assumed_ids),
-            ComponentSection::Alias => (SpaceSubtype::Alias, &self.alias_assumed_ids),
+    pub fn index_from_assumed_id(&self, assumed_id: usize) -> Option<(SpaceSubtype, usize)> {
+        // TODO -- this is EXTREMELY inefficient!!
+        // let (subty, map) = match section {
+        //     ComponentSection::ComponentImport => (SpaceSubtype::Import, &self.imports_assumed_ids),
+        //     ComponentSection::ComponentExport => (SpaceSubtype::Export, &self.exports_assumed_ids),
+        //     ComponentSection::Alias => (SpaceSubtype::Alias, &self.alias_assumed_ids),
+        //
+        //     ComponentSection::Module |
+        //     ComponentSection::CoreType |
+        //     ComponentSection::ComponentType |
+        //     ComponentSection::CoreInstance |
+        //     ComponentSection::ComponentInstance |
+        //     ComponentSection::Canon |
+        //     ComponentSection::CustomSection |
+        //     ComponentSection::Component |
+        //     ComponentSection::ComponentStartSection => (SpaceSubtype::Main, &self.main_assumed_ids)
+        // };
+        let maps = vec![(SpaceSubtype::Main, &self.main_assumed_ids), (SpaceSubtype::Import, &self.imports_assumed_ids), (SpaceSubtype::Export, &self.exports_assumed_ids), (SpaceSubtype::Alias, &self.alias_assumed_ids)];
 
-            ComponentSection::Module |
-            ComponentSection::CoreType |
-            ComponentSection::ComponentType |
-            ComponentSection::CoreInstance |
-            ComponentSection::ComponentInstance |
-            ComponentSection::Canon |
-            ComponentSection::CustomSection |
-            ComponentSection::Component |
-            ComponentSection::ComponentStartSection => (SpaceSubtype::Main, &self.main_assumed_ids)
-        };
-
-        for (idx, assumed) in map.iter() {
-            // println!("{group} checking: {} -> {}", idx, assumed);
-            if *assumed == assumed_id {
-                return Some((subty, *idx));
+        for (subty, map) in maps.iter() {
+            for (idx, assumed) in map.iter() {
+                // println!("[{}:{subty:?}] checking: {} -> {}", self.name, idx, assumed);
+                if *assumed == assumed_id {
+                    return Some((*subty, *idx));
+                }
             }
         }
         None
@@ -407,6 +419,7 @@ impl IdxSpace {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
 pub(crate) enum SpaceSubtype {
     Export,
     Import,
@@ -525,6 +538,51 @@ impl From<&ComponentAlias<'_>> for ExternalItemKind {
                     // },
                 }
             }
+        }
+    }
+}
+impl From<&CanonicalFunction> for ExternalItemKind {
+    fn from(value: &CanonicalFunction) -> Self {
+        match value {
+            CanonicalFunction::Lift { .. } => Self::CompFunc,
+            CanonicalFunction::Lower { .. } |
+            CanonicalFunction::ResourceNew { .. } |
+            CanonicalFunction::ResourceDrop { .. } |
+            CanonicalFunction::ResourceDropAsync { .. } |
+            CanonicalFunction::ResourceRep { .. } |
+            CanonicalFunction::ThreadSpawnRef { .. } |
+            CanonicalFunction::ThreadSpawnIndirect { .. } |
+            CanonicalFunction::ThreadAvailableParallelism |
+            CanonicalFunction::BackpressureSet |
+            CanonicalFunction::TaskReturn { .. } |
+            CanonicalFunction::TaskCancel |
+            CanonicalFunction::ContextGet(_) |
+            CanonicalFunction::ContextSet(_) |
+            CanonicalFunction::Yield { .. } |
+            CanonicalFunction::SubtaskDrop |
+            CanonicalFunction::SubtaskCancel { .. } |
+            CanonicalFunction::StreamNew { .. } |
+            CanonicalFunction::StreamRead { .. } |
+            CanonicalFunction::StreamWrite { .. } |
+            CanonicalFunction::StreamCancelRead { .. } |
+            CanonicalFunction::StreamCancelWrite { .. } |
+            CanonicalFunction::StreamDropReadable { .. } |
+            CanonicalFunction::StreamDropWritable { .. } |
+            CanonicalFunction::FutureNew { .. } |
+            CanonicalFunction::FutureRead { .. } |
+            CanonicalFunction::FutureWrite { .. } |
+            CanonicalFunction::FutureCancelRead { .. } |
+            CanonicalFunction::FutureCancelWrite { .. } |
+            CanonicalFunction::FutureDropReadable { .. } |
+            CanonicalFunction::FutureDropWritable { .. } |
+            CanonicalFunction::ErrorContextNew { .. } |
+            CanonicalFunction::ErrorContextDebugMessage { .. } |
+            CanonicalFunction::ErrorContextDrop |
+            CanonicalFunction::WaitableSetNew |
+            CanonicalFunction::WaitableSetWait { .. } |
+            CanonicalFunction::WaitableSetPoll { .. } |
+            CanonicalFunction::WaitableSetDrop |
+            CanonicalFunction::WaitableJoin => Self::CoreFunc
         }
     }
 }
