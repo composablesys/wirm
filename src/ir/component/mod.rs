@@ -22,7 +22,7 @@ use crate::ir::types::CustomSections;
 use crate::ir::wrappers::{add_to_namemap, convert_module_type_declaration, convert_results, do_reencode, encode_core_type_subtype};
 use wasm_encoder::reencode::{Reencode, ReencodeComponent, RoundtripReencoder};
 use wasm_encoder::{Alias, ComponentAliasSection, ComponentTypeEncoder, InstanceType, ModuleArg, ModuleSection, NestedComponentSection};
-use wasmparser::{CanonicalFunction, ComponentAlias, ComponentExport, ComponentExternalKind, ComponentFuncType, ComponentImport, ComponentInstance, ComponentOuterAliasKind, ComponentStartFunction, ComponentType, ComponentTypeDeclaration, ComponentTypeRef, ComponentValType, CoreType, Encoding, ExternalKind, Instance, InstanceTypeDeclaration, Parser, Payload};
+use wasmparser::{CanonicalFunction, CanonicalOption, ComponentAlias, ComponentExport, ComponentExternalKind, ComponentFuncType, ComponentImport, ComponentInstance, ComponentOuterAliasKind, ComponentStartFunction, ComponentType, ComponentTypeDeclaration, ComponentTypeRef, ComponentValType, CoreType, Encoding, ExternalKind, Instance, InstanceTypeDeclaration, Parser, Payload};
 
 mod alias;
 mod canons;
@@ -1449,7 +1449,7 @@ impl<'a> Component<'a> {
             let idx = start + i;
             let exp = &self.exports[idx];
             let kind = ExternalItemKind::from(&exp.kind);
-            println!("internal_encode_component_export: {:?}::{:?}", section, kind);
+            println!("internal_encode_component_export: {:?}::{:?}, name: {}", section, kind, exp.name.0);
             if indices.is_encoded(&section, &kind, idx) { continue; }
             println!("here: internal_encode_component_export");
 
@@ -1463,17 +1463,47 @@ impl<'a> Component<'a> {
                 )
             });
 
+            let (isection, ikind) = match &exp.kind {
+                ComponentExternalKind::Instance => (ComponentSection::ComponentInstance, ExternalItemKind::NA),
+                ComponentExternalKind::Module => (ComponentSection::Module, ExternalItemKind::NA),
+                ComponentExternalKind::Component => (ComponentSection::Component, ExternalItemKind::NA),
+                ComponentExternalKind::Func => (ComponentSection::Canon, ExternalItemKind::CompFunc),
+                ComponentExternalKind::Value |
+                ComponentExternalKind::Type => todo!(),
+            };
+            let id = if let Some(id) = indices.lookup_actual_id(&isection, &ikind, exp.index as usize) {
+                // has already been encoded
+                println!("[internal_encode_component_export::{:?}] already encoded dependency: {}-->{}", ikind, exp.index, id);
+                *id
+            } else {
+                // we need to skip around and encode this type first!
+                println!("[internal_encode_component_export::{:?}] must encode dependency: @{}", ikind, exp.index);
+                let (_, idx) = indices.index_from_assumed_id(&isection, &ikind, exp.index as usize);
+
+                match &exp.kind {
+                    ComponentExternalKind::Func => self.internal_encode_canon(idx, 1, component, reencode, indices),
+                    ComponentExternalKind::Instance => self.internal_encode_component_instance(idx, 1, component, reencode, indices),
+                    ComponentExternalKind::Module |
+                    ComponentExternalKind::Component |
+                    ComponentExternalKind::Value |
+                    ComponentExternalKind::Type => todo!(),
+                };
+                indices.lookup_actual_id_or_panic(&isection, &ikind, exp.index as usize)
+            };
+            println!("got here");
+
             // TODO: Verify this is correct!
             indices.assign_actual_id(
                 &section,
                 &kind,
                 idx
             );
+            println!("got here too");
 
             exports.export(
                 exp.name.0,
                 reencode.component_export_kind(exp.kind),
-                exp.index,
+                id as u32,
                 res,
             );
         }
@@ -1518,10 +1548,39 @@ impl<'a> Component<'a> {
                     instances.instantiate(
                         id as u32,
                         args.iter().map(|arg| {
+                            let (section, kind) = match &arg.kind {
+                                ComponentExternalKind::Module => (ComponentSection::Module, ExternalItemKind::NA),
+                                ComponentExternalKind::Func => (ComponentSection::Canon, ExternalItemKind::CompFunc),
+                                ComponentExternalKind::Component => (ComponentSection::Component, ExternalItemKind::NA),
+                                ComponentExternalKind::Value |
+                                ComponentExternalKind::Type |
+                                ComponentExternalKind::Instance => todo!(),
+                            };
+                            let id = if let Some(id) = indices.lookup_actual_id(&section, &kind, arg.index as usize) {
+                                // has already been encoded
+                                println!("[internal_encode_component_instance::{:?}] instantiating component #{}, already encoded dependency: {}-->{}", kind, component_index, arg.index, id);
+                                *id
+                            } else {
+                                // we need to skip around and encode this type first!
+                                println!("[internal_encode_component_instance::{:?}] instantiating component #{}, must encode dependency: @{}", kind, component_index, arg.index);
+                                let (_, idx) = indices.index_from_assumed_id(&section, &kind, arg.index as usize);
+
+                                match &arg.kind {
+                                    ComponentExternalKind::Func => self.internal_encode_canon(idx, 1, component, reencode, indices),
+                                    ComponentExternalKind::Module |
+                                    ComponentExternalKind::Component |
+                                    ComponentExternalKind::Value |
+                                    ComponentExternalKind::Type |
+                                    ComponentExternalKind::Instance => todo!(),
+                                };
+                                indices.lookup_actual_id_or_panic(&section, &kind, arg.index as usize)
+                            };
+                            println!("[internal_encode_component_instance::{:?}] instantiating component #{}, with: {}@{}", kind, component_index, arg.name, id);
+
                             (
                                 arg.name,
                                 reencode.component_export_kind(arg.kind),
-                                arg.index,
+                                id as u32,
                             )
                         }),
                     );
@@ -1778,16 +1837,17 @@ impl<'a> Component<'a> {
                     type_index,
                     options,
                 } => {
-                    let func_id = if let Some(id) = indices.lookup_actual_id(&section, &kind, *core_func_index as usize) {
+                    // a lift would need to reference a CORE function
+                    let func_id = if let Some(id) = indices.lookup_actual_id(&section, &ExternalItemKind::CoreFunc, *core_func_index as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        let (_, idx) = indices.comp_func.index_from_assumed_id(*core_func_index as usize).unwrap();
+                        let (_, idx) = indices.index_from_assumed_id(&section, &ExternalItemKind::CoreFunc, *core_func_index as usize);
                         println!("    ==> using idx: {idx}");
                         self.internal_encode_canon(idx, 1, component, reencode, indices);
-                        indices.lookup_actual_id_or_panic(&section, &kind, *core_func_index as usize)
+                        indices.lookup_actual_id_or_panic(&section, &ExternalItemKind::CoreFunc, *core_func_index as usize)
                     };
                     let ty_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::ComponentType, &ExternalItemKind::NA, *type_index as usize) {
                         // has already been encoded
@@ -1817,14 +1877,69 @@ impl<'a> Component<'a> {
                     func_index,
                     options,
                 } => {
-                    // TODO -- this assumes that we're needing to lookup as an alias!
-                    let func_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::Alias, &ExternalItemKind::CompFunc, *func_index as usize) {
+                    // TODO -- need to fix options!!!
+                    let mut fixed_options = vec![];
+                    for opt in options.iter() {
+                        let fixed = match opt {
+                            CanonicalOption::Realloc(fid) |
+                            CanonicalOption::PostReturn(fid) |
+                            CanonicalOption::Callback(fid) => {
+                                let opt_section = ComponentSection::Canon;
+                                let opt_kind = ExternalItemKind::CoreFunc;
+                                // these all point to core function ids, check actual IDs and fix the options!
+                                let id = if let Some(id) = indices.lookup_actual_id(&opt_section, &opt_kind, *fid as usize) {
+                                    // has already been encoded
+                                    println!("[internal_encode_canon::{:?}] option: {}-->{}", opt_kind, *fid, id);
+                                    *id
+                                } else {
+                                    let (_, idx) = indices.index_from_assumed_id(&opt_section, &opt_kind, *fid as usize);
+                                    println!("    ==> using idx: {idx}");
+                                    self.internal_encode_canon(idx, 1, component, reencode, indices);
+                                    indices.lookup_actual_id_or_panic(&opt_section, &opt_kind, *fid as usize)
+                                };
+                                match opt {
+                                    CanonicalOption::Realloc(_) => CanonicalOption::Realloc(id as u32),
+                                    CanonicalOption::PostReturn(_) => CanonicalOption::PostReturn(id as u32),
+                                    CanonicalOption::Callback(_) => CanonicalOption::Callback(id as u32),
+                                    _ => unreachable!()
+                                }
+                            }
+                            CanonicalOption::CoreType(tid) => {
+                                let opt_section = ComponentSection::CoreType;
+                                let opt_kind = ExternalItemKind::NA;
+                                // these all point to core function ids, check actual IDs and fix the options!
+                                let id = if let Some(id) = indices.lookup_actual_id(&opt_section, &opt_kind, *tid as usize) {
+                                    // has already been encoded
+                                    println!("[internal_encode_core_instance::{:?}] already encoded dependency: {}-->{}", kind, *tid, id);
+                                    *id
+                                } else {
+                                    let (_, idx) = indices.index_from_assumed_id(&opt_section, &opt_kind, *tid as usize);
+                                    println!("    ==> using idx: {idx}");
+                                    self.internal_encode_canon(idx, 1, component, reencode, indices);
+                                    indices.lookup_actual_id_or_panic(&opt_section, &opt_kind, *tid as usize)
+                                };
+                                CanonicalOption::CoreType(id as u32)
+                            }
+
+                            // TODO -- handle remapping of map ids!
+                            CanonicalOption::Memory(_mid) => opt.clone(),
+                            CanonicalOption::UTF8 |
+                            CanonicalOption::UTF16 |
+                            CanonicalOption::CompactUTF16 |
+                            CanonicalOption::Async |
+                            CanonicalOption::Gc => opt.clone(),
+                        };
+                        fixed_options.push(fixed);
+                    }
+
+
+                    let func_id = if let Some(id) = indices.lookup_actual_id(&ComponentSection::Canon, &ExternalItemKind::CompFunc, *func_index as usize) {
                         // has already been encoded
                         *id
                     } else {
                         // we need to skip around and encode this type first!
                         println!("here");
-                        let (ty, idx) = indices.index_from_assumed_id(&ComponentSection::Alias, &ExternalItemKind::CompFunc, *func_index as usize);
+                        let (ty, idx) = indices.index_from_assumed_id(&ComponentSection::Canon, &ExternalItemKind::CompFunc, *func_index as usize);
                         println!("    ==> using idx: {idx}");
                         match ty {
                             SpaceSubtype::Export => self.internal_encode_component_export(idx, 1, component, reencode, indices),
@@ -1832,11 +1947,11 @@ impl<'a> Component<'a> {
                             SpaceSubtype::Alias => self.internal_encode_alias(idx, 1, component, reencode, indices),
                             SpaceSubtype::Main => self.internal_encode_canon(idx, 1, component, reencode, indices)
                         }
-                        indices.lookup_actual_id_or_panic(&ComponentSection::Alias, &ExternalItemKind::CompFunc, *func_index as usize)
+                        indices.lookup_actual_id_or_panic(&ComponentSection::Canon, &ExternalItemKind::CompFunc, *func_index as usize)
                     };
                     canon_sec.lower(
                         func_id as u32,
-                        options.iter().map(|canon| {
+                        fixed_options.iter().map(|canon| {
                             do_reencode(
                                 *canon,
                                 RoundtripReencoder::canonical_option,
