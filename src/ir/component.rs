@@ -911,7 +911,10 @@ impl<'a> Component<'a> {
                             CanonicalFunction::ThreadIndex => {
                                 canon_sec.thread_index();
                             }
-                            CanonicalFunction::ThreadNewIndirect { func_ty_index, table_index} => {
+                            CanonicalFunction::ThreadNewIndirect {
+                                func_ty_index,
+                                table_index,
+                            } => {
                                 canon_sec.thread_new_indirect(*func_ty_index, *table_index);
                             }
                             CanonicalFunction::ThreadSwitchTo { cancellable } => {
@@ -932,10 +935,16 @@ impl<'a> Component<'a> {
                             CanonicalFunction::WaitableSetNew => {
                                 canon_sec.waitable_set_new();
                             }
-                            CanonicalFunction::WaitableSetWait { cancellable, memory,  } => {
+                            CanonicalFunction::WaitableSetWait {
+                                cancellable,
+                                memory,
+                            } => {
                                 canon_sec.waitable_set_wait(*cancellable, *memory);
                             }
-                            CanonicalFunction::WaitableSetPoll { cancellable, memory } => {
+                            CanonicalFunction::WaitableSetPoll {
+                                cancellable,
+                                memory,
+                            } => {
                                 canon_sec.waitable_set_poll(*cancellable, *memory);
                             }
                             CanonicalFunction::WaitableSetDrop => {
