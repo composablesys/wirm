@@ -908,17 +908,35 @@ impl<'a> Component<'a> {
                                 let result = result.map(|v| v.into());
                                 canon_sec.task_return(result, options);
                             }
-                            CanonicalFunction::Yield { async_ } => {
-                                canon_sec.yield_(*async_);
+                            CanonicalFunction::ThreadIndex => {
+                                canon_sec.thread_index();
+                            }
+                            CanonicalFunction::ThreadNewIndirect { func_ty_index, table_index} => {
+                                canon_sec.thread_new_indirect(*func_ty_index, *table_index);
+                            }
+                            CanonicalFunction::ThreadSwitchTo { cancellable } => {
+                                canon_sec.thread_switch_to(*cancellable);
+                            }
+                            CanonicalFunction::ThreadSuspend { cancellable } => {
+                                canon_sec.thread_suspend(*cancellable);
+                            }
+                            CanonicalFunction::ThreadResumeLater => {
+                                canon_sec.thread_resume_later();
+                            }
+                            CanonicalFunction::ThreadYield { cancellable } => {
+                                canon_sec.thread_yield(*cancellable);
+                            }
+                            CanonicalFunction::ThreadYieldTo { cancellable } => {
+                                canon_sec.thread_yield_to(*cancellable);
                             }
                             CanonicalFunction::WaitableSetNew => {
                                 canon_sec.waitable_set_new();
                             }
-                            CanonicalFunction::WaitableSetWait { async_, memory } => {
-                                canon_sec.waitable_set_wait(*async_, *memory);
+                            CanonicalFunction::WaitableSetWait { cancellable, memory,  } => {
+                                canon_sec.waitable_set_wait(*cancellable, *memory);
                             }
-                            CanonicalFunction::WaitableSetPoll { async_, memory } => {
-                                canon_sec.waitable_set_poll(*async_, *memory);
+                            CanonicalFunction::WaitableSetPoll { cancellable, memory } => {
+                                canon_sec.waitable_set_poll(*cancellable, *memory);
                             }
                             CanonicalFunction::WaitableSetDrop => {
                                 canon_sec.waitable_set_drop();
@@ -1077,6 +1095,8 @@ impl<'a> Component<'a> {
                             CanonicalFunction::FutureDropWritable { ty } => {
                                 canon_sec.future_drop_writable(*ty);
                             }
+                            CanonicalFunction::BackpressureInc => {}
+                            CanonicalFunction::BackpressureDec => {}
                         }
                         last_processed_canon += 1;
                     }
