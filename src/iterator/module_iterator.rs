@@ -66,7 +66,7 @@ impl<'b> Inject<'b> for ModuleIterator<'_, 'b> {
     /// let file = "path_to_file";
     /// let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
     /// // Must use `parse_only_module` here as we are only concerned about a Module and not a module that is inside a Component
-    /// let mut module = Module::parse(&buff, false).expect("Unable to parse");
+    /// let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
     /// let mut module_it = ModuleIterator::new(&mut module, &vec![]);
     ///
     /// // Everytime there is a `call 1` instruction we want to inject an `i32.const 0`

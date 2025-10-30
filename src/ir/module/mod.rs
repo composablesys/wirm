@@ -123,6 +123,10 @@ impl<'a> Iterator for FlagsIter<'a> {
 impl<'a> Module<'a> {
     /// Parses a `Module` from a wasm binary.
     ///
+    /// Set enable_multi_memory to `true` to support parsing modules using multiple memories.
+    /// Set with_offsets to `true` to save opcode pc offset metadata during parsing
+    /// (can be used to determine the static pc offset inside a function body of the start of any opcode).
+    ///
     /// # Example
     ///
     /// ```no_run
@@ -130,19 +134,30 @@ impl<'a> Module<'a> {
     ///
     /// let file = "path_to_file";
     /// let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    /// let module = Module::parse(&buff, false).unwrap();
+    /// let module = Module::parse(&buff, false, false).unwrap();
     /// ```
-    pub fn parse(wasm: &'a [u8], enable_multi_memory: bool) -> Result<Self, Error> {
+    pub fn parse(
+        wasm: &'a [u8],
+        enable_multi_memory: bool,
+        with_offsets: bool,
+    ) -> Result<Self, Error> {
         let parser = Parser::new(0);
-        Module::parse_internal(wasm, enable_multi_memory, parser)
+        Module::parse_internal(wasm, enable_multi_memory, with_offsets, parser)
     }
 
     fn parse_body(
         body: wasmparser::FunctionBody,
         enable_multi_memory: bool,
+        with_offsets: bool,
     ) -> Result<Body, Error> {
-        let locals_reader = body.get_locals_reader()?;
-        let locals = locals_reader.into_iter().collect::<Result<Vec<_>, _>>()?;
+        let locals_orig = body
+            .get_locals_reader()?
+            .get_binary_reader()
+            .original_position();
+        let locals = body
+            .get_locals_reader()?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()?;
         let mut num_locals = 0;
         let locals: Vec<(u32, DataType)> = locals
             .iter()
@@ -152,11 +167,13 @@ impl<'a> Module<'a> {
             })
             .collect();
 
-        let instructions = Instructions::new(
-            body.get_operators_reader()?
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()?,
-        );
+        let op_reader = body.get_operators_reader()?;
+        let ops = op_reader
+            .into_iter_with_offsets()
+            .collect::<Result<Vec<(Operator, usize)>, _>>()
+            .expect("ops");
+
+        let instructions = Instructions::new(ops, locals_orig, with_offsets);
         if let Some(last) = instructions.get_ops().last() {
             if let Operator::End = last {
             } else {
@@ -188,6 +205,7 @@ impl<'a> Module<'a> {
     pub(crate) fn parse_internal(
         wasm: &'a [u8],
         enable_multi_memory: bool,
+        with_offsets: bool,
         parser: Parser,
     ) -> Result<Self, Error> {
         #[cfg(feature = "parallel")]
@@ -520,7 +538,7 @@ impl<'a> Module<'a> {
         let code_sections = bodies_and_names
             .into_par_iter()
             .map(|(body, name)| {
-                let mut body = Self::parse_body(body, enable_multi_memory)?;
+                let mut body = Self::parse_body(body, enable_multi_memory, with_offsets)?;
                 if let Some(name) = name {
                     body.name = Some(name);
                 }
@@ -532,7 +550,7 @@ impl<'a> Module<'a> {
         let code_sections = bodies_and_names
             .into_iter()
             .map(|(body, name)| {
-                let mut body = Self::parse_body(body, enable_multi_memory)?;
+                let mut body = Self::parse_body(body, enable_multi_memory, with_offsets)?;
                 if let Some(name) = name {
                     body.name = Some(name);
                 }
@@ -683,7 +701,7 @@ impl<'a> Module<'a> {
     ///
     /// let file = "path_to_file";
     /// let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    /// let mut module = Module::parse(&buff, false).unwrap();
+    /// let mut module = Module::parse(&buff, false, false).unwrap();
     /// let result = module.encode();
     /// ```
     pub fn encode(&mut self) -> Vec<u8> {

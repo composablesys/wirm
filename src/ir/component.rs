@@ -156,6 +156,10 @@ impl<'a> Component<'a> {
 
     /// Parse a `Component` from a wasm binary.
     ///
+    /// Set enable_multi_memory to `true` to support parsing modules using multiple memories.
+    /// Set with_offsets to `true` to save opcode pc offset metadata during parsing
+    /// (can be used to determine the static pc offset inside a function body of the start of any opcode).
+    ///
     /// # Example
     ///
     /// ```no_run
@@ -163,16 +167,28 @@ impl<'a> Component<'a> {
     ///
     /// let file = "path_to_file";
     /// let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    /// let comp = Component::parse(&buff, false).unwrap();
+    /// let comp = Component::parse(&buff, false, false).unwrap();
     /// ```
-    pub fn parse(wasm: &'a [u8], enable_multi_memory: bool) -> Result<Self, Error> {
+    pub fn parse(
+        wasm: &'a [u8],
+        enable_multi_memory: bool,
+        with_offsets: bool,
+    ) -> Result<Self, Error> {
         let parser = Parser::new(0);
-        Component::parse_comp(wasm, enable_multi_memory, parser, 0, &mut vec![])
+        Component::parse_comp(
+            wasm,
+            enable_multi_memory,
+            with_offsets,
+            parser,
+            0,
+            &mut vec![],
+        )
     }
 
     fn parse_comp(
         wasm: &'a [u8],
         enable_multi_memory: bool,
+        with_offsets: bool,
         parser: Parser,
         start: usize,
         parent_stack: &mut Vec<Encoding>,
@@ -330,6 +346,7 @@ impl<'a> Component<'a> {
                     modules.push(Module::parse_internal(
                         &wasm[unchecked_range.start - start..unchecked_range.end - start],
                         enable_multi_memory,
+                        with_offsets,
                         parser,
                     )?);
                     Self::add_to_sections(
@@ -349,6 +366,7 @@ impl<'a> Component<'a> {
                     let cmp = Component::parse_comp(
                         &wasm[unchecked_range.start - start..unchecked_range.end - start],
                         enable_multi_memory,
+                        with_offsets,
                         parser,
                         unchecked_range.start,
                         &mut stack,
@@ -485,7 +503,7 @@ impl<'a> Component<'a> {
     ///
     /// let file = "path_to_file";
     /// let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    /// let mut comp = Component::parse(&buff, false).unwrap();
+    /// let mut comp = Component::parse(&buff, false, false).unwrap();
     /// let result = comp.encode();
     /// ```
     pub fn encode(&mut self) -> Vec<u8> {

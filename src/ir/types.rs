@@ -1448,6 +1448,7 @@ pub enum Location {
 #[derive(Debug, Default, Clone)]
 pub struct Instructions<'a> {
     instructions: Vec<Operator<'a>>,
+    offsets: Option<Vec<usize>>,
     flags: Option<Vec<InstrumentationFlag<'a>>>,
 }
 
@@ -1461,9 +1462,21 @@ impl<'a> Instructions<'a> {
         }
     }
 
-    pub fn new(instructions: Vec<Operator<'a>>) -> Self {
+    pub fn new(
+        instructions: Vec<(Operator<'a>, usize)>,
+        locals_start: usize,
+        save_offsets: bool,
+    ) -> Self {
+        let mut instrs = vec![];
+        let mut pcs = vec![];
+        instructions.iter().for_each(|(operator, offset)| {
+            instrs.push(operator.clone());
+            // we want to store the offset inside a function body (including locals bytes)! not the overall module.
+            pcs.push(*offset - locals_start);
+        });
         Self {
-            instructions,
+            instructions: instrs,
+            offsets: if save_offsets { Some(pcs) } else { None },
             flags: None,
         }
     }
@@ -1567,6 +1580,14 @@ impl<'a> Instructions<'a> {
     pub fn clear_instr(&mut self, idx: usize, mode: InstrumentationMode) {
         if let Some(flags) = &mut self.flags {
             flags[idx].clear_instr(mode);
+        }
+    }
+
+    pub fn lookup_pc_offset_for(&self, instr_idx: usize) -> Option<usize> {
+        if let Some(offsets) = self.offsets.as_ref() {
+            offsets.get(instr_idx).copied()
+        } else {
+            None
         }
     }
 }

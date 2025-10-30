@@ -115,7 +115,7 @@ impl<'b> Inject<'b> for ComponentIterator<'_, 'b> {
     ///
     /// let file = "path_to_file";
     /// let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    /// let mut component = Component::parse(&buff, false).expect("Unable to parse");
+    /// let mut component = Component::parse(&buff, false, false).expect("Unable to parse");
     /// let mut comp_it = ComponentIterator::new(&mut component, HashMap::new());
     ///
     /// // Everytime there is a `call 1` instruction we want to inject an `i32.const 0`
