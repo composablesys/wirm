@@ -701,7 +701,7 @@ impl<'a> Module<'a> {
     ///
     /// let file = "path_to_file";
     /// let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    /// let mut module = Module::parse(&buff, false).unwrap();
+    /// let mut module = Module::parse(&buff, false, false).unwrap();
     /// let result = module.encode();
     /// ```
     pub fn encode(&mut self) -> Vec<u8> {

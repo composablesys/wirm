@@ -167,7 +167,7 @@ impl<'a> Component<'a> {
     ///
     /// let file = "path_to_file";
     /// let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    /// let comp = Component::parse(&buff, false).unwrap();
+    /// let comp = Component::parse(&buff, false, false).unwrap();
     /// ```
     pub fn parse(
         wasm: &'a [u8],
@@ -503,7 +503,7 @@ impl<'a> Component<'a> {
     ///
     /// let file = "path_to_file";
     /// let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    /// let mut comp = Component::parse(&buff, false).unwrap();
+    /// let mut comp = Component::parse(&buff, false, false).unwrap();
     /// let result = comp.encode();
     /// ```
     pub fn encode(&mut self) -> Vec<u8> {
