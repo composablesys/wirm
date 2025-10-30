@@ -673,7 +673,7 @@ pub(crate) fn validate_wasm(wasm_path: &str) -> bool {
         .expect("failed to execute process");
     if !res.status.success() {
         println!("{:?}", std::str::from_utf8(&res.stderr).unwrap());
-        assert!(false)
+        panic!()
     }
 
     res.status.success()

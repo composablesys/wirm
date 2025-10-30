@@ -538,7 +538,7 @@ impl<'a> Module<'a> {
         let code_sections = bodies_and_names
             .into_par_iter()
             .map(|(body, name)| {
-                let mut body = Self::parse_body(body, enable_multi_memory)?;
+                let mut body = Self::parse_body(body, enable_multi_memory, with_offsets)?;
                 if let Some(name) = name {
                     body.name = Some(name);
                 }
