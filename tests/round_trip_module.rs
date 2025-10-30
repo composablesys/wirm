@@ -15,7 +15,7 @@ fn round_trip_module(testname: &str, folder: &str) {
     let buff = wat::parse_file(filename).expect("couldn't convert the input wat to Wasm");
     let original =
         wasmprinter::print_bytes(buff.clone()).expect("couldn't convert original Wasm to wat");
-    let mut module = Module::parse(&buff, false).unwrap();
+    let mut module = Module::parse(&buff, false, false).unwrap();
     let result = module.encode();
     let out = wasmprinter::print_bytes(result).expect("couldn't translated Wasm to wat");
 
@@ -65,7 +65,7 @@ mod round_trip {
 fn set_name() {
     let filename = "tests/test_inputs/handwritten/modules/func1.wat";
     let buff = wat::parse_file(filename).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false).unwrap();
+    let mut module = Module::parse(&buff, false, false).unwrap();
     module.set_fn_name(FunctionID(1), "test".to_string());
     // println!("{:#?}", module);
     let result = module.encode();

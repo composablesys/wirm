@@ -246,6 +246,10 @@ impl<'a> LocalFunction<'a> {
             }
         }
     }
+
+    pub fn lookup_pc_offset_for(&self, instr_idx: usize) -> Option<usize> {
+        self.body.instructions.lookup_pc_offset_for(instr_idx)
+    }
 }
 
 // Must split this out so that the Rust compiler knows that we're not mutating data being iterated
@@ -415,7 +419,12 @@ impl<'a> Functions<'a> {
     }
 
     /// Unwrap local function.
-    pub fn unwrap_local(&mut self, function_id: FunctionID) -> &mut LocalFunction<'a> {
+    pub fn unwrap_local(&self, function_id: FunctionID) -> &LocalFunction<'a> {
+        self.functions[*function_id as usize].unwrap_local()
+    }
+
+    /// Unwrap local function.
+    pub fn unwrap_local_mut(&mut self, function_id: FunctionID) -> &mut LocalFunction<'a> {
         self.functions[*function_id as usize].unwrap_local_mut()
     }
 

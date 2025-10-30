@@ -13,14 +13,14 @@ fn roundtrip(filename: String, component: bool) {
     println!("filename: {:?}", filename);
     let buff = wat::parse_file(filename).expect("couldn't convert the input wat to Wasm");
     if component {
-        let mut parser = Component::parse(&buff, false).expect("Unable to parse");
+        let mut parser = Component::parse(&buff, false, false).expect("Unable to parse");
         let result = parser.encode();
         let out = wasmprinter::print_bytes(result.clone()).expect("couldn't translate Wasm to wat");
         let original =
             wasmprinter::print_bytes(&buff).expect("couldn't convert original Wasm to wat");
         assert_eq!(out, original);
     } else {
-        let mut parser = Module::parse(&buff, false).expect("Unable to parse");
+        let mut parser = Module::parse(&buff, false, false).expect("Unable to parse");
         let result = parser.encode();
         let out = wasmprinter::print_bytes(result.clone()).expect("couldn't translate Wasm to wat");
         let original =

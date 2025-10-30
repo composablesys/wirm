@@ -112,7 +112,7 @@ pub fn assert_panics_with_message(func: impl FnOnce() + UnwindSafe, msg: &str) {
 }
 
 fn check_instr_op(op: &Operator, mode: InstrumentationMode) -> bool {
-    let mut instr = Instructions::new(vec![op.clone()]);
+    let mut instr = Instructions::new(vec![(op.clone(), 0)], 0, false);
     instr.set_current_mode(0, mode);
     instr.add_instr(0, Operator::Nop); // should OR should not panic!
     true
