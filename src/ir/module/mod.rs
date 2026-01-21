@@ -48,7 +48,7 @@ pub mod side_effects;
 #[cfg(test)]
 mod test;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 /// Intermediate Representation of a wasm module. See the [WASM Spec] for different sections.
 ///
 /// [WASM Spec]: https://webassembly.github.io/spec/core/binary/modules.html
