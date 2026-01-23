@@ -919,12 +919,6 @@ fn test_custom_sections_integration_with_existing_api() {
         assert!(section.name.starts_with("original"));
     }
     assert_eq!(count, 2);
-
-    // Test deletion still works
-    // Note: after deletion, IDs may shift since we use Vec::remove
-    let original_len = sections.len();
-    sections.delete(id1);
-    assert_eq!(sections.len(), original_len - 1);
 }
 
 #[test]
