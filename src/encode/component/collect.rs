@@ -112,7 +112,7 @@ impl<'a> Collect<'a> for Component<'a> {
                     collect_vec(
                         start_idx,
                         *num as usize,
-                        self.component_instance.as_vec(),
+                        self.component_instances.as_vec(),
                         collect_ctx,
                         ctx,
                     );
@@ -472,7 +472,7 @@ fn collect_deps<'a, T: ReferencedIndices + 'a>(
                     ),
                     Space::CompInst => {
                         referenced_comp
-                            .component_instance[idx]
+                            .component_instances[idx]
                             .collect(idx, collect_ctx, ctx)
                     }
                     Space::CoreInst => {
