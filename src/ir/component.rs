@@ -19,7 +19,7 @@ use crate::ir::module::module_functions::FuncKind;
 use crate::ir::module::module_globals::Global;
 use crate::ir::module::Module;
 use crate::ir::section::ComponentSection;
-use crate::ir::types::CustomSections;
+use crate::ir::types::{CustomSection, CustomSections};
 use crate::ir::wrappers::{
     add_to_namemap, convert_component_type, convert_instance_type, convert_module_type_declaration,
     convert_results, do_reencode, process_alias,
@@ -138,6 +138,13 @@ impl<'a> Component<'a> {
     /// Add a Global to this Component.
     pub fn add_globals(&mut self, global: Global, module_idx: ModuleID) -> GlobalID {
         self.modules[*module_idx as usize].globals.add(global)
+    }
+
+    pub fn add_custom_section(&mut self, section: CustomSection<'a>) -> CustomSectionID {
+        let id = self.custom_sections.add(section);
+        self.add_to_own_section(ComponentSection::CustomSection);
+
+        id
     }
 
     fn add_to_sections(
