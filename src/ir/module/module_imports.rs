@@ -163,6 +163,13 @@ impl<'a> ModuleImports<'a> {
         self.imports[*imports_id as usize].custom_name = Some(name)
     }
 
+    /// Set the binding of a given import using the ImportsID.
+    pub fn set_import_name(&mut self, module: String, name: String, imports_id: ImportsID) {
+        let import = &mut self.imports[*imports_id as usize];
+        import.module = module.into();
+        import.name = name.into();
+    }
+
     /// Set the name of an imported function, using the FunctionID rather
     /// than the ImportsID. Note that these are not necessarily equal if
     /// the module has non-function imports! (It is more efficient to

@@ -718,7 +718,7 @@ impl<'a> Module<'a> {
     /// let mut module = Module::parse(&buff, false, false).unwrap();
     /// let result = module.encode();
     /// ```
-    pub fn encode(&mut self) -> Vec<u8> {
+    pub fn encode(&self) -> Vec<u8> {
         self.encode_internal(false).0.finish()
     }
 
