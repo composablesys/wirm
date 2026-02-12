@@ -2057,7 +2057,7 @@ impl<'a> CustomSections<'a> {
     }
 
     /// Add a new custom section and return its ID
-    pub(crate) fn add(&mut self, section: CustomSection<'a>) -> CustomSectionID {
+    pub fn add(&mut self, section: CustomSection<'a>) -> CustomSectionID {
         let id = CustomSectionID(self.custom_sections.len() as u32);
         self.custom_sections.push(section);
         id
