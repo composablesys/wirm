@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+use std::fmt::Display;
 
 /// LocalID in a function
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -69,6 +70,11 @@ impl std::ops::DerefMut for FunctionID {
 impl From<u32> for FunctionID {
     fn from(id: u32) -> Self {
         Self(id)
+    }
+}
+impl Display for FunctionID {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 

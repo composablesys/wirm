@@ -17,7 +17,7 @@
 //! [Walrus]: https://github.com/rustwasm/walrus/tree/main
 
 mod encode;
-mod error;
+pub mod error;
 pub mod ir;
 pub mod iterator;
 pub mod module_builder;
