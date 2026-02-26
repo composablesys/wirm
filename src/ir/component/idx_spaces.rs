@@ -253,12 +253,11 @@ impl IndexScope {
         section: &ComponentSection,
         vec_idx: usize,
     ) -> usize {
-        if let Some(space) = self.get_space(space) {
-            if let Some(assumed_id) = space.lookup_assumed_id(section, vec_idx) {
-                return assumed_id;
-            }
-        }
-        panic!("[{space:?}] No assumed ID for index: {vec_idx}")
+        self.get_space(space)
+            .and_then(|s| s.lookup_assumed_id(section, vec_idx))
+            .unwrap_or_else(|| {
+                panic!("[{space:?}] Internal error: No assumed ID for index: {vec_idx}")
+            })
     }
 
     pub fn lookup_assumed_id_with_subvec(
@@ -268,54 +267,39 @@ impl IndexScope {
         vec_idx: usize,
         subvec_idx: usize,
     ) -> usize {
-        if let Some(space) = self.get_space(space) {
-            if let Some(assumed_id) =
-                space.lookup_assumed_id_with_subvec(section, vec_idx, subvec_idx)
-            {
-                return assumed_id;
-            }
-        }
-        panic!("[{space:?}] No assumed ID for index: {vec_idx}, subvec index: {subvec_idx}")
+        self.get_space(space)
+            .and_then(|space| space.lookup_assumed_id_with_subvec(section, vec_idx, subvec_idx))
+            .unwrap_or_else(|| {
+                panic!("[{space:?}] Internal error: No assumed ID for index: {vec_idx}, subvec index: {subvec_idx}")
+            })
     }
 
     pub fn index_from_assumed_id(
         &mut self,
         r: &IndexedRef,
     ) -> (SpaceSubtype, usize, Option<usize>) {
-        if let Some(space) = self.get_space_mut(&r.space) {
-            if let Some((ty, idx, subvec_idx)) = space.index_from_assumed_id(r.index as usize) {
-                return (ty, idx, subvec_idx);
-            } else {
-                println!("couldn't find idx");
-            }
-        } else {
-            println!("couldn't find space");
-        }
-        panic!(
-            "[{:?}@scope{}] No index for assumed ID: {}",
-            r.space, self.id, r.index
-        )
+        self.get_space_mut(&r.space)
+            .and_then(|space| space.index_from_assumed_id(r.index as usize))
+            .unwrap_or_else(|| {
+                panic!(
+                    "[{:?}@scope{}] Internal error: No index for assumed ID: {}",
+                    r.space, self.id, r.index
+                )
+            })
     }
 
     pub fn index_from_assumed_id_no_cache(
         &self,
         r: &IndexedRef,
     ) -> (SpaceSubtype, usize, Option<usize>) {
-        if let Some(space) = self.get_space(&r.space) {
-            if let Some((ty, idx, subvec_idx)) =
-                space.index_from_assumed_id_no_cache(r.index as usize)
-            {
-                return (ty, idx, subvec_idx);
-            } else {
-                println!("couldn't find idx");
-            }
-        } else {
-            println!("couldn't find space");
-        }
-        panic!(
-            "[{:?}@scope{}] No index for assumed ID: {}",
-            r.space, self.id, r.index
-        )
+        self.get_space(&r.space)
+            .and_then(|space| space.index_from_assumed_id_no_cache(r.index as usize))
+            .unwrap_or_else(|| {
+                panic!(
+                    "[{:?}@scope{}] Internal error: No index for assumed ID: {}",
+                    r.space, self.id, r.index
+                )
+            })
     }
 
     // ===================

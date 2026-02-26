@@ -42,11 +42,13 @@ impl<'a, 'b> ModuleIterator<'a, 'b> {
         ) = self.mod_iterator.curr_loc()
         {
             match &self.module.functions.get(func_idx).kind {
-                FuncKind::Import(_) => panic!("Cannot get an instruction to an imported function"),
+                FuncKind::Import(_) => panic!(
+                    "Internal error: Shouldn't have gotten the location of an imported function!"
+                ),
                 FuncKind::Local(l) => Some(l.body.instructions.get_ops()[instr_idx].clone()),
             }
         } else {
-            panic!("Should have gotten Module Location!")
+            panic!("Internal error: Should have gotten Module Location!")
         }
     }
 }
@@ -103,12 +105,14 @@ impl<'b> Inject<'b> for ModuleIterator<'_, 'b> {
             ..,
         ) = self.curr_loc()
         {
-            match self.module.functions.get_mut(func_idx as FunctionID).kind {
-                FuncKind::Import(_) => panic!("Cannot get an instruction to an imported function"),
+            match self.module.functions.get_mut(func_idx).kind {
+                FuncKind::Import(_) => panic!(
+                    "Internal error: Shouldn't have gotten the location of an imported function!"
+                ),
                 FuncKind::Local(ref mut l) => l.add_instr(instr, instr_idx),
             }
         } else {
-            panic!("Should have gotten Module Location!")
+            panic!("Internal error: Should have gotten Module Location!")
         }
     }
 }
@@ -122,7 +126,7 @@ impl<'a> InjectAt<'a> for ModuleIterator<'_, 'a> {
             self.set_instrument_mode_at(mode, loc);
             self.add_instr_at(loc, instr);
         } else {
-            panic!("Should have gotten Module Location!")
+            panic!("Internal error: Should have gotten Module Location!")
         }
     }
 }
@@ -140,15 +144,17 @@ impl<'a> Instrumenter<'a> for ModuleIterator<'_, 'a> {
             ..,
         ) = self.mod_iterator.curr_loc()
         {
-            match &mut self.module.functions.get_mut(func_idx as FunctionID).kind {
-                FuncKind::Import(_) => panic!("Cannot get an instruction to an imported function"),
+            match &mut self.module.functions.get_mut(func_idx).kind {
+                FuncKind::Import(_) => panic!(
+                    "Internal error: Shouldn't have gotten the location of an imported function!"
+                ),
                 FuncKind::Local(l) => {
                     l.instr_flag.finish_instr();
                     l.body.instructions.finish_instr(instr_idx);
                 }
             }
         } else {
-            panic!("Should have gotten Module Location and not Module Location!")
+            panic!("Internal error: Should have gotten Module Location!")
         }
     }
     /// Returns the Instrumentation at the current Location
@@ -162,12 +168,14 @@ impl<'a> Instrumenter<'a> for ModuleIterator<'_, 'a> {
             ..,
         ) = self.mod_iterator.curr_loc()
         {
-            match &self.module.functions.get(func_idx as FunctionID).kind {
-                FuncKind::Import(_) => panic!("Cannot get an instruction to an imported function"),
+            match &self.module.functions.get(func_idx).kind {
+                FuncKind::Import(_) => panic!(
+                    "Internal error: Shouldn't have gotten the location of an imported function!"
+                ),
                 FuncKind::Local(l) => l.body.instructions.current_mode(instr_idx),
             }
         } else {
-            panic!("Should have gotten Module Location and not Module Location!")
+            panic!("Internal error: Should have gotten Module Location!")
         }
     }
 
@@ -178,36 +186,42 @@ impl<'a> Instrumenter<'a> for ModuleIterator<'_, 'a> {
             ..
         } = loc
         {
-            match self.module.functions.get_mut(func_idx as FunctionID).kind {
-                FuncKind::Import(_) => panic!("Cannot add an instruction to an imported function"),
+            match self.module.functions.get_mut(func_idx).kind {
+                FuncKind::Import(_) => panic!(
+                    "Internal error: Shouldn't have gotten the location of an imported function!"
+                ),
                 FuncKind::Local(ref mut l) => {
                     l.body.instructions.set_current_mode(instr_idx, mode);
                 }
             }
         } else {
-            panic!("Should have gotten module location!")
+            panic!("Internal error: Should have gotten Module Location!")
         }
     }
 
     fn curr_func_instrument_mode(&self) -> &Option<FuncInstrMode> {
         if let (Location::Module { func_idx, .. }, ..) = self.mod_iterator.curr_loc() {
-            match &self.module.functions.get(func_idx as FunctionID).kind {
-                FuncKind::Import(_) => panic!("Cannot get an instruction to an imported function"),
+            match &self.module.functions.get(func_idx).kind {
+                FuncKind::Import(_) => panic!(
+                    "Internal error: Shouldn't have gotten the location of an imported function!"
+                ),
                 FuncKind::Local(l) => &l.instr_flag.current_mode,
             }
         } else {
-            panic!("Should have gotten Module Location and not Module Location!")
+            panic!("Internal error: Should have gotten Module Location!")
         }
     }
 
     fn set_func_instrument_mode(&mut self, mode: FuncInstrMode) {
         if let (Location::Module { func_idx, .. }, ..) = self.mod_iterator.curr_loc() {
-            match self.module.functions.get_mut(func_idx as FunctionID).kind {
-                FuncKind::Import(_) => panic!("Cannot get an instruction to an imported function"),
+            match self.module.functions.get_mut(func_idx).kind {
+                FuncKind::Import(_) => panic!(
+                    "Internal error: Shouldn't have gotten the location of an imported function!"
+                ),
                 FuncKind::Local(ref mut l) => l.instr_flag.current_mode = Some(mode),
             }
         } else {
-            panic!("Should have gotten Module Location and not Module Location!")
+            panic!("Internal error: Should have gotten Module Location!")
         }
     }
 
@@ -221,12 +235,14 @@ impl<'a> Instrumenter<'a> for ModuleIterator<'_, 'a> {
             ..,
         ) = self.mod_iterator.curr_loc()
         {
-            match &self.module.functions.get(func_idx as FunctionID).kind {
-                FuncKind::Import(_) => panic!("Cannot get an instruction to an imported function"),
+            match &self.module.functions.get(func_idx).kind {
+                FuncKind::Import(_) => panic!(
+                    "Internal error: Shouldn't have gotten the location of an imported function!"
+                ),
                 FuncKind::Local(l) => l.instr_len_at(instr_idx),
             }
         } else {
-            panic!("Should have gotten Module Location and not Module Location!")
+            panic!("Internal error: Should have gotten Module Location!")
         }
     }
 
@@ -237,15 +253,16 @@ impl<'a> Instrumenter<'a> for ModuleIterator<'_, 'a> {
             ..
         } = loc
         {
-            match self.module.functions.get_mut(func_idx as FunctionID).kind {
-                FuncKind::Import(_) => panic!("Cannot add an instruction to an imported function"),
+            match self.module.functions.get_mut(func_idx).kind {
+                FuncKind::Import(_) => panic!(
+                    "Internal error: Shouldn't have gotten the location of an imported function!"
+                ),
                 FuncKind::Local(ref mut l) => {
                     l.clear_instr_at(instr_idx, mode);
                 }
             }
-            // Only injects if it is an instrumented location
         } else {
-            panic!("Should have gotten Module Location!")
+            panic!("Internal error: Should have gotten Module Location!")
         }
     }
 
@@ -256,15 +273,16 @@ impl<'a> Instrumenter<'a> for ModuleIterator<'_, 'a> {
             ..
         } = loc
         {
-            match self.module.functions.get_mut(func_idx as FunctionID).kind {
-                FuncKind::Import(_) => panic!("Cannot add an instruction to an imported function"),
+            match self.module.functions.get_mut(func_idx).kind {
+                FuncKind::Import(_) => panic!(
+                    "Internal error: Shouldn't have gotten the location of an imported function!"
+                ),
                 FuncKind::Local(ref mut l) => {
                     l.add_instr(instr, instr_idx);
                 }
             }
-            // Only injects if it is an instrumented location
         } else {
-            panic!("Should have gotten Module Location!")
+            panic!("Internal error: Should have gotten Module Location!")
         }
     }
 
@@ -276,7 +294,9 @@ impl<'a> Instrumenter<'a> for ModuleIterator<'_, 'a> {
         } = loc
         {
             match self.module.functions.get_mut(func_idx).kind {
-                FuncKind::Import(_) => panic!("Cannot instrument an imported function"),
+                FuncKind::Import(_) => panic!(
+                    "Internal error: Shouldn't have gotten the location of an imported function!"
+                ),
                 FuncKind::Local(ref mut l) => {
                     l.body
                         .instructions
@@ -284,7 +304,7 @@ impl<'a> Instrumenter<'a> for ModuleIterator<'_, 'a> {
                 }
             }
         } else {
-            panic!("Should have gotten Module Location and not Module Location!")
+            panic!("Internal error: Should have gotten Module Location!")
         }
         self
     }
@@ -296,8 +316,10 @@ impl<'a> Instrumenter<'a> for ModuleIterator<'_, 'a> {
             ..
         } = loc
         {
-            match self.module.functions.get_mut(func_idx as FunctionID).kind {
-                FuncKind::Import(_) => panic!("Cannot instrument an imported function"),
+            match self.module.functions.get_mut(func_idx).kind {
+                FuncKind::Import(_) => panic!(
+                    "Internal error: Shouldn't have gotten the location of an imported function!"
+                ),
                 FuncKind::Local(ref mut l) => {
                     l.body
                         .instructions
@@ -306,7 +328,7 @@ impl<'a> Instrumenter<'a> for ModuleIterator<'_, 'a> {
                 }
             }
         } else {
-            panic!("Should have gotten Module Location and not Module Location!")
+            panic!("Internal error: Should have gotten Module Location!")
         }
         self
     }
@@ -318,14 +340,16 @@ impl<'a> Instrumenter<'a> for ModuleIterator<'_, 'a> {
             ..
         } = loc
         {
-            match self.module.functions.get_mut(func_idx as FunctionID).kind {
-                FuncKind::Import(_) => panic!("Cannot instrument an imported function"),
+            match self.module.functions.get_mut(func_idx).kind {
+                FuncKind::Import(_) => panic!(
+                    "Internal error: Shouldn't have gotten the location of an imported function!"
+                ),
                 FuncKind::Local(ref mut l) => {
                     l.append_instr_tag_at(data, instr_idx);
                 }
             }
         } else {
-            panic!("Should have gotten Module Location and not Module Location!")
+            panic!("Internal error: Should have gotten Module Location!")
         }
         self
     }
@@ -341,9 +365,12 @@ impl AddLocal for ModuleIterator<'_, '_> {
     fn add_local(&mut self, val_type: DataType) -> LocalID {
         let curr_loc = self.curr_loc();
         if let (Location::Module { func_idx, .. }, ..) = curr_loc {
-            self.module.functions.add_local(func_idx, val_type)
+            self.module
+                .functions
+                .add_local(func_idx, val_type)
+                .expect("Internal error: Should have found the local function successfully!")
         } else {
-            panic!("Should have gotten Module Location!")
+            panic!("Internal error: Should have gotten Module Location!")
         }
     }
 }
@@ -370,7 +397,7 @@ impl<'a> Iterator for ModuleIterator<'_, 'a> {
     }
 
     /// Returns the current instruction
-    fn curr_op(&self) -> Option<&Operator<'a>> {
+    fn curr_op(&self) -> Option<&Operator<'_>> {
         if let (
             Location::Module {
                 func_idx,
@@ -381,11 +408,13 @@ impl<'a> Iterator for ModuleIterator<'_, 'a> {
         ) = self.mod_iterator.curr_loc()
         {
             match &self.module.functions.get(func_idx).kind {
-                FuncKind::Import(_) => panic!("Cannot get an instruction to an imported function"),
+                FuncKind::Import(_) => panic!(
+                    "Internal error: Shouldn't have gotten the location of an imported function!"
+                ),
                 FuncKind::Local(l) => Some(&l.body.instructions.get_ops()[instr_idx]),
             }
         } else {
-            panic!("Should have gotten Module Location!")
+            panic!("Internal error: Should have gotten Module Location!")
         }
     }
 }

@@ -1,5 +1,7 @@
 //! Wrapper functions
 
+use crate::error::Error::InstrumentationError;
+use crate::ir::types;
 use std::collections::HashMap;
 use wasmparser::Operator;
 
@@ -124,7 +126,7 @@ pub(crate) fn refers_to_memory(op: &Operator) -> bool {
     )
 }
 
-pub(crate) fn update_fn_instr(op: &mut Operator, mapping: &HashMap<u32, u32>) {
+pub(crate) fn update_fn_instr(op: &mut Operator, mapping: &HashMap<u32, u32>) -> types::Result<()> {
     match op {
         Operator::Call { function_index }
         | Operator::RefFunc { function_index }
@@ -132,13 +134,21 @@ pub(crate) fn update_fn_instr(op: &mut Operator, mapping: &HashMap<u32, u32>) {
             Some(new_index) => {
                 *function_index = *new_index;
             }
-            None => panic!("Deleted function!"),
+            None => {
+                return Err(InstrumentationError(
+                    "Called a deleted function!".to_string(),
+                ))
+            }
         },
-        _ => panic!("Operation doesn't need to be checked for function IDs!"),
+        _ => panic!("Internal error: Operation doesn't need to be checked for function IDs!"),
     }
+    Ok(())
 }
 
-pub(crate) fn update_global_instr(op: &mut Operator, mapping: &HashMap<u32, u32>) {
+pub(crate) fn update_global_instr(
+    op: &mut Operator,
+    mapping: &HashMap<u32, u32>,
+) -> types::Result<()> {
     match op {
         Operator::GlobalGet { global_index }
         | Operator::GlobalSet { global_index }
@@ -155,14 +165,22 @@ pub(crate) fn update_global_instr(op: &mut Operator, mapping: &HashMap<u32, u32>
                 Some(new_index) => {
                     *global_index = *new_index;
                 }
-                None => panic!("Deleted global!"),
+                None => {
+                    return Err(InstrumentationError(
+                        "Operation on a deleted global!".to_string(),
+                    ))
+                }
             }
         }
-        _ => panic!("Operation doesn't need to be checked for global IDs!"),
+        _ => panic!("Internal error: Operation doesn't need to be checked for global IDs!"),
     }
+    Ok(())
 }
 
-pub(crate) fn update_memory_instr(op: &mut Operator, mapping: &HashMap<u32, u32>) {
+pub(crate) fn update_memory_instr(
+    op: &mut Operator,
+    mapping: &HashMap<u32, u32>,
+) -> types::Result<()> {
     match op {
         // loads
         Operator::I32Load { memarg } |
@@ -234,7 +252,7 @@ pub(crate) fn update_memory_instr(op: &mut Operator, mapping: &HashMap<u32, u32>
                 Some(new_index) => {
                     memarg.memory = *new_index;
                 }
-                None => panic!("Attempting to reference a deleted memory, ID: {}", memarg.memory),
+                None => return Err(InstrumentationError(format!("Attempting to reference a deleted memory, ID: {}", memarg.memory))),
             }
         }
         Operator::MemoryGrow {mem} |
@@ -246,7 +264,7 @@ pub(crate) fn update_memory_instr(op: &mut Operator, mapping: &HashMap<u32, u32>
                 Some(new_index) => {
                     *mem = *new_index;
                 }
-                None => panic!("Attempting to reference a deleted memory, ID: {}", mem),
+                None => return Err(InstrumentationError(format!("Attempting to reference a deleted memory, ID: {}", mem))),
             }
         }
         Operator::MemoryCopy {src_mem, dst_mem} => {
@@ -254,15 +272,16 @@ pub(crate) fn update_memory_instr(op: &mut Operator, mapping: &HashMap<u32, u32>
                 Some(new_index) => {
                     *src_mem = *new_index;
                 }
-                None => panic!("Attempting to reference a deleted memory, ID: {}", src_mem),
+                None => return Err(InstrumentationError(format!("Attempting to reference a deleted memory, ID: {}", src_mem))),
             }
             match mapping.get(dst_mem) {
                 Some(new_index) => {
                     *dst_mem = *new_index;
                 }
-                None => panic!("Attempting to reference a deleted memory, ID: {}", dst_mem),
+                None => return Err(InstrumentationError(format!("Attempting to reference a deleted memory, ID: {}", dst_mem))),
             }
         }
-        _ => panic!("Operation doesn't need to be checked for memory IDs!"),
+        _ => panic!("Internal error: Operation doesn't need to be checked for memory IDs!"),
     }
+    Ok(())
 }

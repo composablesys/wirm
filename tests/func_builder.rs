@@ -45,7 +45,7 @@ fn run_start_wirm() {
         })
         .i32_const(1);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result.clone()).expect("couldn't translate Wasm to wat");
     println!("{}", out);
 }
@@ -63,7 +63,7 @@ fn run_start_wirm_default() {
 
     function_builder.i32_const(1);
 
-    let result = module.encode();
+    let result = module.encode().expect("error!");
     let out = wasmprinter::print_bytes(result.clone()).expect("couldn't translate Wasm to wat");
     println!("{}", out);
 }
@@ -93,7 +93,7 @@ fn add_import_and_local_fn_then_iterate() {
         };
     }
 
-    let result = module.encode();
+    let result = module.encode().expect("error!");
     let out = wasmprinter::print_bytes(result.clone()).expect("couldn't translate Wasm to wat");
     println!("{}", out);
 }

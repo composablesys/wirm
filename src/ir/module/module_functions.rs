@@ -1,9 +1,11 @@
 //! Intermediate Representation of a Function
 
+use crate::error::Error::{InvalidOperation, UnknownId};
 use crate::ir::function::FunctionModifier;
 use crate::ir::id::{FunctionID, ImportsID, LocalID, TypeID};
 use crate::ir::module::side_effects::{InjectType, Injection};
 use crate::ir::module::{AsVec, GetID, LocalOrImport};
+use crate::ir::types;
 use crate::ir::types::{
     Body, FuncInstrFlag, HasInjectTag, InjectTag, InstrumentationMode, Tag, TagUtils,
 };
@@ -75,12 +77,12 @@ impl<'a> Function<'a> {
     }
 
     /// Unwrap a local function. If it is an imported function, it panics.
-    pub fn unwrap_local(&self) -> &LocalFunction<'a> {
+    pub fn unwrap_local(&self) -> types::Result<&LocalFunction<'a>> {
         self.kind.unwrap_local()
     }
 
     /// Unwrap a local function as mutable. If it is an imported function, it panics.
-    pub fn unwrap_local_mut(&mut self) -> &mut LocalFunction<'a> {
+    pub fn unwrap_local_mut(&mut self) -> types::Result<&mut LocalFunction<'a>> {
         self.kind.unwrap_local_mut()
     }
 
@@ -97,18 +99,22 @@ pub enum FuncKind<'a> {
 }
 
 impl<'a> FuncKind<'a> {
-    /// Unwrap a local function as a read-only reference. If it is an imported function, it panics.
-    pub fn unwrap_local(&self) -> &LocalFunction<'a> {
+    /// Unwrap a local function as a read-only reference. If it is an imported function, it errors.
+    pub fn unwrap_local(&self) -> types::Result<&LocalFunction<'a>> {
         match &self {
-            FuncKind::Local(l) => l,
-            FuncKind::Import(_) => panic!("Attempting to unwrap an imported function as a local!!"),
+            FuncKind::Local(l) => Ok(l),
+            FuncKind::Import(_) => Err(InvalidOperation(
+                "Attempting to unwrap an imported function as a local!!".to_string(),
+            )),
         }
     }
-    /// Unwrap a local function as a mutable reference. If it is an imported function, it panics.
-    pub fn unwrap_local_mut(&mut self) -> &mut LocalFunction<'a> {
+    /// Unwrap a local function as a mutable reference. If it is an imported function, it errors.
+    pub fn unwrap_local_mut(&mut self) -> types::Result<&mut LocalFunction<'a>> {
         match self {
-            FuncKind::Local(l) => l,
-            FuncKind::Import(_) => panic!("Attempting to unwrap an imported function as a local!!"),
+            FuncKind::Local(l) => Ok(l),
+            FuncKind::Import(_) => Err(InvalidOperation(
+                "Attempting to unwrap an imported function as a local!!".to_string(),
+            )),
         }
     }
 
@@ -225,14 +231,14 @@ impl<'a> LocalFunction<'a> {
         global_mapping: &HashMap<u32, u32>,
         memory_mapping: &HashMap<u32, u32>,
         side_effects: &mut HashMap<InjectType, Vec<Injection<'a>>>,
-    ) {
+    ) -> types::Result<()> {
         self.instr_flag.add_injections(
             rel_fid,
             func_mapping,
             global_mapping,
             memory_mapping,
             side_effects,
-        );
+        )
     }
 
     pub(crate) fn add_opcode_injections(
@@ -419,12 +425,15 @@ impl<'a> Functions<'a> {
     }
 
     /// Unwrap local function.
-    pub fn unwrap_local(&self, function_id: FunctionID) -> &LocalFunction<'a> {
+    pub fn unwrap_local(&self, function_id: FunctionID) -> types::Result<&LocalFunction<'a>> {
         self.functions[*function_id as usize].unwrap_local()
     }
 
     /// Unwrap local function.
-    pub fn unwrap_local_mut(&mut self, function_id: FunctionID) -> &mut LocalFunction<'a> {
+    pub fn unwrap_local_mut(
+        &mut self,
+        function_id: FunctionID,
+    ) -> types::Result<&mut LocalFunction<'a>> {
         self.functions[*function_id as usize].unwrap_local_mut()
     }
 
@@ -450,19 +459,28 @@ impl<'a> Functions<'a> {
     pub fn get_fn_modifier<'b>(
         &'b mut self,
         func_id: FunctionID,
-    ) -> Option<FunctionModifier<'b, 'a>> {
+    ) -> types::Result<FunctionModifier<'b, 'a>> {
         // grab type and section and code section
-        match &mut self.functions.get_mut(*func_id as usize)?.kind {
+        let func = self.functions.get_mut(*func_id as usize);
+        if func.is_none() {
+            return Err(UnknownId(format!(
+                "Could not find function with ID: {func_id:?}"
+            )));
+        }
+
+        match func.unwrap().kind {
             FuncKind::Local(ref mut l) => {
                 // the instrflag should be reset!
                 l.instr_flag.finish_instr();
-                Some(FunctionModifier::init(
+                Ok(FunctionModifier::init(
                     &mut l.instr_flag,
                     &mut l.body,
                     &mut l.args,
                 ))
             }
-            _ => None,
+            _ => Err(InvalidOperation(
+                "Cannot modify a non-local function".to_string(),
+            )),
         }
     }
 
@@ -514,9 +532,14 @@ impl<'a> Functions<'a> {
         ));
     }
 
-    pub(crate) fn add_local(&mut self, func_idx: FunctionID, ty: DataType) -> LocalID {
-        let local_func = self.functions[*func_idx as usize].unwrap_local_mut();
-        local_func.add_local(ty)
+    /// Add a local to a function
+    pub(crate) fn add_local(
+        &mut self,
+        func_idx: FunctionID,
+        ty: DataType,
+    ) -> types::Result<LocalID> {
+        let local_func = self.functions[*func_idx as usize].unwrap_local_mut()?;
+        Ok(local_func.add_local(ty))
     }
 
     /// Set the name for a local function. Returns false if it is an imported function.

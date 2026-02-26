@@ -1,9 +1,11 @@
 //! Intermediate representation of the globals.
 
 use crate::error::Error;
+use crate::error::Error::UnknownId;
 use crate::ir::id::{GlobalID, ImportsID};
 use crate::ir::module::module_imports::ModuleImports;
 use crate::ir::module::{AsVec, GetID, LocalOrImport};
+use crate::ir::types;
 use crate::ir::types::{InitExpr, InjectTag, Tag, TagUtils};
 use wasmparser::{GlobalType, TypeRef};
 
@@ -227,7 +229,11 @@ impl ModuleGlobals {
         self.globals.push(global);
         id
     }
-    pub(crate) fn mod_global_init_expr(&mut self, global_id: u32, new_expr: InitExpr) {
+    pub(crate) fn mod_global_init_expr(
+        &mut self,
+        global_id: u32,
+        new_expr: InitExpr,
+    ) -> types::Result<()> {
         if let Some(Global {
             kind: GlobalKind::Local(LocalGlobal { init_expr, .. }),
             ..
@@ -235,7 +241,10 @@ impl ModuleGlobals {
         {
             *init_expr = new_expr;
         } else {
-            panic!("Cannot update requested global's init_expr, id: {global_id}")
+            return Err(UnknownId(format!(
+                "Cannot update requested global's init_expr, id: {global_id}"
+            )));
         }
+        Ok(())
     }
 }

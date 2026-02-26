@@ -190,7 +190,7 @@ impl ActualIds {
     pub fn lookup_actual_id_or_panic(&self, cx: &VisitCtxInner, r: &IndexedRef) -> usize {
         let scope_id = cx.scope_stack.scope_at_depth(&r.depth);
         let ids = self.scopes.get(&scope_id).unwrap_or_else(|| {
-            panic!("Attempted to assign a non-existent scope: {scope_id}");
+            panic!("Internal error: Attempted to assign a non-existent scope: {scope_id}")
         });
         ids.lookup_actual_id_or_panic(r)
     }
@@ -270,15 +270,15 @@ impl IdsForScope {
     }
 
     pub(crate) fn lookup_actual_id_or_panic(&self, r: &IndexedRef) -> usize {
-        if let Some(space) = self.get_space(&r.space) {
-            if let Some(actual_id) = space.lookup_actual_id(r.index as usize) {
-                return *actual_id;
-            }
-        }
-        panic!(
-            "[{:?}] Can't find assumed id {} in id-tracker",
-            r.space, r.index
-        );
+        *self
+            .get_space(&r.space)
+            .and_then(|space| space.lookup_actual_id(r.index as usize))
+            .unwrap_or_else(|| {
+                panic!(
+                    "[{:?}] Internal error: Can't find assumed id {} in id-tracker",
+                    r.space, r.index
+                )
+            })
     }
 }
 

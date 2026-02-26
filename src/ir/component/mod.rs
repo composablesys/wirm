@@ -3,6 +3,7 @@
 
 use crate::encode::component::encode;
 use crate::error::Error;
+use crate::error::Error::IO;
 use crate::ir::component::alias::Aliases;
 use crate::ir::component::canons::Canons;
 use crate::ir::component::idx_spaces::{
@@ -109,9 +110,9 @@ pub struct Component<'a> {
 
 impl<'a> Component<'a> {
     /// Emit the Component into a wasm binary file.
-    pub fn emit_wasm(&self, file_name: &str) -> Result<(), std::io::Error> {
-        let wasm = self.encode();
-        std::fs::write(file_name, wasm)?;
+    pub fn emit_wasm(&self, file_name: &str) -> crate::ir::types::Result<()> {
+        let wasm = self.encode()?;
+        std::fs::write(file_name, wasm).map_err(IO)?;
         Ok(())
     }
 
@@ -814,7 +815,7 @@ impl<'a> Component<'a> {
     /// let mut comp = Component::parse(&buff, false, false).unwrap();
     /// let result = comp.encode();
     /// ```
-    pub fn encode(&self) -> Vec<u8> {
+    pub fn encode(&self) -> crate::ir::types::Result<Vec<u8>> {
         encode(self)
     }
 
@@ -839,7 +840,7 @@ impl<'a> Component<'a> {
             let (ty, t_idx, subidx) = store.index_from_assumed_id(&self.space_id, &ty.ref_);
             debug_assert!(subidx.is_none(), "a lift function shouldn't reference anything with a subvec space (like a recgroup)");
             if !matches!(ty, SpaceSubtype::Main) {
-                panic!("Should've been an main space!")
+                panic!("Internal error: expected main space, got {ty:?}");
             }
 
             let res = self.component_types.items.get(t_idx);

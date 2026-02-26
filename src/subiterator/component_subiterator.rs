@@ -110,7 +110,7 @@ impl ComponentSubIterator {
                 is_end,
             )
         } else {
-            panic!("Should have gotten Module Location from Module Iterator and not Component Location!");
+            panic!("Internal error: Should have gotten Module Location!")
         }
     }
 
@@ -125,7 +125,7 @@ impl ComponentSubIterator {
                 },
                 ..,
             ) => (*mod_idx as usize, func_idx, instr_idx),
-            _ => panic!("Should have gotten component location!"),
+            _ => panic!("Internal error: Should have gotten component location!"),
         }
     }
 

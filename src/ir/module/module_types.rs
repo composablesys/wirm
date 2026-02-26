@@ -1,7 +1,9 @@
 #![allow(clippy::too_many_arguments)]
 //!  Intermediate representation of Module Types
 
+use crate::error::Error::InvalidOperation;
 use crate::ir::id::TypeID;
+use crate::ir::types;
 use crate::ir::types::{InjectTag, Tag, TagUtils};
 use crate::DataType;
 use std::collections::HashMap;
@@ -256,18 +258,18 @@ impl TagUtils for Types {
 }
 impl Types {
     /// Return the params of a Function Type
-    pub fn params(&self) -> Vec<DataType> {
+    pub fn params(&self) -> types::Result<Vec<DataType>> {
         match &self {
-            Types::FuncType { params, .. } => params.to_vec(),
-            _ => panic!("Not a function!"),
+            Types::FuncType { params, .. } => Ok(params.to_vec()),
+            _ => Err(InvalidOperation("Not a function!".to_string())),
         }
     }
 
     /// Return the params of a Function Type
-    pub fn results(&self) -> Vec<DataType> {
+    pub fn results(&self) -> types::Result<Vec<DataType>> {
         match &self {
-            Types::FuncType { results, .. } => results.to_vec(),
-            _ => panic!("Not a function!"),
+            Types::FuncType { results, .. } => Ok(results.to_vec()),
+            _ => Err(InvalidOperation("Not a function!".to_string())),
         }
     }
 

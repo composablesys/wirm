@@ -16,7 +16,7 @@ fn round_trip_module(testname: &str, folder: &str) {
     let original =
         wasmprinter::print_bytes(buff.clone()).expect("couldn't convert original Wasm to wat");
     let module = Module::parse(&buff, false, false).unwrap();
-    let result = module.encode();
+    let result = module.encode().expect("error!");
     let out = wasmprinter::print_bytes(result).expect("couldn't translated Wasm to wat");
 
     if out != original {
@@ -68,7 +68,7 @@ fn set_name() {
     let mut module = Module::parse(&buff, false, false).unwrap();
     module.set_fn_name(FunctionID(1), "test".to_string());
     // println!("{:#?}", module);
-    let result = module.encode();
+    let result = module.encode().expect("error!");
 
     //write result to file
     write_to_file(&result, format!("{WASM_OUTPUT_DIR}/func1.wasm"));

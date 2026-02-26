@@ -242,7 +242,9 @@ fn test_convert_import_fn_to_local() {
     let mut builder = FunctionBuilder::new(&[DataType::I32], &[DataType::I32]);
     builder.i32_const(1);
     builder.drop();
-    builder.replace_import_in_module(&mut module, ImportsID(0));
+    builder
+        .replace_import_in_module(&mut module, ImportsID(0))
+        .expect("error");
 
     // add local function using the translated function
     let mut builder = FunctionBuilder::new(&[], &[DataType::I32]);
@@ -822,7 +824,7 @@ fn test_custom_sections_cow_behavior() {
     let id = sections.get_id("test".to_string()).unwrap();
 
     // First, verify the section starts as borrowed
-    let section = sections.get_by_id(id);
+    let section = sections.get_by_id(id).expect("Should be present");
     assert_eq!(section.data.as_ref(), original_data);
 
     // Now trigger copy-on-write
@@ -830,7 +832,7 @@ fn test_custom_sections_cow_behavior() {
     data_mut.push(b'!');
 
     // The data should now be owned
-    let section = sections.get_by_id(id);
+    let section = sections.get_by_id(id).expect("Should be present");
     assert_eq!(section.data.as_ref(), b"original!");
 }
 
@@ -899,7 +901,7 @@ fn test_custom_sections_integration_with_existing_api() {
     assert!(!sections.is_empty());
 
     let id1 = sections.get_id("original1".to_string()).unwrap();
-    let section1 = sections.get_by_id(id1);
+    let section1 = sections.get_by_id(id1).expect("Should be present");
     assert_eq!(section1.name, "original1");
     assert_eq!(section1.data.as_ref(), b"data1");
 
@@ -909,7 +911,7 @@ fn test_custom_sections_integration_with_existing_api() {
     data_mut.extend_from_slice(b"modified_data1");
 
     // Verify change via existing API
-    let section1_after = sections.get_by_id(id1);
+    let section1_after = sections.get_by_id(id1).expect("Should be present");
     assert_eq!(section1_after.data.as_ref(), b"modified_data1");
 
     // Test iteration

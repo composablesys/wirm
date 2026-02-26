@@ -81,7 +81,7 @@ fn test_it_instr_at() {
         };
     }
 
-    let a = module.encode();
+    let a = module.encode().expect("error during encode");
     let wat = wasmprinter::print_bytes(&a).unwrap();
     debug!("{}", wat);
 }
@@ -105,7 +105,7 @@ fn test_it_dup_instr() {
             trace!("Func: {:?}, {}: {:?},", func_idx, instr_idx, op);
 
             let loc = mod_it.curr_loc().0;
-            let orig = mod_it.curr_op_owned().unwrap();
+            let orig = mod_it.curr_op_owned().expect("error!");
             if !matches!(orig, Operator::End) {
                 mod_it.before();
                 mod_it.add_instr_at(loc, orig);
@@ -118,7 +118,7 @@ fn test_it_dup_instr() {
         };
     }
 
-    let a = module.encode();
+    let a = module.encode().expect("error!");
     let wat = wasmprinter::print_bytes(&a).unwrap();
     debug!("{}", wat);
 }
@@ -132,7 +132,7 @@ fn test_it_add_local_diff_type() {
 
     mod_it.add_local(wirm::ir::types::DataType::I64);
     mod_it.add_local(wirm::ir::types::DataType::I32);
-    let a = module.encode();
+    let a = module.encode().expect("error!");
     let wat = wasmprinter::print_bytes(&a).unwrap();
     debug!("{}", wat);
 }
@@ -147,7 +147,7 @@ fn test_imports() {
     let mut mod_it = ModuleIterator::new(&mut module, &vec![]);
     iterate_module_and_count(&mut mod_it, 2, 2);
 
-    let a = module.encode();
+    let a = module.encode().expect("error!");
     let wat = wasmprinter::print_bytes(&a).unwrap();
     debug!("{}", wat);
 }

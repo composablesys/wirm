@@ -115,32 +115,35 @@ impl<'a> VisitCtxInner<'a> {
     }
 
     pub(crate) fn enter_comp_scope(&mut self, comp_id: ComponentId) {
-        let Some(scope_id) = self.registry.borrow().scope_of_comp(comp_id) else {
-            panic!("no scope found for component {:?}", comp_id);
-        };
+        let scope_id = self
+            .registry
+            .borrow()
+            .scope_of_comp(comp_id)
+            .expect("Internal error: no scope found for component");
         self.node_has_nested_scope
             .push(!self.scope_stack.stack.is_empty());
         self.scope_stack.enter_scope(scope_id);
     }
 
     pub(crate) fn exit_comp_scope(&mut self, comp_id: ComponentId) {
-        let Some(scope_id) = self.registry.borrow().scope_of_comp(comp_id) else {
-            panic!("no scope found for component {:?}", comp_id);
-        };
+        let scope_id = self
+            .registry
+            .borrow()
+            .scope_of_comp(comp_id)
+            .unwrap_or_else(|| panic!("Internal error: no scope found for component {comp_id:?}"));
         let exited_from = self.scope_stack.exit_scope();
         debug_assert_eq!(scope_id, exited_from);
     }
 
     pub(crate) fn comp_at(&self, depth: Depth) -> &ComponentId {
-        self.component_stack
-            .get(self.component_stack.len() - depth.val() - 1)
-            .unwrap_or_else(|| {
-                panic!(
-                    "couldn't find component at depth {}; this is the current component stack: {:?}",
-                    depth.val(),
-                    self.component_stack
-                )
-            })
+        let idx = self.component_stack.len() - depth.val() - 1;
+        self.component_stack.get(idx).unwrap_or_else(|| {
+            panic!(
+                "Internal error: couldn't find component at depth {}; stack: {:?}",
+                depth.val(),
+                self.component_stack
+            )
+        })
     }
 }
 

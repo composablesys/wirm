@@ -1,4 +1,5 @@
 use crate::ir::module::module_types::Types;
+use crate::ir::types;
 use crate::ir::types::{FuncInstrMode, InitExpr, InstrumentationMode, Tag};
 use crate::{DataType, Module};
 use std::collections::HashMap;
@@ -6,8 +7,8 @@ use std::fmt::{Display, Formatter};
 use wasmparser::{ExternalKind, Operator, TypeRef};
 
 impl<'a> Module<'a> {
-    pub fn pull_side_effects(&mut self) -> HashMap<InjectType, Vec<Injection<'a>>> {
-        self.encode_internal(true).1
+    pub fn pull_side_effects(&mut self) -> types::Result<HashMap<InjectType, Vec<Injection<'a>>>> {
+        Ok(self.encode_internal(true)?.1)
     }
 }
 

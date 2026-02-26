@@ -1,8 +1,10 @@
 //! Function Builder
 
+use crate::error::Error::InvalidOperation;
 use crate::ir::id::{FunctionID, ImportsID, LocalID, ModuleID, TypeID};
 use crate::ir::module::module_functions::{add_local, add_locals, LocalFunction};
 use crate::ir::module::{AsVec, Module};
+use crate::ir::types;
 use crate::ir::types::{Body, FuncInstrFlag, FuncInstrMode, Tag};
 use crate::ir::types::{DataType, InjectedInstrs};
 use crate::ir::types::{HasInjectTag, InstrumentationMode};
@@ -65,7 +67,11 @@ impl<'a> FunctionBuilder<'a> {
     /// Use this built function to replace an import in the module (turns into
     /// a local function). This action will redirect all calls to that import
     /// to call this new function.
-    pub fn replace_import_in_module(self, module: &mut Module<'a>, import_id: ImportsID) {
+    pub fn replace_import_in_module(
+        self,
+        module: &mut Module<'a>,
+        import_id: ImportsID,
+    ) -> types::Result<()> {
         self.replace_import_in_module_with_tag(module, import_id, Tag::default())
     }
 
@@ -77,35 +83,38 @@ impl<'a> FunctionBuilder<'a> {
         module: &mut Module<'a>,
         import_id: ImportsID,
         tag: Tag,
-    ) {
+    ) -> types::Result<()> {
         // add End as last instruction
         self.end();
 
         let err_msg = "Could not replace the specified import with this function,";
         let imp = module.imports.get(import_id);
+
         if let TypeRef::Func(imp_ty_id) = imp.ty {
-            if let Some(ty) = module.types.get(TypeID(imp_ty_id)) {
-                if *ty.params() == self.params && *ty.results() == self.results {
-                    let mut local_func = LocalFunction::new(
-                        TypeID(imp_ty_id),
-                        FunctionID(*import_id),
-                        self.body.clone(),
-                        self.params.len(),
-                        Some(tag),
-                    );
-                    local_func.body.name = Some(imp.name.to_string());
-                    module.convert_import_fn_to_local(import_id, local_func);
-                } else {
-                    panic!("{err_msg} types are not equivalent.")
-                }
-            } else {
+            let ty = module.types.get(TypeID(imp_ty_id)).unwrap_or_else(|| {
                 panic!(
-                    "{} could not find an associated type for the specified import ID: {:?}.",
+                    "Internal error: {} could not find an associated type for the specified import ID: {:?}.",
                     err_msg, import_id
                 )
-            }
+            });
+            debug_assert!(
+                *ty.params()? == self.params && *ty.results()? == self.results,
+                "{err_msg} types are not equivalent."
+            );
+            let mut local_func = LocalFunction::new(
+                TypeID(imp_ty_id),
+                FunctionID(*import_id),
+                self.body.clone(),
+                self.params.len(),
+                Some(tag),
+            );
+            local_func.body.name = Some(imp.name.to_string());
+            module.convert_import_fn_to_local(import_id, local_func);
+            Ok(())
         } else {
-            panic!("{err_msg} the specified import ID does not point to a function!")
+            Err(InvalidOperation(format!(
+                "{err_msg} the specified import ID does not point to a function!"
+            )))
         }
     }
 
@@ -225,7 +234,6 @@ impl AddLocal for FunctionModifier<'_, '_> {
 }
 
 impl<'b> Inject<'b> for FunctionModifier<'_, 'b> {
-    // TODO: refactor the inject the function to return a Result rather than panicking?
     fn inject(&mut self, instr: Operator<'b>) {
         if self.instr_flag.current_mode.is_some() {
             // inject at the function level
@@ -261,19 +269,19 @@ impl<'b> Instrumenter<'b> for FunctionModifier<'_, 'b> {
         self.instr_flag.finish_instr();
     }
     fn curr_instrument_mode(&self) -> Option<InstrumentationMode> {
-        if let Some(idx) = self.instr_idx {
-            self.body.instructions.current_mode(idx)
-        } else {
-            panic!("Instruction index not set");
-        }
+        let idx = self
+            .instr_idx
+            .expect("Internal error: Instruction index not set");
+        self.body.instructions.current_mode(idx)
     }
 
     fn set_instrument_mode_at(&mut self, mode: InstrumentationMode, loc: Location) {
-        if let Location::Module { instr_idx, .. } = loc {
-            self.instr_idx = Some(instr_idx);
-            self.body.instructions.set_current_mode(instr_idx, mode);
-        } else {
-            panic!("Should have gotten module location");
+        match loc {
+            Location::Module { instr_idx, .. } => {
+                self.instr_idx = Some(instr_idx);
+                self.body.instructions.set_current_mode(instr_idx, mode);
+            }
+            other => panic!("Internal error: Should have gotten module location, got: {other:?}"),
         }
     }
 
@@ -292,52 +300,58 @@ impl<'b> Instrumenter<'b> for FunctionModifier<'_, 'b> {
             self.instr_flag.instr_len()
         } else {
             // get at instruction level
-            if let Some(idx) = self.instr_idx {
-                self.body.instructions.instr_len(idx)
-            } else {
-                panic!("Instruction index not set");
-            }
+            let idx = self
+                .instr_idx
+                .expect("Internal error: Instruction index not set");
+            self.body.instructions.instr_len(idx)
         }
     }
 
     fn clear_instr_at(&mut self, loc: Location, mode: InstrumentationMode) {
-        if let Location::Module { instr_idx, .. } = loc {
-            self.body.instructions.clear_instr(instr_idx, mode);
-        } else {
-            panic!("Should have gotten module location");
+        match loc {
+            Location::Module { instr_idx, .. } => {
+                self.body.instructions.clear_instr(instr_idx, mode)
+            }
+            other => {
+                panic!("Internal error: clear_instr_at called with non-module location: {other:?}")
+            }
         }
     }
 
     fn add_instr_at(&mut self, loc: Location, instr: Operator<'b>) {
-        if let Location::Module { instr_idx, .. } = loc {
-            self.body.instructions.add_instr(instr_idx, instr);
-        } else {
-            panic!("Should have gotten module location");
-        }
+        match loc {
+            Location::Module { instr_idx, .. } => {
+                self.body.instructions.add_instr(instr_idx, instr)
+            }
+            other => {
+                panic!("Internal error: add_instr_at called with non-module location: {other:?}")
+            }
+        };
     }
 
     fn empty_alternate_at(&mut self, loc: Location) -> &mut Self {
-        if let Location::Module { instr_idx, .. } = loc {
-            self.body
+        match loc {
+            Location::Module { instr_idx, .. } => self
+                .body
                 .instructions
-                .set_alternate(instr_idx, InjectedInstrs::default());
-        } else {
-            panic!("Should have gotten Component Location and not Module Location!")
-        }
-
+                .set_alternate(instr_idx, InjectedInstrs::default()),
+            other => panic!(
+                "Internal error: empty_alternate_at called with non-module location: {other:?}"
+            ),
+        };
         self
     }
 
     fn empty_block_alt_at(&mut self, loc: Location) -> &mut Self {
-        if let Location::Module { instr_idx, .. } = loc {
-            self.body
+        match loc {
+            Location::Module { instr_idx, .. } => self
+                .body
                 .instructions
-                .set_block_alt(instr_idx, InjectedInstrs::default());
-            self.instr_flag.has_special_instr |= true;
-        } else {
-            panic!("Should have gotten Component Location and not Module Location!")
-        }
-
+                .set_block_alt(instr_idx, InjectedInstrs::default()),
+            other => panic!(
+                "Internal error: empty_block_alt_at called with non-module location: {other:?}"
+            ),
+        };
         self
     }
 
@@ -353,7 +367,6 @@ impl<'b> Instrumenter<'b> for FunctionModifier<'_, 'b> {
             let (Location::Component { instr_idx, .. } | Location::Module { instr_idx, .. }) = loc;
             self.body.instructions.append_to_tag(instr_idx, data);
         }
-
         self
     }
 }

@@ -16,12 +16,12 @@ fn roundtrip(filename: String, component: bool) {
     println!("original: {:?}", original);
     if component {
         let parser = Component::parse(&buff, false, false).expect("Unable to parse");
-        let result = parser.encode();
+        let result = parser.encode().expect("error");
         let out = wasmprinter::print_bytes(result.clone()).expect("couldn't translate Wasm to wat");
         assert_eq!(out, original);
     } else {
         let parser = Module::parse(&buff, false, false).expect("Unable to parse");
-        let result = parser.encode();
+        let result = parser.encode().expect("error during parse");
         let out = wasmprinter::print_bytes(result.clone()).expect("couldn't translate Wasm to wat");
         assert_eq!(out, original);
     }

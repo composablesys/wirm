@@ -125,7 +125,7 @@ fn iterator_inject_i32_before() {
     }
     comp_it.reset();
 
-    let result = component.encode();
+    let result = component.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -183,7 +183,7 @@ fn iterator_inject_all_variations() {
             panic!("Should've gotten Component Location!");
         }
     }
-    let result = component.encode();
+    let result = component.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -226,7 +226,7 @@ fn test_inject_locals() {
         is_first = false;
     }
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -253,7 +253,7 @@ fn test_block_alt_one_func_nested_block() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -278,7 +278,7 @@ fn test_block_alt_one_func_remove_else() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -303,7 +303,7 @@ fn test_block_alt_one_func_replace_else() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -328,7 +328,7 @@ fn test_block_alt_one_func_two_blocks() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -353,7 +353,7 @@ fn test_block_alt_remove_else_nested_if() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -387,7 +387,7 @@ fn test_block_alt_remove_else_with_instrumented_after_if() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -421,7 +421,7 @@ fn test_block_alt_remove_else_with_instrumented_exit_if() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -446,7 +446,7 @@ fn test_block_alt_remove_entire_block() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -471,7 +471,7 @@ fn test_block_alt_remove_if_with_else() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -496,7 +496,7 @@ fn test_block_alt_remove_nested_block() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -521,7 +521,7 @@ fn test_block_alt_replace_else_nested_if() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -550,7 +550,7 @@ fn test_block_alt_replace_if_with_else() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -575,7 +575,7 @@ fn test_block_alt_replace_nested_block() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -610,7 +610,7 @@ fn test_block_entry_one_func_nested_block() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -643,7 +643,7 @@ fn test_block_entry_one_func_one_block() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -680,7 +680,7 @@ fn test_block_entry_one_func_two_blocks() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -722,7 +722,7 @@ fn test_block_entry_two_funcs_nested_block() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -764,7 +764,7 @@ fn test_block_entry_two_funcs_one_block() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -789,7 +789,7 @@ fn test_block_entry_two_funcs_two_blocks() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -823,7 +823,7 @@ fn test_block_exit_one_func_nested_block() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -855,7 +855,7 @@ fn test_block_exit_one_func_one_block() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -892,7 +892,7 @@ fn test_block_exit_one_func_two_blocks() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -934,7 +934,7 @@ fn test_block_exit_two_funcs_nested_block() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -976,7 +976,7 @@ fn test_block_exit_two_funcs_one_block() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1001,7 +1001,7 @@ fn test_block_exit_two_funcs_two_blocks() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1024,7 +1024,7 @@ fn test_fn_entry_one_func() {
 
     inject_function_entry(&mut mod_it, fn_entry_body);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1045,7 +1045,7 @@ fn test_fn_entry_two_funcs() {
 
     inject_function_entry(&mut mod_it, fn_entry_body);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1068,7 +1068,7 @@ fn test_fn_exit_one_func() {
 
     inject_function_exit(&mut mod_it, fn_entry_body);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1089,7 +1089,7 @@ fn test_fn_exit_two_funcs() {
 
     inject_function_exit(&mut mod_it, fn_entry_body);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1147,7 +1147,7 @@ fn test_semantic_after_complex_mult_nested_diff_opcodes() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1179,7 +1179,7 @@ fn test_semantic_after_medium_1br() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1211,7 +1211,7 @@ fn test_semantic_after_medium_1br_if() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1243,7 +1243,7 @@ fn test_semantic_after_medium_1br_table() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1275,7 +1275,7 @@ fn test_semantic_after_medium_2br() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1307,7 +1307,7 @@ fn test_semantic_after_medium_2br_if() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1339,7 +1339,7 @@ fn test_semantic_after_medium_2br_table() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1371,7 +1371,7 @@ fn test_semantic_after_medium_blocks() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1418,7 +1418,7 @@ fn test_semantic_after_medium_ifelse() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1460,7 +1460,7 @@ fn test_semantic_after_medium_ifs() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1492,7 +1492,7 @@ fn test_semantic_after_medium_multiple() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1523,7 +1523,7 @@ fn test_semantic_after_simple_1br() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1548,7 +1548,7 @@ fn test_semantic_after_simple_1br_if() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1573,7 +1573,7 @@ fn test_semantic_after_simple_1br_table() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1605,7 +1605,7 @@ fn test_semantic_after_simple_1if() {
     ];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1630,7 +1630,7 @@ fn test_semantic_after_simple_2br() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1655,7 +1655,7 @@ fn test_semantic_after_simple_2br_if() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1680,7 +1680,7 @@ fn test_semantic_after_simple_2br_table() {
     )];
     run_block_injection(&mut mod_it, &ops_of_interest);
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(
@@ -1699,7 +1699,7 @@ fn add_imports_when_has_start_func() {
     module.add_import_func("ima".to_string(), "new_import".to_string(), TypeID(0));
     module.add_import_func("ya_dont".to_string(), "say".to_string(), TypeID(0));
 
-    let result = module.encode();
+    let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     if let Err(e) = check_instrumentation_encoding(&out, file) {
         error!(

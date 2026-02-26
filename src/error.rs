@@ -3,10 +3,15 @@ use std::ops::Range;
 use wasmparser::BinaryReaderError;
 
 /// Error for parsing
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 #[allow(clippy::enum_variant_names)]
 pub enum Error {
+    IO(std::io::Error),
+    UnknownId(String),
+    InvalidOperation(String),
+    InstrumentationError(String),
     BinaryReaderError(BinaryReaderError),
+    Multiple(Vec<Self>),
     UnknownVersion(u32),
     UnknownSection {
         section_id: u8,
@@ -44,8 +49,27 @@ impl From<BinaryReaderError> for Error {
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Error::IO(err) => {
+                write!(f, "IO error: {err}")
+            }
+            Error::UnknownId(err) => {
+                write!(f, "Unknown id: {err}")
+            }
+            Error::InvalidOperation(err) => {
+                write!(f, "Invalid operation: {err}")
+            }
+            Error::InstrumentationError(err) => {
+                write!(f, "Instrumentation error: {err}")
+            }
             Error::BinaryReaderError(err) => {
                 write!(f, "Error from wasmparser: {}", err)
+            }
+            Error::Multiple(errs) => {
+                write!(f, "Multiple errors:")?;
+                for err in errs {
+                    write!(f, "\n\t{err}")?;
+                }
+                writeln!(f)
             }
             Error::UnknownVersion(ver) => {
                 write!(f, "Unknown version: {}", ver)

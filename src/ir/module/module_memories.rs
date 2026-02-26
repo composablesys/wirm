@@ -1,5 +1,7 @@
+use crate::error::Error::InvalidOperation;
 use crate::ir::id::{ImportsID, MemoryID};
 use crate::ir::module::{AsVec, GetID, LocalOrImport};
+use crate::ir::types;
 use crate::ir::types::{InjectTag, Tag, TagUtils};
 use wasmparser::MemoryType;
 
@@ -212,12 +214,12 @@ impl Memory {
     }
 
     /// Unwrap a local memory. If it is an imported memory, it panics.
-    pub fn unwrap_local(&self) -> &LocalMemory {
+    pub fn unwrap_local(&self) -> types::Result<&LocalMemory> {
         self.kind.unwrap_local()
     }
 
     /// Unwrap a local memory as mutable. If it is an imported memory, it panics.
-    pub fn unwrap_local_mut(&mut self) -> &mut LocalMemory {
+    pub fn unwrap_local_mut(&mut self) -> types::Result<&mut LocalMemory> {
         self.kind.unwrap_local_mut()
     }
 
@@ -234,18 +236,22 @@ pub enum MemKind {
 }
 
 impl MemKind {
-    /// Unwrap a local memory as a read-only reference. If it is an imported memory, it panics.
-    pub fn unwrap_local(&self) -> &LocalMemory {
+    /// Unwrap a local memory as a read-only reference. If it is an imported memory, it errors.
+    pub fn unwrap_local(&self) -> types::Result<&LocalMemory> {
         match &self {
-            MemKind::Local(l) => l,
-            MemKind::Import(_) => panic!("Attempting to unwrap an imported memory as a local!!"),
+            MemKind::Local(l) => Ok(l),
+            MemKind::Import(_) => Err(InvalidOperation(
+                "Attempting to unwrap an imported memory as a local!!".to_string(),
+            )),
         }
     }
-    /// Unwrap a local memory as a mutable reference. If it is an imported memory, it panics.
-    pub fn unwrap_local_mut(&mut self) -> &mut LocalMemory {
+    /// Unwrap a local memory as a mutable reference. If it is an imported memory, it errors.
+    pub fn unwrap_local_mut(&mut self) -> types::Result<&mut LocalMemory> {
         match self {
-            MemKind::Local(l) => l,
-            MemKind::Import(_) => panic!("Attempting to unwrap an imported memory as a local!!"),
+            MemKind::Local(l) => Ok(l),
+            MemKind::Import(_) => Err(InvalidOperation(
+                "Attempting to unwrap an imported memory as a local!!".to_string(),
+            )),
         }
     }
 }

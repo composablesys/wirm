@@ -1,10 +1,13 @@
 use crate::encode::component::assign::ActualIds;
 use crate::encode::component::fix_indices::FixIndices;
+use crate::error::Error;
+use crate::error::Error::Multiple;
 use crate::ir::component::idx_spaces::Space;
 use crate::ir::component::visitor::driver::{drive_event, VisitEvent};
 use crate::ir::component::visitor::utils::VisitCtxInner;
 use crate::ir::component::visitor::{ComponentVisitor, ItemKind, VisitCtx};
 use crate::ir::component::Names;
+use crate::ir::types;
 use crate::ir::types::CustomSection;
 use crate::{Component, Module};
 use wasm_encoder::reencode::{Reencode, ReencodeComponent, RoundtripReencoder};
@@ -24,16 +27,19 @@ pub(crate) fn encode_internal<'ir>(
     ids: &ActualIds,
     ctx: &mut VisitCtx<'ir>,
     events: &Vec<VisitEvent<'ir>>,
-) -> wasm_encoder::Component {
+) -> types::Result<wasm_encoder::Component> {
     let mut encoder = Encoder::new(ids);
     for event in events {
         drive_event(event, &mut encoder, ctx);
+    }
+    if !encoder.errors.is_empty() {
+        return Err(Multiple(encoder.errors));
     }
 
     let encoded_comp = encoder.comp_stack.pop().unwrap().component;
     debug_assert!(encoder.comp_stack.is_empty());
 
-    encoded_comp
+    Ok(encoded_comp)
 }
 
 struct Encoder<'a> {
@@ -44,6 +50,7 @@ struct Encoder<'a> {
 
     // recursive def items!
     type_stack: Vec<TypeFrame>,
+    errors: Vec<Error>,
 }
 impl<'a> Encoder<'a> {
     pub fn new(ids: &'a ActualIds) -> Encoder<'a> {
@@ -53,6 +60,7 @@ impl<'a> Encoder<'a> {
             comp_stack: vec![],
 
             type_stack: vec![],
+            errors: vec![],
         }
     }
     fn curr_comp_mut(&mut self) -> &mut wasm_encoder::Component {
@@ -180,7 +188,9 @@ impl ComponentVisitor<'_> for Encoder<'_> {
             .section(&NestedComponentSection(nested_comp));
     }
     fn visit_module(&mut self, _: &VisitCtx<'_>, _id: u32, module: &Module<'_>) {
-        encode_module_section(module, self.curr_comp_mut());
+        if let Err(e) = encode_module_section(module, self.curr_comp_mut()) {
+            self.errors.push(e);
+        }
     }
     fn enter_comp_type(&mut self, cx: &VisitCtx<'_>, _id: u32, ty: &ComponentType<'_>) {
         // always make sure the component type section exists!
@@ -482,18 +492,18 @@ impl ComponentVisitor<'_> for Encoder<'_> {
             &cx.inner,
         );
     }
-    fn visit_start_section(&mut self, cx: &VisitCtx<'_>, start: &ComponentStartFunction) {
-        encode_start_section(
-            start,
+    fn visit_custom_section(&mut self, cx: &VisitCtx<'_>, sect: &CustomSection<'_>) {
+        encode_custom_section(
+            sect,
             &mut self.comp_stack.last_mut().unwrap().component,
             &mut self.reencode,
             self.ids,
             &cx.inner,
         );
     }
-    fn visit_custom_section(&mut self, cx: &VisitCtx<'_>, sect: &CustomSection<'_>) {
-        encode_custom_section(
-            sect,
+    fn visit_start_section(&mut self, cx: &VisitCtx<'_>, start: &ComponentStartFunction) {
+        encode_start_section(
+            start,
             &mut self.comp_stack.last_mut().unwrap().component,
             &mut self.reencode,
             self.ids,
@@ -597,8 +607,12 @@ fn encode_name_section(names: &Names, space: Space, cx: &VisitCtx, ids: &ActualI
     enc_names
 }
 
-fn encode_module_section(module: &Module, component: &mut wasm_encoder::Component) {
-    component.section(&ModuleSection(&module.encode_internal(false).0));
+fn encode_module_section(
+    module: &Module,
+    component: &mut wasm_encoder::Component,
+) -> types::Result<()> {
+    component.section(&ModuleSection(&module.encode_internal(false)?.0));
+    Ok(())
 }
 fn encode_comp_inst_section(
     instance: &ComponentInstance,
@@ -1348,9 +1362,12 @@ pub fn into_wasm_encoder_recgroup(
         .types()
         .map(|subty| {
             let fixed_subty = subty.fix(ids, cx);
-            reencode
-                .sub_type(fixed_subty)
-                .unwrap_or_else(|e| panic!("Could not encode type as subtype: {:?}\n\t{e}", subty))
+            reencode.sub_type(fixed_subty).unwrap_or_else(|e| {
+                panic!(
+                    "Internal error: Could not encode type as subtype: {:?}\n\t{e}",
+                    subty
+                )
+            })
         })
         .collect::<Vec<_>>();
 
@@ -1374,7 +1391,10 @@ pub(crate) fn do_reencode<I, O>(
 ) -> O {
     match reencode(inst, i) {
         Ok(o) => o,
-        Err(e) => panic!("Couldn't encode {} due to error: {}", msg, e),
+        Err(e) => panic!(
+            "Internal error: Couldn't encode {} due to error: {}",
+            msg, e
+        ),
     }
 }
 

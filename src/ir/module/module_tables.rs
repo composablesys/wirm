@@ -1,6 +1,8 @@
 //! Intermediate representation of the Tables in a Module
 
+use crate::error::Error::{InvalidOperation, UnknownId};
 use crate::ir::id::TableID;
+use crate::ir::types;
 use crate::ir::types::{ElementItems, ElementKind, InjectTag, Tag, TagUtils};
 use wasmparser::{RefType, TableType};
 
@@ -40,20 +42,19 @@ impl<'a> ModuleTables<'a> {
     /// Inspired from [walrus' implementation]
     ///
     /// [walrus' implementation]: https://docs.rs/walrus/latest/walrus/struct.ModuleTables.html#method.main_function_table
-    pub fn main_function(&self) -> Option<TableID> {
+    pub fn main_function(&self) -> types::Result<Option<TableID>> {
         let mut tables = self
             .tables
             .iter()
             .enumerate()
             .filter(|(_, t)| t.ty.element_type == RefType::FUNCREF);
-        let id = match tables.next() {
-            Some((index, _)) => Some(TableID(index as u32)),
-            None => return None,
-        };
+        let id = tables.next().map(|(index, _)| TableID(index as u32));
         if tables.next().is_some() {
-            panic!("module contains more than one function table");
+            return Err(InvalidOperation(
+                "module contains more than one function table".to_string(),
+            ));
         }
-        id
+        Ok(id)
     }
 
     /// Get a table
@@ -65,11 +66,11 @@ impl<'a> ModuleTables<'a> {
     }
 
     /// Get a mutable reference to a table
-    pub fn get_mut(&mut self, table_id: TableID) -> &mut TableType {
+    pub fn get_mut(&mut self, table_id: TableID) -> types::Result<&mut TableType> {
         if *table_id < self.tables.len() as u32 {
-            return &mut self.tables[*table_id as usize].ty;
+            return Ok(&mut self.tables[*table_id as usize].ty);
         }
-        panic!("Invalid Table ID")
+        Err(UnknownId("Invalid Table ID".to_string()))
     }
 }
 
