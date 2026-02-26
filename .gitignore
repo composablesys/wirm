@@ -1,6 +1,6 @@
 target
 .idea/
-*.lock
+fac_wirm/Cargo.lock
 .vscode/
 .DS_Store
 **/out.**

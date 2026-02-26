@@ -1,26 +1,41 @@
 name: Publish
 
 on:
-  pull_request:
-    types:
-      - closed
-    branches:
-      - main
+  push:
+    tags:
+      - "v*"
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   publish:
+    name: Publish to crates.io
     runs-on: ubuntu-latest
-    if: startsWith(github.event.pull_request.head.ref, 'release-v')
+
     steps:
-      - name: cargo login
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Login to crates.io
         run: cargo login ${{ secrets.WIRM_API_TOKEN }}
 
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - name: Validate publish
+        run: cargo publish --locked --dry-run
 
-      - name: Publish Update
-        run: cargo publish
+      - name: Publish
+        run: cargo publish --locked
+
+  release:
+    name: Create GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

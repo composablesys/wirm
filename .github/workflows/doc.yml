@@ -1,30 +1,45 @@
 name: Deploy
+
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # To push a branch 
-      pages: write  # To push to a GitHub Pages site
-      id-token: write # To update the deployment status
+      contents: write   # To push a branch
+      pages: write      # To push to GitHub Pages
+      id-token: write   # To update the deployment status
+
     steps:
+      # Checkout repo
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Build Doc
-        run: |
-          rustup toolchain install nightly
-          RUSTDOCFLAGS="--enable-index-page -Z unstable-options" cargo +nightly doc --no-deps
-      - name: Setup Pages
-        uses: actions/configure-pages@v4
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+
+      # Cache Rust crates to speed up builds
+      - uses: actions/cache@v3
         with:
-          # Upload entire repository
-          path: 'target/doc'
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      # Setup Rust nightly (or use rust-toolchain.toml)
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          profile: minimal
+          override: true
+
+      # Build documentation
+      - name: Build docs
+        env:
+          RUSTDOCFLAGS: "--enable-index-page -Z unstable-options"
+        run: cargo +nightly doc --no-deps
+
+      # Deploy to GitHub Pages
+      - uses: actions/deploy-pages@v4
+        with:
+          artifact-path: target/doc
