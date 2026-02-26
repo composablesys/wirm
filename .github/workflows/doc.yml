@@ -1,3 +1,4 @@
+# Build and deploy Rust docs to GitHub Pages
 name: Deploy
 
 on:
@@ -40,6 +41,11 @@ jobs:
         run: cargo +nightly doc --no-deps
 
       # Deploy to GitHub Pages
-      - uses: actions/deploy-pages@v4
+
+      - name: Upload pages artifact
+        uses: actions/upload-pages-artifact@v3
         with:
-          artifact-path: target/doc
+          path: target/doc
+
+      - name: Deploy to GitHub Pages
+        uses: actions/deploy-pages@v4
