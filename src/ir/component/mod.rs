@@ -9,7 +9,6 @@ use crate::ir::component::canons::Canons;
 use crate::ir::component::idx_spaces::{
     IndexSpaceOf, IndexStore, ScopeId, Space, SpaceSubtype, StoreHandle,
 };
-use crate::ir::component::visitor::ResolvedItem;
 use crate::ir::component::refs::{GetItemRef, GetTypeRefs, IndexedRef};
 use crate::ir::component::scopes::{IndexScopeRegistry, RegistryHandle};
 use crate::ir::component::section::{
@@ -17,6 +16,7 @@ use crate::ir::component::section::{
     populate_space_for_comp_ty, populate_space_for_core_ty, ComponentSection,
 };
 use crate::ir::component::types::ComponentTypes;
+use crate::ir::component::visitor::ResolvedItem;
 use crate::ir::helpers::{
     print_alias, print_component_export, print_component_import, print_component_type,
     print_core_type,
@@ -838,14 +838,14 @@ impl<'a> Component<'a> {
             SpaceSubtype::Main => match ref_.space {
                 Space::Comp => ResolvedItem::Component(ref_.index, &self.components[idx]),
                 Space::CompType => {
-                    ResolvedItem::CompType(ref_.index, &*self.component_types.items[idx])
+                    ResolvedItem::CompType(ref_.index, &self.component_types.items[idx])
                 }
                 Space::CompInst => {
                     ResolvedItem::CompInst(ref_.index, &self.component_instance[idx])
                 }
                 Space::CoreInst => ResolvedItem::CoreInst(ref_.index, &self.instances[idx]),
                 Space::CoreModule => ResolvedItem::Module(ref_.index, &self.modules[idx]),
-                Space::CoreType => ResolvedItem::CoreType(ref_.index, &*self.core_types[idx]),
+                Space::CoreType => ResolvedItem::CoreType(ref_.index, &self.core_types[idx]),
                 Space::CompFunc | Space::CoreFunc => {
                     ResolvedItem::Func(ref_.index, &self.canons.items[idx])
                 }

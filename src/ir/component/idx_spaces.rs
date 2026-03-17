@@ -48,20 +48,6 @@ impl IndexStore {
     ) -> (SpaceSubtype, usize, Option<usize>) {
         self.get(id).index_from_assumed_id_no_cache(r)
     }
-    /// Lookup where to find an item in the component IR based on its assumed ID
-    /// (the ID given to the item at parse and IR-injection time). The found result will
-    /// then be cached for faster future lookups.
-    /// Returns:
-    /// - .0,SpaceSubtype: the space vector to look up this index in
-    /// - .1,usize: the index of the vector in the IR to find the item
-    /// - .2,Option<usize>: the index within the node to find the item (as in pointing to a certain subtype in a recgroup)
-    pub fn index_from_assumed_id(
-        &mut self,
-        id: &ScopeId,
-        r: &IndexedRef,
-    ) -> (SpaceSubtype, usize, Option<usize>) {
-        self.get_mut(id).index_from_assumed_id(r)
-    }
     /// Give an assumed ID for some IR item (done at parse and IR-injection time).
     pub fn assign_assumed_id(
         &mut self,

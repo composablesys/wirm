@@ -138,7 +138,9 @@ fn concretize_comp_type<'a>(
     match ty {
         ComponentType::Instance(decls) => {
             let cx = comp.enter_type_scope(ty);
-            Some(ConcreteType::Instance(concretize_instance_decls(comp, decls, &cx)))
+            Some(ConcreteType::Instance(concretize_instance_decls(
+                comp, decls, &cx,
+            )))
         }
         ComponentType::Func(ft) => {
             let cx = comp.enter_type_scope(ty);
@@ -185,14 +187,23 @@ fn resolve_and_concretize_func<'a>(
     cx: &ScopedVisitCtx<'a>,
 ) -> Option<ConcreteFuncType<'a>> {
     match resolved {
-        ResolvedItem::CompType(_, ComponentType::Func(ft)) => Some(concretize_func_ty(ft, comp, cx)),
+        ResolvedItem::CompType(_, ComponentType::Func(ft)) => {
+            Some(concretize_func_ty(ft, comp, cx))
+        }
         ResolvedItem::Alias(_, alias @ ComponentAlias::Outer { .. }) => {
             resolve_and_concretize_func(cx.resolve(&alias.get_item_ref().ref_), comp, cx)
         }
         // `InstanceExport` aliases carry the instance index relative to the owning component's
         // instance namespace.  Resolve through the instantiated component's export instead of
         // calling `cx.resolve()`, which would incorrectly dispatch depth=0 into the type body.
-        ResolvedItem::Alias(_, ComponentAlias::InstanceExport { instance_index, name, .. }) => {
+        ResolvedItem::Alias(
+            _,
+            ComponentAlias::InstanceExport {
+                instance_index,
+                name,
+                ..
+            },
+        ) => {
             let nested_comp = resolve_instantiated_comp(comp, *instance_index)?;
             match nested_comp.concretize_export(name)? {
                 ConcreteType::Func(ft) => Some(ft),
@@ -214,7 +225,10 @@ fn concretize_func_ty<'a>(
             .iter()
             .map(|(name, ty)| (*name, concretize_val_type(ty, comp, cx)))
             .collect(),
-        result: ft.result.as_ref().map(|ty| concretize_val_type(ty, comp, cx)),
+        result: ft
+            .result
+            .as_ref()
+            .map(|ty| concretize_val_type(ty, comp, cx)),
     }
 }
 
@@ -247,13 +261,22 @@ fn concretize_from_resolved<'a>(
         }
         // Same fix as in `resolve_and_concretize_func`: bypass `cx.resolve()` for InstanceExport
         // and look up the type directly through the instantiated component's export chain.
-        ResolvedItem::Alias(_, ComponentAlias::InstanceExport { instance_index, name, .. }) => {
+        ResolvedItem::Alias(
+            _,
+            ComponentAlias::InstanceExport {
+                instance_index,
+                name,
+                ..
+            },
+        ) => {
             let Some(nested_comp) = resolve_instantiated_comp(comp, *instance_index) else {
                 return ConcreteValType::Resource;
             };
             match nested_comp.concretize_export(name) {
                 Some(ConcreteType::Resource) | None => ConcreteValType::Resource,
-                Some(ConcreteType::Instance(_) | ConcreteType::Func(_)) => ConcreteValType::Resource,
+                Some(ConcreteType::Instance(_) | ConcreteType::Func(_)) => {
+                    ConcreteValType::Resource
+                }
             }
         }
         ResolvedItem::Import(_, import) => {
@@ -301,34 +324,48 @@ fn concretize_defined_type<'a>(
         ComponentDefinedType::Variant(cases) => ConcreteValType::Variant(
             cases
                 .iter()
-                .map(|c| (c.name, c.ty.as_ref().map(|t| Box::new(concretize_val_type(t, comp, cx)))))
+                .map(|c| {
+                    (
+                        c.name,
+                        c.ty.as_ref()
+                            .map(|t| Box::new(concretize_val_type(t, comp, cx))),
+                    )
+                })
                 .collect(),
         ),
         ComponentDefinedType::List(ty) => {
             ConcreteValType::List(Box::new(concretize_val_type(ty, comp, cx)))
         }
         ComponentDefinedType::Tuple(types) => ConcreteValType::Tuple(
-            types.iter().map(|t| concretize_val_type(t, comp, cx)).collect(),
+            types
+                .iter()
+                .map(|t| concretize_val_type(t, comp, cx))
+                .collect(),
         ),
         ComponentDefinedType::Option(ty) => {
             ConcreteValType::Option(Box::new(concretize_val_type(ty, comp, cx)))
         }
         ComponentDefinedType::Result { ok, err } => ConcreteValType::Result {
-            ok: ok.as_ref().map(|t| Box::new(concretize_val_type(t, comp, cx))),
-            err: err.as_ref().map(|t| Box::new(concretize_val_type(t, comp, cx))),
+            ok: ok
+                .as_ref()
+                .map(|t| Box::new(concretize_val_type(t, comp, cx))),
+            err: err
+                .as_ref()
+                .map(|t| Box::new(concretize_val_type(t, comp, cx))),
         },
-        ComponentDefinedType::Flags(names) => ConcreteValType::Flags(names.iter().copied().collect()),
-        ComponentDefinedType::Enum(names) => ConcreteValType::Enum(names.iter().copied().collect()),
+        ComponentDefinedType::Flags(names) => ConcreteValType::Flags(names.to_vec()),
+        ComponentDefinedType::Enum(names) => ConcreteValType::Enum(names.to_vec()),
         ComponentDefinedType::Map(key, val) => ConcreteValType::Map(
             Box::new(concretize_val_type(key, comp, cx)),
             Box::new(concretize_val_type(val, comp, cx)),
         ),
-        ComponentDefinedType::FixedSizeList(elem, size) => ConcreteValType::FixedSizeList(
-            Box::new(concretize_val_type(elem, comp, cx)),
-            *size as u32,
-        ),
+        ComponentDefinedType::FixedSizeList(elem, size) => {
+            ConcreteValType::FixedSizeList(Box::new(concretize_val_type(elem, comp, cx)), *size)
+        }
         ComponentDefinedType::Own(_) | ComponentDefinedType::Borrow(_) => ConcreteValType::Resource,
-        ComponentDefinedType::Future(_) | ComponentDefinedType::Stream(_) => ConcreteValType::AsyncHandle,
+        ComponentDefinedType::Future(_) | ComponentDefinedType::Stream(_) => {
+            ConcreteValType::AsyncHandle
+        }
     }
 }
 
