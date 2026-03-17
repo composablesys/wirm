@@ -323,48 +323,16 @@ impl<'a> VisitCtxInner<'a> {
     /// `&'a Component<'a>` references.  Both lifetime parameters are therefore `'a` — the
     /// result does **not** borrow from `self` and outlives any temporary `VisitCtxInner`.
     pub fn resolve(&self, r: &IndexedRef) -> ResolvedItem<'a, 'a> {
-        let (vec, idx, subidx) = self.index_from_assumed_id_no_cache(r);
+        let (subtype, idx, subidx) = self.index_from_assumed_id_no_cache(r);
         if r.space != Space::CoreType {
             assert!(
                 subidx.is_none(),
                 "only core types (with rec groups) should ever have subvec indices!"
             );
         }
-
         let comp_id = self.comp_at(r.depth);
         let referenced_comp = self.comp_store.get(comp_id);
-
-        let space = r.space;
-        match vec {
-            SpaceSubtype::Main => match space {
-                Space::Comp => ResolvedItem::Component(r.index, &referenced_comp.components[idx]),
-                Space::CompType => {
-                    ResolvedItem::CompType(r.index, &referenced_comp.component_types.items[idx])
-                }
-                Space::CompInst => {
-                    ResolvedItem::CompInst(r.index, &referenced_comp.component_instance[idx])
-                }
-                Space::CoreInst => ResolvedItem::CoreInst(r.index, &referenced_comp.instances[idx]),
-                Space::CoreModule => ResolvedItem::Module(r.index, &referenced_comp.modules[idx]),
-                Space::CoreType => {
-                    ResolvedItem::CoreType(r.index, &referenced_comp.core_types[idx])
-                }
-                Space::CompFunc | Space::CoreFunc => {
-                    ResolvedItem::Func(r.index, &referenced_comp.canons.items[idx])
-                }
-                Space::CompVal
-                | Space::CoreMemory
-                | Space::CoreTable
-                | Space::CoreGlobal
-                | Space::CoreTag
-                | Space::NA => unreachable!(
-                    "This spaces don't exist in a main vector on the component IR: {vec:?}"
-                ),
-            },
-            SpaceSubtype::Export => ResolvedItem::Export(r.index, &referenced_comp.exports[idx]),
-            SpaceSubtype::Import => ResolvedItem::Import(r.index, &referenced_comp.imports[idx]),
-            SpaceSubtype::Alias => ResolvedItem::Alias(r.index, &referenced_comp.alias.items[idx]),
-        }
+        referenced_comp.item_at(r, subtype, idx)
     }
     /// Resolve a ref whose depth is current against a type-body declaration subvec.
     ///

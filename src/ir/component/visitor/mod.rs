@@ -584,6 +584,24 @@ impl<'a> ScopedVisitCtx<'a> {
     }
 }
 
+impl<'a> Component<'a> {
+    /// Create a [`ScopedVisitCtx`] rooted at this component for resolving refs inside a
+    /// component-type body that **belongs to this component**.
+    ///
+    /// Used internally by [`Component::concretize_import`] and [`Component::concretize_export`]
+    /// to ensure outer-alias refs (e.g. `alias outer 1 …`) inside a type body resolve against
+    /// this component's own index space rather than a walk-time context.
+    pub(crate) fn enter_type_scope(&'a self, ty: &'a ComponentType<'a>) -> ScopedVisitCtx<'a> {
+        let mut inner = VisitCtxInner::new(self);
+        inner.push_component(self);
+        inner.maybe_enter_scope(ty);
+        ScopedVisitCtx {
+            inner,
+            ty: ScopedTy::Comp(ty),
+        }
+    }
+}
+
 /// Context provided during component traversal.
 ///
 /// `VisitCtx` allows resolution of referenced indices (such as type,

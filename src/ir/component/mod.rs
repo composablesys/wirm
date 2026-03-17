@@ -9,7 +9,8 @@ use crate::ir::component::canons::Canons;
 use crate::ir::component::idx_spaces::{
     IndexSpaceOf, IndexStore, ScopeId, Space, SpaceSubtype, StoreHandle,
 };
-use crate::ir::component::refs::{GetItemRef, GetTypeRefs};
+use crate::ir::component::visitor::ResolvedItem;
+use crate::ir::component::refs::{GetItemRef, GetTypeRefs, IndexedRef};
 use crate::ir::component::scopes::{IndexScopeRegistry, RegistryHandle};
 use crate::ir::component::section::{
     get_sections_for_comp_ty, get_sections_for_core_ty_and_assign_top_level_ids,
@@ -40,10 +41,13 @@ use wasmparser::{
 
 mod alias;
 mod canons;
+pub mod concrete;
 pub(crate) mod idx_spaces;
 pub mod refs;
 pub(crate) mod scopes;
 pub(crate) mod section;
+#[cfg(test)]
+mod tests;
 mod types;
 pub mod visitor;
 
@@ -819,34 +823,102 @@ impl<'a> Component<'a> {
         encode(self)
     }
 
+    /// Map an already-resolved `(subtype, idx)` pair to a [`ResolvedItem`].
+    ///
+    /// This is the shared core of both [`Component::resolve`] and
+    /// [`VisitCtxInner::resolve`].  Both callers look up the `(SpaceSubtype, idx)` from
+    /// the appropriate [`IndexStore`] scope, then delegate the actual IR-field lookup here.
+    pub(crate) fn item_at<'s>(
+        &'s self,
+        ref_: &IndexedRef,
+        subtype: SpaceSubtype,
+        idx: usize,
+    ) -> ResolvedItem<'s, 'a> {
+        match subtype {
+            SpaceSubtype::Main => match ref_.space {
+                Space::Comp => ResolvedItem::Component(ref_.index, &self.components[idx]),
+                Space::CompType => {
+                    ResolvedItem::CompType(ref_.index, &*self.component_types.items[idx])
+                }
+                Space::CompInst => {
+                    ResolvedItem::CompInst(ref_.index, &self.component_instance[idx])
+                }
+                Space::CoreInst => ResolvedItem::CoreInst(ref_.index, &self.instances[idx]),
+                Space::CoreModule => ResolvedItem::Module(ref_.index, &self.modules[idx]),
+                Space::CoreType => ResolvedItem::CoreType(ref_.index, &*self.core_types[idx]),
+                Space::CompFunc | Space::CoreFunc => {
+                    ResolvedItem::Func(ref_.index, &self.canons.items[idx])
+                }
+                Space::CompVal
+                | Space::CoreMemory
+                | Space::CoreTable
+                | Space::CoreGlobal
+                | Space::CoreTag
+                | Space::NA => unreachable!(
+                    "space {:?} has no main vector on the component IR",
+                    ref_.space
+                ),
+            },
+            SpaceSubtype::Export => ResolvedItem::Export(ref_.index, &self.exports[idx]),
+            SpaceSubtype::Import => ResolvedItem::Import(ref_.index, &self.imports[idx]),
+            SpaceSubtype::Alias => ResolvedItem::Alias(ref_.index, &self.alias.items[idx]),
+        }
+    }
+
+    /// Resolve a reference that is local to this component's own index space.
+    ///
+    /// The `ref_` must have `depth == 0` (i.e. it refers to an item defined directly
+    /// within this component, not to an outer scope).  This is the typical case for
+    /// refs found in a component's own exports, imports, types, etc.
+    ///
+    /// This uses the index space that was built at parse time — no walk is required.
+    /// Because all nested components share the same [`IndexStore`] and scope registry
+    /// (via `Rc`), this method works correctly on any component in the tree, not just the root.
+    pub fn resolve<'s>(&'s self, ref_: &IndexedRef) -> ResolvedItem<'s, 'a> {
+        let store = self.index_store.borrow();
+        let (subtype, idx, _subvec_idx) =
+            store.index_from_assumed_id_no_cache(&self.space_id, ref_);
+        drop(store);
+        self.item_at(ref_, subtype, idx)
+    }
+
+    /// Resolve the item referred to by the named import, using this component's own index space.
+    ///
+    /// Finds the first import whose name matches `name`, then resolves the type ref it carries
+    /// (e.g. `ComponentTypeRef::Instance(idx)`) into a [`ResolvedItem`].
+    ///
+    /// Returns `None` if no import with that name exists or if the import carries no type ref.
+    pub fn resolve_named_import<'s>(&'s self, name: &str) -> Option<ResolvedItem<'s, 'a>> {
+        let import = self.imports.iter().find(|i| i.name.0 == name)?;
+        let type_ref = import.get_type_refs().into_iter().next()?;
+        Some(self.resolve(&type_ref.ref_))
+    }
+
+    /// Resolve the item referred to by the named export, using this component's own index space.
+    ///
+    /// Finds the first export whose name matches `name`, then resolves the item ref it carries
+    /// into a [`ResolvedItem`].
+    ///
+    /// Returns `None` if no export with that name exists.
+    pub fn resolve_named_export<'s>(&'s self, name: &str) -> Option<ResolvedItem<'s, 'a>> {
+        let export = self.exports.iter().find(|e| e.name.0 == name)?;
+        Some(self.resolve(&export.get_item_ref().ref_))
+    }
+
     /// Lookup the type for an exported `lift` canonical function.
     pub fn get_type_of_exported_lift_func(
         &self,
         export_id: ComponentExportId,
     ) -> Option<&ComponentType<'a>> {
-        let mut store = self.index_store.borrow_mut();
-        if let Some(export) = self.exports.get(*export_id as usize) {
-            let func_ref = export.get_item_ref();
-            let (vec, f_idx, subidx) =
-                store.index_from_assumed_id_no_cache(&self.space_id, &func_ref.ref_);
-            debug_assert!(subidx.is_none(), "a lift function shouldn't reference anything with a subvec space (like a recgroup)");
-            let ty = match vec {
-                SpaceSubtype::Export | SpaceSubtype::Import => {
-                    unreachable!()
-                }
-                SpaceSubtype::Alias => self.alias.items[f_idx].get_item_ref(),
-                SpaceSubtype::Main => *self.canons.items[f_idx].get_type_refs().first().unwrap(),
-            };
-            let (ty, t_idx, subidx) = store.index_from_assumed_id(&self.space_id, &ty.ref_);
-            debug_assert!(subidx.is_none(), "a lift function shouldn't reference anything with a subvec space (like a recgroup)");
-            if !matches!(ty, SpaceSubtype::Main) {
-                panic!("Internal error: expected main space, got {ty:?}");
-            }
-
-            let res = self.component_types.items.get(t_idx);
-            res.map(|v| &**v)
-        } else {
-            None
+        let export = self.exports.get(*export_id as usize)?;
+        let type_ref = match self.resolve(&export.get_item_ref().ref_) {
+            ResolvedItem::Func(_, canon) => *canon.get_type_refs().first().unwrap(),
+            ResolvedItem::Alias(_, alias) => alias.get_item_ref(),
+            _ => unreachable!("exported lift func should resolve to a Func or Alias"),
+        };
+        match self.resolve(&type_ref.ref_) {
+            ResolvedItem::CompType(_, ty) => Some(ty),
+            _ => None,
         }
     }
 

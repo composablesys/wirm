@@ -282,7 +282,14 @@ impl IndexScope {
             .and_then(|space| space.index_from_assumed_id(r.index as usize))
             .unwrap_or_else(|| {
                 panic!(
-                    "[{:?}@scope{}] Internal error: No index for assumed ID: {}",
+                    "[{:?}@scope{}] No index for assumed ID: {}. \
+                     This reference may have been declared inside a ComponentType::Instance, \
+                     ComponentType::Component, or CoreType::Module body. If so, you need a \
+                     ScopedVisitCtx: call `cx.enter_comp_ty_scope(ty)` (for ComponentType) or \
+                     `cx.enter_core_ty_scope(ty)` (for CoreType) on your VisitCtx and use the \
+                     returned ScopedVisitCtx for all resolution within that scope. \
+                     Alternatively, if you are resolving refs outside of a walk, call \
+                     `component.resolve(&ref_)` on the Component that directly contains the ref.",
                     r.space, self.id, r.index
                 )
             })
@@ -301,7 +308,9 @@ impl IndexScope {
                      ComponentType::Component, or CoreType::Module body. If so, you need a \
                      ScopedVisitCtx: call `cx.enter_comp_ty_scope(ty)` (for ComponentType) or \
                      `cx.enter_core_ty_scope(ty)` (for CoreType) on your VisitCtx and use the \
-                     returned ScopedVisitCtx for all resolution within that scope.",
+                     returned ScopedVisitCtx for all resolution within that scope. \
+                     Alternatively, if you are resolving refs outside of a walk, call \
+                     `component.resolve(&ref_)` on the Component that directly contains the ref.",
                     r.space, self.id, r.index
                 )
             })

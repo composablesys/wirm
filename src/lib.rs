@@ -27,6 +27,7 @@ pub mod subiterator;
 pub use crate::opcode::Opcode;
 
 pub use crate::ir::component::Component;
+pub use crate::ir::component::concrete::{ConcreteFuncType, ConcreteType, ConcreteValType};
 // pub use crate::ir::function::FunctionBuilder;
 pub use crate::ir::module::Module;
 pub use crate::ir::types::DataSegment;
