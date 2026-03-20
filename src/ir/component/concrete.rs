@@ -36,8 +36,9 @@ use crate::ir::component::visitor::utils::{TypeBodyDecls, VisitCtxInner};
 use crate::ir::component::visitor::{ResolvedItem, VisitCtx};
 use crate::Component;
 use wasmparser::{
-    ComponentAlias, ComponentDefinedType, ComponentExport, ComponentExternalKind, ComponentFuncType,
-    ComponentInstance, ComponentType, ComponentValType, InstanceTypeDeclaration, PrimitiveValType,
+    ComponentAlias, ComponentDefinedType, ComponentExport, ComponentExternalKind,
+    ComponentFuncType, ComponentInstance, ComponentType, ComponentValType, InstanceTypeDeclaration,
+    PrimitiveValType,
 };
 // ============================================================
 // Public output types
