@@ -36,8 +36,8 @@ use crate::ir::component::visitor::utils::{TypeBodyDecls, VisitCtxInner};
 use crate::ir::component::visitor::{ResolvedItem, VisitCtx};
 use crate::Component;
 use wasmparser::{
-    ComponentAlias, ComponentDefinedType, ComponentFuncType, ComponentType, ComponentValType,
-    InstanceTypeDeclaration, PrimitiveValType,
+    ComponentAlias, ComponentDefinedType, ComponentExport, ComponentExternalKind, ComponentFuncType,
+    ComponentInstance, ComponentType, ComponentValType, InstanceTypeDeclaration, PrimitiveValType,
 };
 // ============================================================
 // Public output types
@@ -122,6 +122,14 @@ impl<'a> Component<'a> {
     pub fn concretize_export(&'a self, name: &str) -> Option<ConcreteType<'a>> {
         match self.resolve_named_export(name)? {
             ResolvedItem::CompType(_, ty) => concretize_comp_type(self, ty),
+            // The export resolves to a synthetic `FromExports` instance — i.e. the component
+            // contains `(instance $out (export "foo" (func $f)) ...)` and then
+            // `(export "name" (instance $out))`.  These instances have no associated
+            // `ComponentType::Instance` node, so we build the type by following each
+            // function alias to its declaration.
+            ResolvedItem::CompInst(_, ComponentInstance::FromExports(exports)) => {
+                concretize_from_exports_instance(self, exports)
+            }
             _ => None,
         }
     }
@@ -224,10 +232,16 @@ fn resolve_and_concretize_func<'a>(
                 ..
             },
         ) => {
-            let nested_comp = resolve_instantiated_comp(comp, *instance_index)?;
-            match nested_comp.concretize_export(name)? {
-                ConcreteType::Func(ft) => Some(ft),
-                _ => None,
+            if let Some(nested_comp) = resolve_instantiated_comp(comp, *instance_index) {
+                // Instance is a locally-instantiated component — look up the export type.
+                match nested_comp.concretize_export(name) {
+                    Some(ConcreteType::Func(ft)) => Some(ft),
+                    _ => None,
+                }
+            } else {
+                // Instance is an import (not a local instantiation) — extract the function
+                // type from the import's declared instance type.
+                resolve_func_from_import_instance(comp, *instance_index, name)
             }
         }
         _ => None,
@@ -408,6 +422,81 @@ fn concretize_defined_type<'a>(
         ComponentDefinedType::Future(_) | ComponentDefinedType::Stream(_) => {
             ConcreteValType::AsyncHandle
         }
+    }
+}
+
+/// Concretize a `FromExports` synthetic instance into a [`ConcreteType::Instance`].
+///
+/// Handles the case where a component export resolves to an instance built with
+/// `(instance $out (export "name" (func $f)) ...)` rather than a typed instance import.
+/// Each `Func` export in the instance is resolved to its concrete signature by following
+/// the alias chain to the underlying function type declaration.
+fn concretize_from_exports_instance<'a>(
+    comp: &'a Component<'a>,
+    exports: &'a [ComponentExport<'a>],
+) -> Option<ConcreteType<'a>> {
+    // Build a root-level context for resolving aliases in the component's own namespace.
+    let cx = {
+        let mut inner = VisitCtxInner::new(comp);
+        inner.push_component(comp);
+        VisitCtx { inner }
+    };
+
+    let mut funcs = vec![];
+    for export in exports.iter() {
+        if export.kind != ComponentExternalKind::Func {
+            continue; // Skip non-function exports (nested instances, types, etc.)
+        }
+        let func_ref = IndexedRef {
+            depth: Depth::default(),
+            space: Space::CompFunc,
+            index: export.index,
+        };
+        let resolved = comp.resolve(&func_ref);
+        if let Some(ft) = resolve_and_concretize_func(resolved, comp, &cx) {
+            funcs.push((export.name.0, ft));
+        }
+    }
+
+    Some(ConcreteType::Instance(funcs))
+}
+
+/// Follow a function alias that points into an **import** instance (not a locally-instantiated
+/// component).
+///
+/// When `(alias export $import-inst "func-name" (func $f))` appears inside a component and
+/// `$import-inst` was provided as an import (rather than instantiated locally), we cannot
+/// reach its type via [`resolve_instantiated_comp`].  Instead, we look up the import's
+/// declared instance type and extract the named function signature from it.
+fn resolve_func_from_import_instance<'a>(
+    comp: &'a Component<'a>,
+    instance_index: u32,
+    func_name: &str,
+) -> Option<ConcreteFuncType<'a>> {
+    let inst_ref = IndexedRef {
+        depth: Depth::default(),
+        space: Space::CompInst,
+        index: instance_index,
+    };
+    let import = match comp.resolve(&inst_ref) {
+        ResolvedItem::Import(_, imp) => imp,
+        _ => return None,
+    };
+
+    // The import's type must be ComponentTypeRef::Instance.
+    let type_ref = import.get_type_refs().into_iter().next()?;
+    let ty = match comp.resolve(&type_ref.ref_) {
+        ResolvedItem::CompType(_, ty) => ty,
+        _ => return None,
+    };
+
+    // Concretize the full instance type and find the named function.
+    match concretize_comp_type(comp, ty)? {
+        ConcreteType::Instance(funcs) => funcs
+            .into_iter()
+            .find(|(name, _)| *name == func_name)
+            .map(|(_, ft)| ft),
+        _ => None,
     }
 }
 
