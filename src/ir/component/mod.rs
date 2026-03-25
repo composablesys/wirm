@@ -22,9 +22,9 @@ use crate::ir::helpers::{
     print_core_type,
 };
 use crate::ir::id::{
-    AliasFuncId, AliasId, CanonicalFuncId, ComponentExportId, ComponentId, ComponentTypeFuncId,
-    ComponentTypeId, ComponentTypeInstanceId, CoreInstanceId, CustomSectionID, FunctionID,
-    GlobalID, ModuleID,
+    AliasFuncId, AliasId, AliasMemId, CanonicalFuncId, ComponentExportId, ComponentId,
+    ComponentTypeFuncId, ComponentTypeId, ComponentTypeInstanceId, CoreInstanceId, CustomSectionID,
+    FunctionID, GlobalID, ModuleID,
 };
 use crate::ir::module::module_globals::Global;
 use crate::ir::module::Module;
@@ -188,6 +188,15 @@ impl<'a> Component<'a> {
         let id = self.add_section_and_get_id(space, ComponentSection::Alias, *alias_id as usize);
 
         (AliasFuncId(id as u32), alias_id)
+    }
+
+    /// Add an Aliased core memory to this Component.
+    pub fn add_alias_core_memory(&mut self, alias: ComponentAlias<'a>) -> (AliasMemId, AliasId) {
+        let space = alias.index_space_of();
+        let (_item_id, alias_id) = self.alias.add(alias);
+        let id = self.add_section_and_get_id(space, ComponentSection::Alias, *alias_id as usize);
+
+        (AliasMemId(id as u32), alias_id)
     }
 
     /// Add a Canonical Function to this Component.
