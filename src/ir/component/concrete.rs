@@ -131,6 +131,34 @@ impl<'a> Component<'a> {
             ResolvedItem::CompInst(_, ComponentInstance::FromExports(exports)) => {
                 concretize_from_exports_instance(self, exports)
             }
+            // The export resolves to a real instantiated component (e.g. a wit-component shim
+            // that re-exports individual functions under short names like "handle").
+            //
+            // Strategy: if the outer component imports an interface under the *same name*
+            // (the common wit-component shim pattern where the middleware imports and then
+            // re-exports the same WIT interface via a shim), use the import's declared type.
+            // This gives a fingerprint consistent with other components that declare the same
+            // WIT import.  Fall back to reconstructing the type from the nested component's
+            // function exports when no matching import exists.
+            ResolvedItem::CompInst(_, inst @ ComponentInstance::Instantiate { .. }) => {
+                self.concretize_import(name).or_else(|| {
+                    let comp_ref = inst.get_comp_refs().into_iter().next()?;
+                    match self.resolve(&comp_ref.ref_) {
+                        ResolvedItem::Component(_, nested) => concretize_comp_func_exports(nested),
+                        _ => None,
+                    }
+                })
+            }
+            // The export directly re-exposes an imported instance (pass-through middleware).
+            // Concretize by following the import's declared instance type.
+            ResolvedItem::Import(_, imp) => {
+                let type_ref = imp.get_type_refs().into_iter().next()?;
+                let ty = match self.resolve(&type_ref.ref_) {
+                    ResolvedItem::CompType(_, ty) => ty,
+                    _ => return None,
+                };
+                concretize_comp_type(self, ty)
+            }
             _ => None,
         }
     }
@@ -245,6 +273,18 @@ fn resolve_and_concretize_func<'a>(
                 resolve_func_from_import_instance(comp, *instance_index, name)
             }
         }
+        // The function is a direct import (e.g. `(import "f" (func (type $sig)))`).
+        // This arises in shim components that take individual function imports rather
+        // than a whole instance import.  Follow the import's declared type.
+        ResolvedItem::Import(_, imp) => {
+            let type_ref = imp.get_type_refs().into_iter().next()?;
+            match comp.resolve(&type_ref.ref_) {
+                ResolvedItem::CompType(_, ComponentType::Func(ft)) => {
+                    Some(concretize_func_ty(ft, comp, cx))
+                }
+                _ => None,
+            }
+        }
         _ => None,
     }
 }
@@ -305,11 +345,11 @@ fn concretize_from_resolved<'a>(
             },
         ) => {
             let Some(nested_comp) = resolve_instantiated_comp(comp, *instance_index) else {
-                // TODO(beyond-wit): `FromExports` synthetic instances and out-of-range
-                // instance indices are valid in the component model but aren't backed by
-                // a `Component` we can look into. Extend `resolve_instantiated_comp` to
-                // handle these cases if concretization is ever needed beyond WIT.
-                return ConcreteValType::Resource;
+                // The instance is an import (e.g. `wasi:http/types@...`) rather than a
+                // locally-instantiated component.  Look up the named type export from
+                // the import's declared instance type — the same approach used by
+                // `resolve_func_from_import_instance` for function aliases.
+                return resolve_type_from_import_instance(comp, *instance_index, name);
             };
             match nested_comp.concretize_export(name) {
                 Some(ConcreteType::Resource) | None => ConcreteValType::Resource,
@@ -448,18 +488,93 @@ fn concretize_from_exports_instance<'a>(
         if export.kind != ComponentExternalKind::Func {
             continue; // Skip non-function exports (nested instances, types, etc.)
         }
-        let func_ref = IndexedRef {
-            depth: Depth::default(),
-            space: Space::CompFunc,
-            index: export.index,
-        };
-        let resolved = comp.resolve(&func_ref);
+        let resolved = comp.resolve(&export.get_item_ref().ref_);
         if let Some(ft) = resolve_and_concretize_func(resolved, comp, &cx) {
             funcs.push((export.name.0, ft));
         }
     }
 
     Some(ConcreteType::Instance(funcs))
+}
+
+/// Concretize the "interface" of a real instantiated component by collecting all of its
+/// function exports into a [`ConcreteType::Instance`].
+///
+/// This handles the pattern produced by `wit-component` where a shim component re-exports
+/// individual functions (`"handle"`, etc.) rather than bundling them under a WIT interface
+/// name.  When the outer component exports the whole shim instance under an interface name
+/// (e.g. `"wasi:http/handler@..."`), the type of that interface is implicitly defined by the
+/// shim's function exports.
+fn concretize_comp_func_exports<'a>(comp: &'a Component<'a>) -> Option<ConcreteType<'a>> {
+    let cx = {
+        let mut inner = VisitCtxInner::new(comp);
+        inner.push_component(comp);
+        VisitCtx { inner }
+    };
+
+    let mut funcs = vec![];
+    for export in comp.exports.iter() {
+        if export.kind != ComponentExternalKind::Func {
+            continue; // Only collect function exports; skip types, instances, etc.
+        }
+        let resolved = comp.resolve(&export.get_item_ref().ref_);
+        if let Some(ft) = resolve_and_concretize_func(resolved, comp, &cx) {
+            funcs.push((export.name.0, ft));
+        }
+    }
+
+    Some(ConcreteType::Instance(funcs))
+}
+
+/// Resolve a **type** exported by an **import** instance (not a locally-instantiated component).
+///
+/// When `(alias export $import-inst "type-name" (type $t))` appears inside a component and
+/// `$import-inst` is an import (e.g. `wasi:http/types@...`), [`resolve_instantiated_comp`]
+/// returns `None`.  This function looks up the import's declared instance type, enters its
+/// type-body scope, and concretizes the named type export from the declarations.
+///
+/// This is the value-type counterpart of [`resolve_func_from_import_instance`].
+fn resolve_type_from_import_instance<'a>(
+    comp: &'a Component<'a>,
+    instance_index: u32,
+    type_name: &str,
+) -> ConcreteValType<'a> {
+    let inst_ref = IndexedRef {
+        depth: Depth::default(),
+        space: Space::CompInst,
+        index: instance_index,
+    };
+    let import = match comp.resolve(&inst_ref) {
+        ResolvedItem::Import(_, imp) => imp,
+        _ => return ConcreteValType::Resource,
+    };
+    let type_ref = match import.get_type_refs().into_iter().next() {
+        Some(tr) => tr,
+        None => return ConcreteValType::Resource,
+    };
+    let ty = match comp.resolve(&type_ref.ref_) {
+        ResolvedItem::CompType(_, ty) => ty,
+        _ => return ConcreteValType::Resource,
+    };
+    let decls = match ty {
+        ComponentType::Instance(decls) => decls,
+        _ => return ConcreteValType::Resource,
+    };
+    // Build a type-body scope so that outer-alias refs inside the decls resolve
+    // against the component's own type space (same as `enter_type_scope`).
+    let inner_cx = comp.enter_type_scope(ty);
+    for decl in decls {
+        if let InstanceTypeDeclaration::Export { name, .. } = decl {
+            if name.0 != type_name {
+                continue;
+            }
+            if let Some(tr) = decl.get_type_refs().first() {
+                let resolved = inner_cx.resolve(&tr.ref_);
+                return concretize_from_resolved(resolved, comp, &inner_cx);
+            }
+        }
+    }
+    ConcreteValType::Resource
 }
 
 /// Follow a function alias that points into an **import** instance (not a locally-instantiated
