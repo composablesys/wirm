@@ -1,12 +1,20 @@
 #![allow(dead_code)]
 use log::{error, trace};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::process::Command;
+use wasmparser::Operator;
+use wirm::ir::types::InstrumentationMode;
+use wirm::iterator::component_iterator::ComponentIterator;
+use wirm::iterator::iterator_trait::{IteratingInstrumenter, Iterator as WirmIterator};
+use wirm::iterator::module_iterator::ModuleIterator;
+use wirm::opcode::{Inject, Instrumenter};
+use wirm::{Component, Location, Module};
 
 pub const WASM_OUTPUT_DIR: &str = "output/wasm";
 pub const WAT_OUTPUT_DIR: &str = "output/wat";
@@ -180,4 +188,183 @@ pub fn tests_from_wast(path: &Path) -> Vec<String> {
     }
 
     tests
+}
+
+// ==================================
+// ==== INSTRUMENTATION HELPERS  ====
+// ==================================
+
+/// Enum to match block-forming operators without comparing fields.
+#[derive(Debug)]
+pub enum SupportedOperators {
+    // block-style
+    Block,
+    Loop,
+    If,
+    Else,
+    // branching
+    Br,
+    BrIf,
+    BrTable,
+}
+
+/// Parse a WAT file, run `instrument` with a `ModuleIterator`, encode, and assert the encoding
+/// matches the WAT file's inline annotations. Panics on mismatch.
+pub fn run_module_instr_test<F>(file: &str, instrument: F)
+where
+    F: for<'a, 'b> FnOnce(&mut ModuleIterator<'a, 'b>),
+{
+    let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
+    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    {
+        let mut mod_it = ModuleIterator::new(&mut module, &vec![]);
+        instrument(&mut mod_it);
+    }
+    let result = module.encode().expect("error encoding");
+    let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
+    check_instrumentation_encoding(&out, file).expect("instrumentation encoding mismatch");
+}
+
+/// Parse a WAT file, run `instrument` with a `ComponentIterator`, encode, and assert the encoding
+/// matches the WAT file's inline annotations. Panics on mismatch.
+pub fn run_component_instr_test<F>(file: &str, instrument: F)
+where
+    F: for<'a, 'b> FnOnce(&mut ComponentIterator<'a, 'b>),
+{
+    let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
+    let mut component = Component::parse(&buff, false, false).expect("Unable to parse");
+    {
+        let mut comp_it = ComponentIterator::new(&mut component, HashMap::new());
+        instrument(&mut comp_it);
+    }
+    let result = component.encode().expect("error encoding");
+    let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
+    check_instrumentation_encoding(&out, file).expect("instrumentation encoding mismatch");
+}
+
+/// Parse an inline WAT string, run `instrument` with a `ModuleIterator`, encode, and validate
+/// with wasmparser. Intended for opcode-coverage tests that have no golden annotation file.
+pub fn validate_module_instr<F>(wat_src: &str, instrument: F)
+where
+    F: for<'a, 'b> FnOnce(&mut ModuleIterator<'a, 'b>),
+{
+    let buff = wat::parse_str(wat_src).expect("couldn't parse WAT");
+    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    {
+        let mut mod_it = ModuleIterator::new(&mut module, &vec![]);
+        instrument(&mut mod_it);
+    }
+    let result = module.encode().expect("error encoding");
+    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&result)
+        .expect("wasm validation failed");
+}
+
+pub fn run_block_injection<'a, 'b, 'c>(
+    mod_it: &mut ModuleIterator<'a, 'b>,
+    ops_of_interest: &Vec<(SupportedOperators, (InstrumentationMode, Vec<Operator<'c>>))>,
+) where
+    'c: 'b,
+{
+    loop {
+        let op = mod_it.curr_op();
+        if let Location::Module {
+            func_idx,
+            instr_idx,
+        } = mod_it.curr_loc().0
+        {
+            trace!("Func: {:?}, {}: {:?},", func_idx, instr_idx, op);
+            for (op, (mode, body)) in ops_of_interest.iter() {
+                let matches = match op {
+                    SupportedOperators::Block => {
+                        matches!(mod_it.curr_op().unwrap(), Operator::Block { .. })
+                    }
+                    SupportedOperators::Loop => {
+                        matches!(mod_it.curr_op().unwrap(), Operator::Loop { .. })
+                    }
+                    SupportedOperators::If => {
+                        matches!(mod_it.curr_op().unwrap(), Operator::If { .. })
+                    }
+                    SupportedOperators::Else => {
+                        matches!(mod_it.curr_op().unwrap(), Operator::Else)
+                    }
+                    SupportedOperators::Br => {
+                        matches!(mod_it.curr_op().unwrap(), Operator::Br { .. })
+                    }
+                    SupportedOperators::BrIf => {
+                        matches!(mod_it.curr_op().unwrap(), Operator::BrIf { .. })
+                    }
+                    SupportedOperators::BrTable => {
+                        matches!(mod_it.curr_op().unwrap(), Operator::BrTable { .. })
+                    }
+                };
+                if matches {
+                    if !body.is_empty() {
+                        mod_it.set_instrument_mode(*mode);
+                        mod_it.inject_all(body);
+                        mod_it.finish_instr();
+                    } else {
+                        match mode {
+                            InstrumentationMode::Alternate => {
+                                mod_it.empty_alternate();
+                            }
+                            InstrumentationMode::BlockAlt => {
+                                mod_it.empty_block_alt();
+                            }
+                            _ => {
+                                mod_it.inject_all(body);
+                            }
+                        }
+                    }
+                }
+            }
+            if mod_it.next().is_none() {
+                break;
+            };
+        } else {
+            panic!("Should've gotten Module Location!");
+        }
+    }
+}
+
+pub fn inject_function_entry<'a, 'b, 'c>(
+    mod_it: &mut ModuleIterator<'a, 'b>,
+    body: Vec<Operator<'c>>,
+) where
+    'c: 'b,
+{
+    let mut curr_func = None;
+    loop {
+        if let Location::Module { func_idx, .. } = mod_it.curr_loc().0 {
+            if curr_func != Some(func_idx) {
+                mod_it.func_entry();
+                mod_it.inject_all(&body);
+            }
+            curr_func = Some(func_idx);
+        }
+        if mod_it.next().is_none() {
+            break;
+        };
+    }
+}
+
+pub fn inject_function_exit<'a, 'b, 'c>(
+    mod_it: &mut ModuleIterator<'a, 'b>,
+    body: Vec<Operator<'c>>,
+) where
+    'c: 'b,
+{
+    let mut curr_func = None;
+    loop {
+        if let Location::Module { func_idx, .. } = mod_it.curr_loc().0 {
+            if curr_func != Some(func_idx) {
+                mod_it.func_exit();
+                mod_it.inject_all(&body);
+            }
+            curr_func = Some(func_idx);
+        }
+        if mod_it.next().is_none() {
+            break;
+        };
+    }
 }
