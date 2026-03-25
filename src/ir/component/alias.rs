@@ -9,6 +9,9 @@ pub struct Aliases<'a> {
     num_core_funcs: usize,
     num_core_funcs_added: usize,
 
+    num_core_memories: usize,
+    num_core_memories_added: usize,
+
     num_funcs: usize,
     num_funcs_added: usize,
     pub(crate) num_types: usize,
@@ -16,14 +19,15 @@ pub struct Aliases<'a> {
 }
 impl<'a> Aliases<'a> {
     pub fn new(items: AppendOnlyVec<ComponentAlias<'a>>) -> Self {
-        let (mut num_core_funcs, mut num_funcs, mut num_types) = (0, 0, 0);
+        let (mut num_core_funcs, mut num_core_memories, mut num_funcs, mut num_types) =
+            (0, 0, 0, 0);
         for i in items.iter() {
             match i {
-                ComponentAlias::CoreInstanceExport { kind, .. } => {
-                    if kind == &ExternalKind::Func {
-                        num_core_funcs += 1
-                    }
-                }
+                ComponentAlias::CoreInstanceExport { kind, .. } => match kind {
+                    ExternalKind::Func => num_core_funcs += 1,
+                    ExternalKind::Memory => num_core_memories += 1,
+                    _ => {}
+                },
                 ComponentAlias::InstanceExport { kind, .. } => match kind {
                     ComponentExternalKind::Type => num_types += 1,
                     ComponentExternalKind::Func => num_funcs += 1,
@@ -35,6 +39,7 @@ impl<'a> Aliases<'a> {
         Self {
             items,
             num_core_funcs,
+            num_core_memories,
             num_funcs,
             num_types,
             ..Self::default()
@@ -50,6 +55,12 @@ impl<'a> Aliases<'a> {
                     self.num_core_funcs_added += 1;
 
                     self.num_core_funcs - 1
+                }
+                ExternalKind::Memory => {
+                    self.num_core_memories += 1;
+                    self.num_core_memories_added += 1;
+
+                    self.num_core_memories - 1
                 }
                 _ => todo!(),
             },

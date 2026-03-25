@@ -333,6 +333,21 @@ impl std::ops::DerefMut for AliasFuncId {
     }
 }
 
+/// The ID of an aliased core memory in a Component
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct AliasMemId(pub u32);
+impl std::ops::Deref for AliasMemId {
+    type Target = u32;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for AliasMemId {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 /// The ID of an aliased function in a Component
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct CoreInstanceId(pub u32);
