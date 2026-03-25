@@ -235,24 +235,8 @@ fn test_concretize_import_resolves_body_types() {
 // concretize_export — patterns
 // ============================================================
 
-/// Export that resolves to a synthetic `FromExports` instance.
-///
-/// Pattern:
-///   (alias export $imp "f" (func $f))
-///   (instance $out (export "f" (func $f)))   ;; FromExports
-///   (export "iface" (instance $out))
-#[test]
-fn concretize_export_from_exports_instance() {
-    let b = bytes(
-        r#"(component
-      (import "iface" (instance $imp
-        (export "f" (func (param "x" u32) (result u8)))
-      ))
-      (alias export $imp "f" (func $fn))
-      (instance $out (export "f" (func $fn)))
-      (export "iface" (instance $out))
-    )"#,
-    );
+fn check_concretize_export(wat: &str) {
+    let b = bytes(wat);
     let comp = parsed(&b);
     let result = comp.concretize_export("iface");
     let Some(ConcreteType::Instance(funcs)) = result else {
@@ -262,6 +246,26 @@ fn concretize_export_from_exports_instance() {
     assert_eq!(funcs[0].0, "f");
 }
 
+/// Export that resolves to a synthetic `FromExports` instance.
+///
+/// Pattern:
+///   (alias export $imp "f" (func $f))
+///   (instance $out (export "f" (func $f)))   ;; FromExports
+///   (export "iface" (instance $out))
+#[test]
+fn concretize_export_from_exports_instance() {
+    check_concretize_export(
+        r#"(component
+      (import "iface" (instance $imp
+        (export "f" (func (param "x" u32) (result u8)))
+      ))
+      (alias export $imp "f" (func $fn))
+      (instance $out (export "f" (func $fn)))
+      (export "iface" (instance $out))
+    )"#,
+    )
+}
+
 /// Export that resolves to a `CompInst::Instantiate` (the wit-component shim pattern).
 ///
 /// The shim component exports individual functions rather than a whole WIT
@@ -269,7 +273,7 @@ fn concretize_export_from_exports_instance() {
 /// name.  `concretize_export` must collect the shim's function exports.
 #[test]
 fn concretize_export_instantiated_component() {
-    let b = bytes(
+    check_concretize_export(
         r#"(component
       (import "iface" (instance $imp
         (export "f" (func (param "x" u32) (result u8)))
@@ -286,13 +290,6 @@ fn concretize_export_instantiated_component() {
       (export "iface" (instance $shim-inst))
     )"#,
     );
-    let comp = parsed(&b);
-    let result = comp.concretize_export("iface");
-    let Some(ConcreteType::Instance(funcs)) = result else {
-        panic!("expected Some(Instance), got {result:?}");
-    };
-    assert_eq!(funcs.len(), 1);
-    assert_eq!(funcs[0].0, "f");
 }
 
 /// Export that directly re-exposes an imported instance (pass-through middleware).
@@ -302,7 +299,7 @@ fn concretize_export_instantiated_component() {
 ///   (export "iface" (instance $imp))
 #[test]
 fn concretize_export_import_reexport() {
-    let b = bytes(
+    check_concretize_export(
         r#"(component
       (import "iface" (instance $imp
         (export "f" (func (param "x" u32) (result u8)))
@@ -310,13 +307,6 @@ fn concretize_export_import_reexport() {
       (export "iface" (instance $imp))
     )"#,
     );
-    let comp = parsed(&b);
-    let result = comp.concretize_export("iface");
-    let Some(ConcreteType::Instance(funcs)) = result else {
-        panic!("expected Some(Instance), got {result:?}");
-    };
-    assert_eq!(funcs.len(), 1);
-    assert_eq!(funcs[0].0, "f");
 }
 
 /// All three export patterns produce structurally identical `ConcreteType`s and

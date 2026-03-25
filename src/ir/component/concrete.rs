@@ -123,11 +123,6 @@ impl<'a> Component<'a> {
     pub fn concretize_export(&'a self, name: &str) -> Option<ConcreteType<'a>> {
         match self.resolve_named_export(name)? {
             ResolvedItem::CompType(_, ty) => concretize_comp_type(self, ty),
-            // The export resolves to a synthetic `FromExports` instance — i.e. the component
-            // contains `(instance $out (export "foo" (func $f)) ...)` and then
-            // `(export "name" (instance $out))`.  These instances have no associated
-            // `ComponentType::Instance` node, so we build the type by following each
-            // function alias to its declaration.
             ResolvedItem::CompInst(_, ComponentInstance::FromExports(exports)) => {
                 concretize_from_exports_instance(self, exports)
             }
