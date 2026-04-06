@@ -65,6 +65,8 @@ pub enum ConcreteType<'a> {
 /// A fully-resolved function signature with no index references.
 #[derive(Debug, Clone)]
 pub struct ConcreteFuncType<'a> {
+    /// Whether this is an `async` function.
+    pub is_async: bool,
     /// Named parameters.
     pub params: Vec<(&'a str, ConcreteValType<'a>)>,
     /// Return type, if any.
@@ -290,6 +292,7 @@ fn concretize_func_ty<'a>(
     cx: &VisitCtx<'a>,
 ) -> ConcreteFuncType<'a> {
     ConcreteFuncType {
+        is_async: ft.async_,
         params: ft
             .params
             .iter()
