@@ -4,7 +4,9 @@
 // note that the location of the injection is handled specific implementation
 // for iterators, we inject at the location the iterator is pointing at (curr_loc)
 // for FunctionBuilder, we inject at the end of the function
-use crate::ir::id::{DataSegmentID, ElementID, FieldID, FunctionID, GlobalID, LocalID, TypeID};
+use crate::ir::id::{
+    DataSegmentID, ElementID, FieldID, FunctionID, GlobalID, LocalID, TableID, TypeID,
+};
 use crate::ir::module::module_types::HeapType;
 use crate::ir::types::{BlockType, FuncInstrMode, InstrumentationMode};
 use crate::Location;
@@ -1120,6 +1122,20 @@ pub trait Opcode<'a>: Inject<'a> {
     /// Inject a global.set
     fn global_set(&mut self, idx: GlobalID) -> &mut Self {
         self.inject(Operator::GlobalSet { global_index: *idx });
+        self
+    }
+
+    // Table Instructions
+
+    /// Inject a table.get instruction
+    fn table_get(&mut self, table: TableID) -> &mut Self {
+        self.inject(Operator::TableGet { table: *table });
+        self
+    }
+
+    /// Inject a table.set instruction
+    fn table_set(&mut self, table: TableID) -> &mut Self {
+        self.inject(Operator::TableSet { table: *table });
         self
     }
 
