@@ -55,7 +55,7 @@ pub enum ConcreteType<'a> {
     /// `funcs`: `(function_name, signature)` pairs for each exported function.
     /// `type_exports`: `(export_name, concrete_val_type)` pairs for named type
     /// exports (records, variants, resources exported with `(type (eq N))` or
-    /// `(type (sub resource))` bounds).  These are needed by proxy generators
+    /// `(type (sub resource))` bounds).  These are needed by adapter generators
     /// that must re-export the same types from a types-instance import.
     Instance {
         funcs: Vec<(&'a str, ConcreteFuncType<'a>)>,
@@ -303,12 +303,7 @@ fn build_component_resource_map<'a>(
             space: Space::CompType,
             index: export.index,
         };
-        let is_res = resolved_is_resource(cx.resolve(&type_ref), comp, cx, 0);
-        eprintln!(
-            "[wirm debug] build_component_resource_map: export '{}' index={} is_resource={}",
-            export.name.0, export.index, is_res
-        );
-        if is_res {
+        if resolved_is_resource(cx.resolve(&type_ref), comp, cx, 0) {
             map.insert(export.index, export.name.0);
         }
     }
