@@ -50,13 +50,17 @@ use wasmparser::{
 /// Produced by [`Component::concretize_import`] and [`Component::concretize_export`].
 #[derive(Debug, Clone)]
 pub enum ConcreteType<'a> {
-    /// A WIT instance interface — a named set of exported functions.
+    /// A WIT instance interface — exported functions and named type exports.
     ///
-    /// Each entry is `(function_name, signature)`.  Only `ComponentTypeRef::Func`
-    /// exports are included; this matches the WIT interface model where every
-    /// instance export is a function.  See the [module-level TODO](self) for plans
-    /// to extend this to other export kinds in a future release.
-    Instance(Vec<(&'a str, ConcreteFuncType<'a>)>),
+    /// `funcs`: `(function_name, signature)` pairs for each exported function.
+    /// `type_exports`: `(export_name, concrete_val_type)` pairs for named type
+    /// exports (records, variants, resources exported with `(type (eq N))` or
+    /// `(type (sub resource))` bounds).  These are needed by proxy generators
+    /// that must re-export the same types from a types-instance import.
+    Instance {
+        funcs: Vec<(&'a str, ConcreteFuncType<'a>)>,
+        type_exports: Vec<(&'a str, ConcreteValType<'a>)>,
+    },
     /// A single function type.
     Func(ConcreteFuncType<'a>),
     /// A resource (own or borrow handle).
@@ -145,10 +149,13 @@ impl<'a> Component<'a> {
             // WIT import.  Fall back to reconstructing the type from the nested component's
             // function exports when no matching import exists.
             ResolvedItem::CompInst(_, inst @ ComponentInstance::Instantiate { .. }) => {
-                self.concretize_import(name).or_else(|| {
+                let import_result = self.concretize_import(name);
+                import_result.or_else(|| {
                     let comp_ref = inst.get_comp_refs().into_iter().next()?;
                     match self.resolve(&comp_ref.ref_) {
-                        ResolvedItem::Component(_, nested) => concretize_comp_func_exports(nested),
+                        ResolvedItem::Component(_, nested) => {
+                            concretize_comp_func_exports(nested)
+                        }
                         _ => None,
                     }
                 })
@@ -199,9 +206,11 @@ fn concretize_comp_type<'a>(
     match ty {
         ComponentType::Instance(decls) => {
             let cx = comp.enter_type_scope(ty);
-            Some(ConcreteType::Instance(concretize_instance_decls(
-                comp, decls, &cx,
-            )))
+            let d = concretize_instance_decls(comp, decls, &cx);
+            Some(ConcreteType::Instance {
+                funcs: d.funcs,
+                type_exports: d.type_exports,
+            })
         }
         ComponentType::Func(ft) => {
             let cx = comp.enter_type_scope(ty);
@@ -290,7 +299,12 @@ fn build_component_resource_map<'a>(
             space: Space::CompType,
             index: export.index,
         };
-        if resolved_is_resource(cx.resolve(&type_ref), comp, cx, 0) {
+        let is_res = resolved_is_resource(cx.resolve(&type_ref), comp, cx, 0);
+        eprintln!(
+            "[wirm debug] build_component_resource_map: export '{}' index={} is_resource={}",
+            export.name.0, export.index, is_res
+        );
+        if is_res {
             map.insert(export.index, export.name.0);
         }
     }
@@ -319,26 +333,81 @@ fn resolved_is_resource<'a>(
     }
 }
 
+/// Return value from [`concretize_instance_decls`]: function exports and named type exports.
+struct ConcreteInstanceDecls<'a> {
+    funcs: Vec<(&'a str, ConcreteFuncType<'a>)>,
+    type_exports: Vec<(&'a str, ConcreteValType<'a>)>,
+}
+
 fn concretize_instance_decls<'a>(
     comp: &'a Component<'a>,
     decls: &'a [InstanceTypeDeclaration<'a>],
     cx: &VisitCtx<'a>,
-) -> Vec<(&'a str, ConcreteFuncType<'a>)> {
+) -> ConcreteInstanceDecls<'a> {
     // Build a map of own-type-local-idx → resource-name for named resource types.
     let resource_map = build_instance_resource_map(decls);
 
     let mut funcs = vec![];
+    let mut type_exports = vec![];
     for decl in decls {
-        if let InstanceTypeDeclaration::Export { name, .. } = decl {
+        if let InstanceTypeDeclaration::Export { name, ty, .. } = decl {
             if let Some(type_ref) = decl.get_type_refs().first() {
                 let resolved = cx.resolve(&type_ref.ref_);
                 if let Some(ft) = resolve_and_concretize_func(resolved, comp, cx, &resource_map) {
                     funcs.push((name.0, ft));
+                } else {
+                    // Not a function export — check if it's a type export.
+                    match ty {
+                        ComponentTypeRef::Type(TypeBounds::SubResource) => {
+                            type_exports.push((name.0, ConcreteValType::NamedResource(name.0)));
+                        }
+                        ComponentTypeRef::Type(TypeBounds::Eq(_)) => {
+                            // Re-resolve (first resolve was consumed by resolve_and_concretize_func).
+                            let resolved2 = cx.resolve(&type_ref.ref_);
+                            if let Some(cvt) = concretize_from_resolved_to_val(
+                                resolved2, comp, cx, &resource_map,
+                            ) {
+                                type_exports.push((name.0, cvt));
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             }
         }
     }
-    funcs
+    ConcreteInstanceDecls {
+        funcs,
+        type_exports,
+    }
+}
+
+/// Try to concretize a resolved item as a value type (not a function).
+fn concretize_from_resolved_to_val<'a>(
+    resolved: ResolvedItem<'a, 'a>,
+    comp: &'a Component<'a>,
+    cx: &VisitCtx<'a>,
+    resource_map: &HashMap<u32, &'a str>,
+) -> Option<ConcreteValType<'a>> {
+    match resolved {
+        ResolvedItem::CompType(_, ComponentType::Defined(dt)) => {
+            Some(concretize_defined_type(dt, comp, cx, resource_map))
+        }
+        ResolvedItem::CompType(_, ComponentType::Resource { .. }) => {
+            Some(ConcreteValType::Resource)
+        }
+        // Follow import's type refs (handles eq-bound aliases like error-code).
+        ResolvedItem::Import(_, imp) => {
+            for tr in imp.get_type_refs() {
+                let inner = comp.resolve(&tr.ref_);
+                if let Some(cvt) = concretize_from_resolved_to_val(inner, comp, cx, resource_map) {
+                    return Some(cvt);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
 }
 
 /// Follow aliases until we reach a function type, then concretize it.
@@ -394,11 +463,13 @@ fn resolve_and_concretize_func<'a>(
         // The function is a direct import (e.g. `(import "f" (func (type $sig)))`).
         // This arises in shim components that take individual function imports rather
         // than a whole instance import.  Follow the import's declared type.
+        // Pass the resource_map through so that own<T> types can be resolved to
+        // named resources within the current component scope.
         ResolvedItem::Import(_, imp) => {
             let type_ref = imp.get_type_refs().into_iter().next()?;
             match comp.resolve(&type_ref.ref_) {
                 ResolvedItem::CompType(_, ComponentType::Func(ft)) => {
-                    Some(concretize_func_ty(ft, comp, cx, &HashMap::new()))
+                    Some(concretize_func_ty(ft, comp, cx, resource_map))
                 }
                 _ => None,
             }
@@ -480,7 +551,7 @@ fn concretize_from_resolved<'a>(
                 // subset — functions and instances are not value types. If you hit
                 // this with a non-WIT component, extend `ConcreteValType` and add a
                 // proper case here.
-                Some(ConcreteType::Instance(_) | ConcreteType::Func(_)) => {
+                Some(ConcreteType::Instance { .. } | ConcreteType::Func(_)) => {
                     ConcreteValType::Resource
                 }
             }
@@ -585,10 +656,39 @@ fn concretize_defined_type<'a>(
         }
         ComponentDefinedType::Own(res_idx) => {
             // Look up the resource name via the resource_map (keyed by resource-type-idx).
+            // Direct lookup first.
             if let Some(&name) = resource_map.get(res_idx) {
                 ConcreteValType::NamedResource(name)
             } else {
-                ConcreteValType::Resource
+                // The own's target index might be an eq-bound alias of a resource
+                // that IS in the map. Resolve through the component's type system.
+                let type_ref = IndexedRef {
+                    depth: Depth::default(),
+                    space: Space::CompType,
+                    index: *res_idx,
+                };
+                let mut found_name = None;
+                let resolved = cx.resolve(&type_ref);
+                eprintln!(
+                    "[wirm debug] Own({}) not in map (keys={:?}), resolved={:?}",
+                    res_idx,
+                    resource_map.keys().collect::<Vec<_>>(),
+                    std::mem::discriminant(&resolved),
+                );
+                if let ResolvedItem::Import(_, imp) = resolved {
+                    let type_refs = imp.get_type_refs();
+                    for tr in type_refs {
+                        if let Some(&name) = resource_map.get(&tr.ref_.index) {
+                            found_name = Some(name);
+                            break;
+                        }
+                    }
+                }
+                if let Some(name) = found_name {
+                    ConcreteValType::NamedResource(name)
+                } else {
+                    ConcreteValType::Resource
+                }
             }
         }
         ComponentDefinedType::Borrow(_) => ConcreteValType::Resource,
@@ -628,7 +728,10 @@ fn concretize_from_exports_instance<'a>(
         }
     }
 
-    Some(ConcreteType::Instance(funcs))
+    Some(ConcreteType::Instance {
+        funcs,
+        type_exports: vec![],
+    })
 }
 
 /// Concretize the "interface" of a real instantiated component by collecting all of its
@@ -651,17 +754,41 @@ fn concretize_comp_func_exports<'a>(comp: &'a Component<'a>) -> Option<ConcreteT
     let resource_map = build_component_resource_map(comp, &cx);
 
     let mut funcs = vec![];
+    let mut type_exports = vec![];
     for export in comp.exports.iter() {
-        if export.kind != ComponentExternalKind::Func {
-            continue; // Only collect function exports; skip types, instances, etc.
-        }
-        let resolved = comp.resolve(&export.get_item_ref().ref_);
-        if let Some(ft) = resolve_and_concretize_func(resolved, comp, &cx, &resource_map) {
-            funcs.push((export.name.0, ft));
+        match export.kind {
+            ComponentExternalKind::Func => {
+                let resolved = comp.resolve(&export.get_item_ref().ref_);
+                if let Some(ft) =
+                    resolve_and_concretize_func(resolved, comp, &cx, &resource_map)
+                {
+                    funcs.push((export.name.0, ft));
+                }
+            }
+            ComponentExternalKind::Type => {
+                let type_ref = IndexedRef {
+                    depth: Depth::default(),
+                    space: Space::CompType,
+                    index: export.index,
+                };
+                let resolved = cx.resolve(&type_ref);
+                if resolved_is_resource(cx.resolve(&type_ref), comp, &cx, 0) {
+                    // Use NamedResource so the vid matches function param resource vids.
+                    type_exports.push((export.name.0, ConcreteValType::NamedResource(export.name.0)));
+                } else if let Some(cvt) =
+                    concretize_from_resolved_to_val(resolved, comp, &cx, &resource_map)
+                {
+                    type_exports.push((export.name.0, cvt));
+                }
+            }
+            _ => {}
         }
     }
 
-    Some(ConcreteType::Instance(funcs))
+    Some(ConcreteType::Instance {
+        funcs,
+        type_exports,
+    })
 }
 
 /// Resolve a **type** exported by an **import** instance (not a locally-instantiated component).
@@ -701,6 +828,9 @@ fn resolve_type_from_import_instance<'a>(
     // Build a type-body scope so that outer-alias refs inside the decls resolve
     // against the component's own type space (same as `enter_type_scope`).
     let inner_cx = comp.enter_type_scope(ty);
+    // Build the resource map from the instance type declarations so that
+    // resource names (like "request", "response") are preserved.
+    let resource_map = build_instance_resource_map(decls);
     for decl in decls {
         if let InstanceTypeDeclaration::Export { name, .. } = decl {
             if name.0 != type_name {
@@ -708,7 +838,7 @@ fn resolve_type_from_import_instance<'a>(
             }
             if let Some(tr) = decl.get_type_refs().first() {
                 let resolved = inner_cx.resolve(&tr.ref_);
-                return concretize_from_resolved(resolved, comp, &inner_cx, &HashMap::new());
+                return concretize_from_resolved(resolved, comp, &inner_cx, &resource_map);
             }
         }
     }
@@ -746,7 +876,7 @@ fn resolve_func_from_import_instance<'a>(
 
     // Concretize the full instance type and find the named function.
     match concretize_comp_type(comp, ty)? {
-        ConcreteType::Instance(funcs) => funcs
+        ConcreteType::Instance { funcs, .. } => funcs
             .into_iter()
             .find(|(name, _)| *name == func_name)
             .map(|(_, ft)| ft),

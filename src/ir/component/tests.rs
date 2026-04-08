@@ -226,7 +226,7 @@ fn test_concretize_import_resolves_body_types() {
     let comp = parsed(&b);
     let result = comp.concretize_import("my-iface");
     assert!(
-        matches!(result, Some(ConcreteType::Instance(_))),
+        matches!(result, Some(ConcreteType::Instance { .. })),
         "expected Some(Instance), got {result:?}"
     );
 }
@@ -239,7 +239,7 @@ fn check_concretize_export(wat: &str) {
     let b = bytes(wat);
     let comp = parsed(&b);
     let result = comp.concretize_export("iface");
-    let Some(ConcreteType::Instance(funcs)) = result else {
+    let Some(ConcreteType::Instance { funcs, .. }) = result else {
         panic!("expected Some(Instance), got {result:?}");
     };
     assert_eq!(funcs.len(), 1);
@@ -319,7 +319,7 @@ fn concretize_export_all_patterns_same_signature() {
         let bytes = wat::parse_str(wat).expect("WAT parse failed");
         let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
         let comp = Box::leak(Box::new(Component::parse(bytes, false, false).unwrap()));
-        let Some(ConcreteType::Instance(mut funcs)) = comp.concretize_export("iface") else {
+        let Some(ConcreteType::Instance { funcs: mut funcs, .. }) = comp.concretize_export("iface") else {
             panic!("expected Instance");
         };
         funcs.remove(0).1
@@ -396,7 +396,7 @@ fn first_param_type(wat: &str) -> ConcreteValType<'_> {
     // Safety: we box-leak to get 'static for simplicity in tests.
     let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
     let comp = Box::leak(Box::new(Component::parse(bytes, false, false).unwrap()));
-    let Some(ConcreteType::Instance(funcs)) = comp.concretize_import("iface") else {
+    let Some(ConcreteType::Instance { funcs, .. }) = comp.concretize_import("iface") else {
         panic!("expected Instance");
     };
     funcs
@@ -658,10 +658,10 @@ fn server_and_middleware_concretize_to_same_func_type() {
         Component::parse(middleware_a_s, false, false).unwrap(),
     ));
 
-    let Some(ConcreteType::Instance(sb_funcs)) = sb.concretize_export("my:iface@1.0") else {
+    let Some(ConcreteType::Instance { funcs: sb_funcs, .. }) = sb.concretize_export("my:iface@1.0") else {
         panic!("server_b: expected Some(Instance)");
     };
-    let Some(ConcreteType::Instance(ma_funcs)) = ma.concretize_export("my:iface@1.0") else {
+    let Some(ConcreteType::Instance { funcs: ma_funcs, .. }) = ma.concretize_export("my:iface@1.0") else {
         panic!("middleware_a: expected Some(Instance)");
     };
 
@@ -734,10 +734,10 @@ fn server_and_middleware_same_func_type_explicit_type_decl() {
         Component::parse(middleware_a_s, false, false).unwrap(),
     ));
 
-    let Some(ConcreteType::Instance(sb_funcs)) = sb.concretize_export("my:iface@1.0") else {
+    let Some(ConcreteType::Instance { funcs: sb_funcs, .. }) = sb.concretize_export("my:iface@1.0") else {
         panic!("server_b: expected Some(Instance)");
     };
-    let Some(ConcreteType::Instance(ma_funcs)) = ma.concretize_export("my:iface@1.0") else {
+    let Some(ConcreteType::Instance { funcs: ma_funcs, .. }) = ma.concretize_export("my:iface@1.0") else {
         panic!("middleware_a (explicit type decl): expected Some(Instance)");
     };
 
