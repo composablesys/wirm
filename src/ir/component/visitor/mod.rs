@@ -520,6 +520,11 @@ pub struct VisitCtx<'a> {
     pub(crate) inner: VisitCtxInner<'a>,
 }
 impl<'a> VisitCtx<'a> {
+    /// Returns the component currently being visited.
+    pub fn curr_component(&self) -> &Component<'_> {
+        self.inner.curr_component()
+    }
+
     pub(crate) fn new(component: &'a Component<'a>) -> Self {
         Self {
             inner: VisitCtxInner::new(component),

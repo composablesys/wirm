@@ -38,8 +38,8 @@ use crate::Component;
 use std::collections::HashMap;
 use wasmparser::{
     ComponentAlias, ComponentDefinedType, ComponentExport, ComponentExternalKind,
-    ComponentFuncType, ComponentInstance, ComponentType, ComponentTypeRef, ComponentValType,
-    InstanceTypeDeclaration, PrimitiveValType, TypeBounds,
+    ComponentFuncType, ComponentInstance, ComponentOuterAliasKind, ComponentType,
+    ComponentTypeRef, ComponentValType, InstanceTypeDeclaration, PrimitiveValType, TypeBounds,
 };
 // ============================================================
 // Public output types
@@ -134,7 +134,9 @@ impl<'a> Component<'a> {
     /// Returns `None` if no export with the given name exists, or if its type
     /// is not one wirm currently concretizes.
     pub fn concretize_export(&'a self, name: &str) -> Option<ConcreteType<'a>> {
-        match self.resolve_named_export(name)? {
+        let resolved = self.resolve_named_export(name)?;
+        eprintln!("[wirm] concretize_export('{}') -> {:?}", name, std::mem::discriminant(&resolved));
+        match resolved {
             ResolvedItem::CompType(_, ty) => concretize_comp_type(self, ty),
             ResolvedItem::CompInst(_, ComponentInstance::FromExports(exports)) => {
                 concretize_from_exports_instance(self, exports)
@@ -149,16 +151,24 @@ impl<'a> Component<'a> {
             // resource names via build_component_resource_map).  Fall back to the import's
             // declared type when the nested component can't be resolved.
             ResolvedItem::CompInst(_, inst @ ComponentInstance::Instantiate { .. }) => {
-                let comp_result = {
-                    let comp_ref = inst.get_comp_refs().into_iter().next();
-                    comp_ref.and_then(|cr| match self.resolve(&cr.ref_) {
-                        ResolvedItem::Component(_, nested) => {
-                            concretize_comp_func_exports(nested)
-                        }
-                        _ => None,
-                    })
-                };
-                comp_result.or_else(|| self.concretize_import(name))
+                let comp_ref = inst.get_comp_refs().into_iter().next();
+                let nested = comp_ref.and_then(|cr| match self.resolve(&cr.ref_) {
+                    ResolvedItem::Component(_, nested) => Some(nested),
+                    _ => None,
+                });
+                // Try the nested component's own concretize_export first — this
+                // follows through to shim components recursively.  Fall back to
+                // concretize_comp_func_exports (for shim components with direct
+                // function exports), then to concretize_import.
+                eprintln!("[wirm]   Instantiate: nested={}", nested.is_some());
+                let r1 = nested.and_then(|n| {
+                    eprintln!("[wirm]   trying nested.concretize_export('{}')", name);
+                    n.concretize_export(name)
+                });
+                eprintln!("[wirm]   nested.concretize_export -> {}", r1.is_some());
+                r1
+                    .or_else(|| nested.and_then(concretize_comp_func_exports))
+                    .or_else(|| self.concretize_import(name))
             }
             // The export directly re-exposes an imported instance (pass-through middleware).
             // Concretize by following the import's declared instance type.
@@ -234,6 +244,7 @@ fn concretize_comp_type<'a>(
 /// instead of the anonymous `ConcreteValType::Resource`.
 fn build_instance_resource_map<'a>(
     decls: &'a [InstanceTypeDeclaration<'a>],
+    cx: &VisitCtx<'a>,
 ) -> HashMap<u32, &'a str> {
     // resource_by_idx: type_idx → export name, for types declared as SubResource
     let mut resource_by_idx: HashMap<u32, &'a str> = HashMap::new();
@@ -265,8 +276,49 @@ fn build_instance_resource_map<'a>(
             InstanceTypeDeclaration::Type(_) => {
                 type_count += 1;
             }
-            // Alias declarations (e.g. `(alias outer 1 N (type))`) create type entries.
-            InstanceTypeDeclaration::Alias(_) => {
+            // Alias outer declarations bring in a type from the parent scope.
+            // If the parent-scope type was aliased from a types instance export
+            // (e.g. `(alias export $types-inst "request" (type N))`), recover
+            // the resource name from that export.
+            InstanceTypeDeclaration::Alias(alias) => {
+                // Resolve alias outer types through the parent scope.
+                // If the parent type was an InstanceExport alias (e.g.
+                // `(alias export $types-inst "request" (type))`),
+                // the name tells us this is a named resource/type.
+                if let ComponentAlias::Outer {
+                    kind: ComponentOuterAliasKind::Type,
+                    index,
+                    count,
+                } = alias
+                {
+                    let ref_ = IndexedRef {
+                        depth: Depth::default().outer_at(*count),
+                        space: Space::CompType,
+                        index: *index,
+                    };
+                    let resolved = cx.resolve(&ref_);
+                    eprintln!("[wirm] build_instance_resource_map: alias outer {} {} -> {:?}",
+                        count, index, std::mem::discriminant(&resolved));
+                    if let ResolvedItem::Alias(_, alias) = &resolved {
+                        eprintln!("[wirm]   resolved alias: {:?}",
+                            match alias {
+                                ComponentAlias::InstanceExport { kind, name, instance_index } => format!("InstanceExport({:?}, '{}', inst={})", kind, name, instance_index),
+                                ComponentAlias::Outer { kind, count, index } => format!("Outer({:?}, count={}, idx={})", kind, count, index),
+                                ComponentAlias::CoreInstanceExport { kind, name, instance_index } => format!("CoreInstanceExport({:?}, '{}', inst={})", kind, name, instance_index),
+                            });
+                    }
+                    if let ResolvedItem::Alias(
+                        _,
+                        ComponentAlias::InstanceExport {
+                            kind: ComponentExternalKind::Type,
+                            name,
+                            ..
+                        },
+                    ) = resolved
+                    {
+                        resource_by_idx.insert(type_count, name);
+                    }
+                }
                 type_count += 1;
             }
             // CoreType doesn't create component-level type entries.
@@ -274,6 +326,7 @@ fn build_instance_resource_map<'a>(
         }
     }
 
+    eprintln!("[wirm] build_instance_resource_map: {:?}", resource_by_idx);
     resource_by_idx
 }
 
@@ -344,7 +397,7 @@ fn concretize_instance_decls<'a>(
     cx: &VisitCtx<'a>,
 ) -> ConcreteInstanceDecls<'a> {
     // Build a map of own-type-local-idx → resource-name for named resource types.
-    let resource_map = build_instance_resource_map(decls);
+    let resource_map = build_instance_resource_map(decls, cx);
 
     let mut funcs = vec![];
     let mut type_exports = vec![];
@@ -654,26 +707,26 @@ fn concretize_defined_type<'a>(
             ConcreteValType::FixedSizeList(Box::new(concretize_val_type(elem, comp, cx, resource_map)), *size)
         }
         ComponentDefinedType::Own(res_idx) => {
-            // Look up the resource name via the resource_map (keyed by resource-type-idx).
-            // Direct lookup first.
             if let Some(&name) = resource_map.get(res_idx) {
                 ConcreteValType::NamedResource(name)
             } else {
-                // The own's target index might be an alias (outer or eq-bound) of
-                // a resource that IS in the map, or a resource type in a parent scope.
-                // Try multiple resolution strategies.
                 let type_ref = IndexedRef {
                     depth: Depth::default(),
                     space: Space::CompType,
                     index: *res_idx,
                 };
                 let resolved = cx.resolve(&type_ref);
-                // Try to follow import eq-bound aliases to find the resource name.
+                eprintln!("[wirm] Own({}) miss in resource_map {:?}, resolved={:?}",
+                    res_idx, resource_map, std::mem::discriminant(&resolved));
                 let found_name = match resolved {
                     ResolvedItem::Import(_, imp) => {
-                        imp.get_type_refs()
-                            .iter()
-                            .find_map(|tr| resource_map.get(&tr.ref_.index).copied())
+                        let refs = imp.get_type_refs();
+                        let result = refs.iter()
+                            .find_map(|tr| resource_map.get(&tr.ref_.index).copied());
+                        eprintln!("[wirm]   Import type_refs: {:?} -> {:?}",
+                            refs.iter().map(|tr| (tr.ref_.space, tr.ref_.index)).collect::<Vec<_>>(),
+                            result);
+                        result
                     }
                     _ => None,
                 };
@@ -778,6 +831,13 @@ fn concretize_comp_func_exports<'a>(comp: &'a Component<'a>) -> Option<ConcreteT
         }
     }
 
+    // If we found no function exports, this component doesn't directly
+    // expose the interface as functions (it exports it as a nested instance).
+    // Return None so the caller's fallback chain can try other paths.
+    if funcs.is_empty() {
+        return None;
+    }
+
     Some(ConcreteType::Instance {
         funcs,
         type_exports,
@@ -823,7 +883,7 @@ fn resolve_type_from_import_instance<'a>(
     let inner_cx = comp.enter_type_scope(ty);
     // Build the resource map from the instance type declarations so that
     // resource names (like "request", "response") are preserved.
-    let resource_map = build_instance_resource_map(decls);
+    let resource_map = build_instance_resource_map(decls, &inner_cx);
     for decl in decls {
         if let InstanceTypeDeclaration::Export { name, .. } = decl {
             if name.0 != type_name {
