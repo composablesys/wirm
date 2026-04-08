@@ -144,21 +144,21 @@ impl<'a> Component<'a> {
             //
             // Strategy: if the outer component imports an interface under the *same name*
             // (the common wit-component shim pattern where the middleware imports and then
-            // re-exports the same WIT interface via a shim), use the import's declared type.
-            // This gives a fingerprint consistent with other components that declare the same
-            // WIT import.  Fall back to reconstructing the type from the nested component's
-            // function exports when no matching import exists.
+            // The export is a real instantiated component (e.g. a wit-component shim).
+            // Prefer reconstructing from the nested component's exports (which preserves
+            // resource names via build_component_resource_map).  Fall back to the import's
+            // declared type when the nested component can't be resolved.
             ResolvedItem::CompInst(_, inst @ ComponentInstance::Instantiate { .. }) => {
-                let import_result = self.concretize_import(name);
-                import_result.or_else(|| {
-                    let comp_ref = inst.get_comp_refs().into_iter().next()?;
-                    match self.resolve(&comp_ref.ref_) {
+                let comp_result = {
+                    let comp_ref = inst.get_comp_refs().into_iter().next();
+                    comp_ref.and_then(|cr| match self.resolve(&cr.ref_) {
                         ResolvedItem::Component(_, nested) => {
                             concretize_comp_func_exports(nested)
                         }
                         _ => None,
-                    }
-                })
+                    })
+                };
+                comp_result.or_else(|| self.concretize_import(name))
             }
             // The export directly re-exposes an imported instance (pass-through middleware).
             // Concretize by following the import's declared instance type.
@@ -265,7 +265,11 @@ fn build_instance_resource_map<'a>(
             InstanceTypeDeclaration::Type(_) => {
                 type_count += 1;
             }
-            // CoreType and Alias don't create type entries in normal WIT interface types.
+            // Alias declarations (e.g. `(alias outer 1 N (type))`) create type entries.
+            InstanceTypeDeclaration::Alias(_) => {
+                type_count += 1;
+            }
+            // CoreType doesn't create component-level type entries.
             _ => {}
         }
     }
@@ -660,30 +664,24 @@ fn concretize_defined_type<'a>(
             if let Some(&name) = resource_map.get(res_idx) {
                 ConcreteValType::NamedResource(name)
             } else {
-                // The own's target index might be an eq-bound alias of a resource
-                // that IS in the map. Resolve through the component's type system.
+                // The own's target index might be an alias (outer or eq-bound) of
+                // a resource that IS in the map, or a resource type in a parent scope.
+                // Try multiple resolution strategies.
                 let type_ref = IndexedRef {
                     depth: Depth::default(),
                     space: Space::CompType,
                     index: *res_idx,
                 };
-                let mut found_name = None;
                 let resolved = cx.resolve(&type_ref);
-                eprintln!(
-                    "[wirm debug] Own({}) not in map (keys={:?}), resolved={:?}",
-                    res_idx,
-                    resource_map.keys().collect::<Vec<_>>(),
-                    std::mem::discriminant(&resolved),
-                );
-                if let ResolvedItem::Import(_, imp) = resolved {
-                    let type_refs = imp.get_type_refs();
-                    for tr in type_refs {
-                        if let Some(&name) = resource_map.get(&tr.ref_.index) {
-                            found_name = Some(name);
-                            break;
-                        }
+                // Try to follow import eq-bound aliases to find the resource name.
+                let found_name = match resolved {
+                    ResolvedItem::Import(_, imp) => {
+                        imp.get_type_refs()
+                            .iter()
+                            .find_map(|tr| resource_map.get(&tr.ref_.index).copied())
                     }
-                }
+                    _ => None,
+                };
                 if let Some(name) = found_name {
                     ConcreteValType::NamedResource(name)
                 } else {
