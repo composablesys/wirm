@@ -1,4 +1,4 @@
-use crate::ir::component::idx_spaces::Space;
+use crate::ir::component::idx_spaces::{IndexSpaceOf, Space};
 use crate::ir::component::refs::{IndexedRef, RefKind};
 use crate::ir::component::visitor::driver::{drive_event, VisitEvent};
 use crate::ir::component::visitor::events_structural::get_structural_events;
@@ -525,6 +525,18 @@ impl<'a> VisitCtx<'a> {
         self.inner.curr_component()
     }
 
+    /// Top-level section ordinal of the event currently being driven, relative to the
+    /// immediately-containing component (i.e. the index of the section in
+    /// `component.sections`). Returns `None` while inside the root-component
+    /// enter/exit callbacks, which are not associated with any section.
+    ///
+    /// This is most useful for visitors that need to correlate IR items back to their
+    /// originating binary section — for example, deciding which raw section bytes to
+    /// copy when filtering or rewriting a component.
+    pub fn curr_section_idx(&self) -> Option<usize> {
+        self.inner.current_section_idx
+    }
+
     pub(crate) fn new(component: &'a Component<'a>) -> Self {
         Self {
             inner: VisitCtxInner::new(component),
@@ -703,48 +715,127 @@ impl<'a> VisitCtx<'a> {
 /// This enum allows callers to uniformly handle any reference target
 /// without needing to separately track both namespace and ID.
 ///
+/// # Reading the index and namespace uniformly
+///
+/// Some variants (e.g. [`ResolvedItem::CompType`]) imply a single
+/// namespace from the variant tag alone. Others ([`ResolvedItem::Alias`],
+/// [`ResolvedItem::Import`], [`ResolvedItem::Export`],
+/// [`ResolvedItem::Func`], and the `*TyDecl*` body-local variants) wrap
+/// items that may belong to *any* of several namespaces — the index lives
+/// in the namespace of the originating ref, not in some "alias space" or
+/// "import space".
+///
+/// To avoid forcing consumers to remember which variants are which,
+/// [`ResolvedItem::idx`] and [`ResolvedItem::space`] dispatch internally
+/// (using each item's [`IndexSpaceOf`] impl for the ambiguous variants)
+/// and return the canonical (space, idx) pair regardless of which variant
+/// you got back.
+///
 /// # Invariant
 ///
-/// The `u32` stored in each variant **must** correspond to the namespace
-/// implied by the variant and must match the ID used during visitor
-/// traversal. For example, `ResolvedItem::CompType(idx, _)` must always
-/// have `idx` equal to the resolved index of that component type in the
-/// component type namespace.
+/// The `u32` stored in each variant **must** equal the resolved index in
+/// the namespace returned by [`ResolvedItem::space`]. For example,
+/// `ResolvedItem::CompType(idx, _)` must always have `idx` equal to the
+/// resolved index in [`Space::CompType`].
 #[derive(Clone, Debug)]
 pub enum ResolvedItem<'a, 'b> {
-    /// A resolved subcomponent.
+    /// A resolved subcomponent. Always in [`Space::Comp`].
     Component(u32, &'a Component<'b>),
 
-    /// A resolved core WebAssembly module.
+    /// A resolved core WebAssembly module. Always in [`Space::CoreModule`].
     Module(u32, &'a Module<'b>),
 
-    /// A resolved canonical function.
+    /// A resolved canonical function. Index is in [`Space::CompFunc`] or
+    /// [`Space::CoreFunc`] depending on the function variant — see the
+    /// `CanonicalFunction` [`IndexSpaceOf`] impl.
     Func(u32, &'a CanonicalFunction),
 
-    /// A resolved component-level type.
+    /// A resolved component-level type. Always in [`Space::CompType`].
     CompType(u32, &'a ComponentType<'b>),
 
-    /// A resolved component instance.
+    /// A resolved component instance. Always in [`Space::CompInst`].
     CompInst(u32, &'a ComponentInstance<'b>),
 
-    /// A resolved core WebAssembly instance.
+    /// A resolved core WebAssembly instance. Always in [`Space::CoreInst`].
     CoreInst(u32, &'a Instance<'b>),
 
-    /// A resolved core WebAssembly type.
+    /// A resolved core WebAssembly type. Always in [`Space::CoreType`].
     CoreType(u32, &'a CoreType<'b>),
 
-    /// A resolved component alias.
+    /// A resolved component alias. Aliases produce items in whichever
+    /// namespace the originating ref was in (CompType, CompInst, CompFunc,
+    /// …); use [`ResolvedItem::space`] to get the namespace.
     Alias(u32, &'a ComponentAlias<'b>),
 
-    /// A resolved component import.
+    /// A resolved component import. Same disambiguation rules as
+    /// [`ResolvedItem::Alias`].
     Import(u32, &'a ComponentImport<'b>),
 
-    /// A resolved component export.
+    /// A resolved component export. Same disambiguation rules as
+    /// [`ResolvedItem::Alias`].
     Export(u32, &'a ComponentExport<'b>),
     /// A resolved declaration from inside a [`ComponentType::Component`] body.
+    /// The index is in the parent body's namespace; use
+    /// [`ResolvedItem::space`] to get it.
     CompTyDeclExport(u32, &'a ComponentTypeDeclaration<'b>),
     /// A resolved declaration from inside a [`ComponentType::Instance`] body.
+    /// The index is in the parent body's namespace; use
+    /// [`ResolvedItem::space`] to get it.
     InstTyDeclExport(u32, &'a InstanceTypeDeclaration<'b>),
     /// A resolved declaration from inside a [`CoreType::Module`] body.
+    /// The index is in the parent body's namespace; use
+    /// [`ResolvedItem::space`] to get it.
     ModuleTyDecl(u32, &'a ModuleTypeDeclaration<'b>),
+}
+
+impl<'a, 'b> ResolvedItem<'a, 'b> {
+    /// The resolved index of this item, in the namespace returned by
+    /// [`ResolvedItem::space`]. Returning the index this way means
+    /// consumers don't have to pattern-match on the variant just to extract
+    /// the index — relevant when you've already dispatched on `space` to
+    /// pick the right namespace-specific lookup.
+    pub fn idx(&self) -> u32 {
+        match self {
+            ResolvedItem::Component(i, _)
+            | ResolvedItem::Module(i, _)
+            | ResolvedItem::Func(i, _)
+            | ResolvedItem::CompType(i, _)
+            | ResolvedItem::CompInst(i, _)
+            | ResolvedItem::CoreInst(i, _)
+            | ResolvedItem::CoreType(i, _)
+            | ResolvedItem::Alias(i, _)
+            | ResolvedItem::Import(i, _)
+            | ResolvedItem::Export(i, _)
+            | ResolvedItem::CompTyDeclExport(i, _)
+            | ResolvedItem::InstTyDeclExport(i, _)
+            | ResolvedItem::ModuleTyDecl(i, _) => *i,
+        }
+    }
+
+    /// The namespace this resolved item lives in.
+    ///
+    /// For variants whose tag implies a single namespace (Component,
+    /// Module, CompType, CompInst, CoreInst, CoreType) the implied space
+    /// is returned. For ambiguous variants — `Alias`, `Import`, `Export`,
+    /// `Func`, and the body-local `*TyDecl*` variants — this dispatches to
+    /// the underlying IR node's [`IndexSpaceOf`] impl, which examines the
+    /// node's actual kind to derive the correct namespace (e.g. an alias
+    /// of `kind: Type` returns [`Space::CompType`]).
+    pub fn space(&self) -> Space {
+        match self {
+            ResolvedItem::Component(_, _) => Space::Comp,
+            ResolvedItem::Module(_, _) => Space::CoreModule,
+            ResolvedItem::CompType(_, _) => Space::CompType,
+            ResolvedItem::CompInst(_, _) => Space::CompInst,
+            ResolvedItem::CoreInst(_, _) => Space::CoreInst,
+            ResolvedItem::CoreType(_, _) => Space::CoreType,
+            ResolvedItem::Func(_, func) => func.index_space_of(),
+            ResolvedItem::Alias(_, alias) => alias.index_space_of(),
+            ResolvedItem::Import(_, import) => import.index_space_of(),
+            ResolvedItem::Export(_, export) => export.index_space_of(),
+            ResolvedItem::CompTyDeclExport(_, decl) => decl.index_space_of(),
+            ResolvedItem::InstTyDeclExport(_, decl) => decl.index_space_of(),
+            ResolvedItem::ModuleTyDecl(_, decl) => decl.index_space_of(),
+        }
+    }
 }

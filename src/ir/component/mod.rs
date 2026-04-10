@@ -271,6 +271,12 @@ impl<'a> Component<'a> {
         num_sections: &mut usize,
         sections_added: u32,
     ) {
+        debug_assert!(
+            sections_added as usize == new_sections.len(),
+            "sections_added must equal new_sections length"
+        );
+        let _ = sections_added;
+
         // We can only collapse sections if the new sections don't have
         // inner index spaces associated with them. With a subscope, each
         // item must remain its own logical section so visitor scope
@@ -283,28 +289,14 @@ impl<'a> Component<'a> {
             return;
         }
 
-        // First, fold the head of `new_sections` onto the previous entry if
-        // its kind matches.
-        let mut start = 0usize;
-        if *num_sections > 0 {
-            let prev_kind = sections[*num_sections - 1].1.clone();
-            while start < new_sections.len() && new_sections[start] == prev_kind {
-                sections[*num_sections - 1].0 += 1;
-                start += 1;
-            }
-        }
-
-        // Then walk the remainder, grouping consecutive same-kind items into
-        // a single (count, kind) entry. In practice every call site passes a
-        // uniform-kind slice (`vec![Alias; l]`, `vec![ComponentImport; l]`,
-        // …) so this is at most one new entry, but the loop is correct for
-        // the mixed-kind case too.
-        debug_assert!(
-            sections_added as usize == new_sections.len(),
-            "sections_added must equal new_sections length"
-        );
-        let _ = sections_added;
-        let mut i = start;
+        // Group consecutive same-kind items WITHIN this single call into
+        // one `(count, kind)` entry. Each call to `add_to_sections`
+        // corresponds to exactly one binary section in the source wasm —
+        // we deliberately do NOT fold across calls, because doing so
+        // would erase the binary section boundary and cause consumers
+        // that walk the binary independently (e.g. via wasmparser) to
+        // disagree with wirm about section ordinals.
+        let mut i = 0usize;
         while i < new_sections.len() {
             let kind = new_sections[i].clone();
             let mut count = 1u32;
