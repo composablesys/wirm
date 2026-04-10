@@ -42,7 +42,7 @@ use wasmparser::{
 mod alias;
 mod canons;
 pub mod concrete;
-pub(crate) mod idx_spaces;
+pub mod idx_spaces;
 pub mod refs;
 pub(crate) mod scopes;
 pub(crate) mod section;
@@ -272,20 +272,50 @@ impl<'a> Component<'a> {
         sections_added: u32,
     ) {
         // We can only collapse sections if the new sections don't have
-        // inner index spaces associated with them.
-        let can_collapse = !has_subscope;
-
-        if can_collapse
-            && *num_sections > 0
-            && sections[*num_sections - 1].1 == *new_sections.last().unwrap()
-        {
-            sections[*num_sections - 1].0 += sections_added;
+        // inner index spaces associated with them. With a subscope, each
+        // item must remain its own logical section so visitor scope
+        // accounting can pair enter/exit hooks correctly.
+        if has_subscope {
+            for sect in new_sections.iter() {
+                sections.push((1, sect.clone()));
+                *num_sections += 1;
+            }
             return;
         }
-        // Cannot collapse these, add one at a time!
-        for sect in new_sections.iter() {
-            sections.push((1, sect.clone()));
+
+        // First, fold the head of `new_sections` onto the previous entry if
+        // its kind matches.
+        let mut start = 0usize;
+        if *num_sections > 0 {
+            let prev_kind = sections[*num_sections - 1].1.clone();
+            while start < new_sections.len() && new_sections[start] == prev_kind {
+                sections[*num_sections - 1].0 += 1;
+                start += 1;
+            }
+        }
+
+        // Then walk the remainder, grouping consecutive same-kind items into
+        // a single (count, kind) entry. In practice every call site passes a
+        // uniform-kind slice (`vec![Alias; l]`, `vec![ComponentImport; l]`,
+        // …) so this is at most one new entry, but the loop is correct for
+        // the mixed-kind case too.
+        debug_assert!(
+            sections_added as usize == new_sections.len(),
+            "sections_added must equal new_sections length"
+        );
+        let _ = sections_added;
+        let mut i = start;
+        while i < new_sections.len() {
+            let kind = new_sections[i].clone();
+            let mut count = 1u32;
+            while i + (count as usize) < new_sections.len()
+                && new_sections[i + count as usize] == kind
+            {
+                count += 1;
+            }
+            sections.push((count, kind));
             *num_sections += 1;
+            i += count as usize;
         }
     }
 
