@@ -135,7 +135,6 @@ impl<'a> Component<'a> {
     /// is not one wirm currently concretizes.
     pub fn concretize_export(&'a self, name: &str) -> Option<ConcreteType<'a>> {
         let resolved = self.resolve_named_export(name)?;
-        eprintln!("[wirm] concretize_export('{}') -> {:?}", name, std::mem::discriminant(&resolved));
         match resolved {
             ResolvedItem::CompType(_, ty) => concretize_comp_type(self, ty),
             ResolvedItem::CompInst(_, ComponentInstance::FromExports(exports)) => {
@@ -160,13 +159,8 @@ impl<'a> Component<'a> {
                 // follows through to shim components recursively.  Fall back to
                 // concretize_comp_func_exports (for shim components with direct
                 // function exports), then to concretize_import.
-                eprintln!("[wirm]   Instantiate: nested={}", nested.is_some());
-                let r1 = nested.and_then(|n| {
-                    eprintln!("[wirm]   trying nested.concretize_export('{}')", name);
-                    n.concretize_export(name)
-                });
-                eprintln!("[wirm]   nested.concretize_export -> {}", r1.is_some());
-                r1
+                nested
+                    .and_then(|n| n.concretize_export(name))
                     .or_else(|| nested.and_then(concretize_comp_func_exports))
                     .or_else(|| self.concretize_import(name))
             }
@@ -297,16 +291,6 @@ fn build_instance_resource_map<'a>(
                         index: *index,
                     };
                     let resolved = cx.resolve(&ref_);
-                    eprintln!("[wirm] build_instance_resource_map: alias outer {} {} -> {:?}",
-                        count, index, std::mem::discriminant(&resolved));
-                    if let ResolvedItem::Alias(_, alias) = &resolved {
-                        eprintln!("[wirm]   resolved alias: {:?}",
-                            match alias {
-                                ComponentAlias::InstanceExport { kind, name, instance_index } => format!("InstanceExport({:?}, '{}', inst={})", kind, name, instance_index),
-                                ComponentAlias::Outer { kind, count, index } => format!("Outer({:?}, count={}, idx={})", kind, count, index),
-                                ComponentAlias::CoreInstanceExport { kind, name, instance_index } => format!("CoreInstanceExport({:?}, '{}', inst={})", kind, name, instance_index),
-                            });
-                    }
                     if let ResolvedItem::Alias(
                         _,
                         ComponentAlias::InstanceExport {
@@ -326,7 +310,6 @@ fn build_instance_resource_map<'a>(
         }
     }
 
-    eprintln!("[wirm] build_instance_resource_map: {:?}", resource_by_idx);
     resource_by_idx
 }
 
@@ -716,17 +699,11 @@ fn concretize_defined_type<'a>(
                     index: *res_idx,
                 };
                 let resolved = cx.resolve(&type_ref);
-                eprintln!("[wirm] Own({}) miss in resource_map {:?}, resolved={:?}",
-                    res_idx, resource_map, std::mem::discriminant(&resolved));
                 let found_name = match resolved {
                     ResolvedItem::Import(_, imp) => {
                         let refs = imp.get_type_refs();
-                        let result = refs.iter()
-                            .find_map(|tr| resource_map.get(&tr.ref_.index).copied());
-                        eprintln!("[wirm]   Import type_refs: {:?} -> {:?}",
-                            refs.iter().map(|tr| (tr.ref_.space, tr.ref_.index)).collect::<Vec<_>>(),
-                            result);
-                        result
+                        refs.iter()
+                            .find_map(|tr| resource_map.get(&tr.ref_.index).copied())
                     }
                     _ => None,
                 };

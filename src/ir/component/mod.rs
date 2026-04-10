@@ -265,7 +265,7 @@ impl<'a> Component<'a> {
     }
 
     fn add_to_sections(
-        has_subscope: bool,
+        _has_subscope: bool,
         sections: &mut Vec<(u32, ComponentSection)>,
         new_sections: &[ComponentSection],
         num_sections: &mut usize,
@@ -277,25 +277,24 @@ impl<'a> Component<'a> {
         );
         let _ = sections_added;
 
-        // We can only collapse sections if the new sections don't have
-        // inner index spaces associated with them. With a subscope, each
-        // item must remain its own logical section so visitor scope
-        // accounting can pair enter/exit hooks correctly.
-        if has_subscope {
-            for sect in new_sections.iter() {
-                sections.push((1, sect.clone()));
-                *num_sections += 1;
-            }
-            return;
-        }
-
-        // Group consecutive same-kind items WITHIN this single call into
-        // one `(count, kind)` entry. Each call to `add_to_sections`
-        // corresponds to exactly one binary section in the source wasm —
-        // we deliberately do NOT fold across calls, because doing so
-        // would erase the binary section boundary and cause consumers
-        // that walk the binary independently (e.g. via wasmparser) to
-        // disagree with wirm about section ordinals.
+        // Group consecutive same-kind items WITHIN this single call
+        // into one `(count, kind)` entry. Each call to
+        // `add_to_sections` corresponds to exactly one binary section
+        // in the source wasm — we deliberately do NOT fold across
+        // calls, because doing so would erase the binary section
+        // boundary and cause consumers that walk the binary
+        // independently (e.g. via wasmparser) to disagree with wirm
+        // about section ordinals.
+        //
+        // The previous version of this function spread items
+        // one-per-entry whenever `has_subscope` was true (i.e. the
+        // section contained at least one Instance/Component type
+        // with a nested scope). That broke the
+        // "one binary payload = one wirm entry" invariant for type
+        // sections that mix leaf types and instance/component types.
+        // Visitor scope accounting (maybe_enter_scope /
+        // maybe_exit_scope in the driver) is per-item and doesn't
+        // depend on section grouping, so the spread isn't needed.
         let mut i = 0usize;
         while i < new_sections.len() {
             let kind = new_sections[i].clone();
@@ -738,7 +737,11 @@ impl<'a> Component<'a> {
                     range: _,
                 } => return Err(Error::UnknownSection { section_id: id }),
                 Payload::Version { .. } | Payload::End { .. } => {} // nothing to do
-                other => println!("TODO: Not sure what to do for: {:?}", other),
+                _ => {
+                    // Unhandled payload variant — silently skipped. If you
+                    // hit a parsing surprise here, add a `TODO` arm and
+                    // re-enable a debug print to find out which one fired.
+                }
             }
         }
 

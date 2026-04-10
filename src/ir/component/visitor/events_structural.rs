@@ -27,15 +27,6 @@ fn visit_comp<'ir>(
     ctx: &mut VisitCtx<'ir>,
     out: &mut Vec<VisitEvent<'ir>>,
 ) {
-    eprintln!(
-        "[wirm.visit_comp] comp.sections layout: {:?}",
-        component
-            .sections
-            .iter()
-            .enumerate()
-            .map(|(i, (n, s))| format!("[{i}]={n}x{s:?}"))
-            .collect::<Vec<_>>()
-    );
     for (section_idx, (num, section)) in component.sections.iter().enumerate() {
         let count = *num as usize;
         let start_idx = ctx.inner.visit_section(section, count);
