@@ -107,9 +107,7 @@ fn visit_comp<'ir>(
                     &component.custom_sections.custom_sections,
                     start_idx,
                     count,
-                    |idx, sect| {
-                        emit_indexed(out, section_idx, idx, sect, VisitEvent::custom_sect)
-                    },
+                    |idx, sect| emit_indexed(out, section_idx, idx, sect, VisitEvent::custom_sect),
                 );
             }
 
@@ -223,12 +221,7 @@ fn visit_core_type<'ir>(
                 ty,
             ));
             for (subvec_idx, item) in group.types().enumerate() {
-                out.push(VisitEvent::core_subtype(
-                    section_idx,
-                    idx,
-                    subvec_idx,
-                    item,
-                ));
+                out.push(VisitEvent::core_subtype(section_idx, idx, subvec_idx, item));
             }
             out.push(VisitEvent::exit_rec_group(section_idx));
         }

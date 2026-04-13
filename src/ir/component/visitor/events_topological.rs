@@ -58,8 +58,8 @@ impl<'ir> TopoCtx<'ir> {
         if let Some(idx) = idx {
             // A nested component is always declared inside some Component section of the
             // parent, so `parent_section_idx` must be set when `idx` is set.
-            let parent_section_idx = parent_section_idx
-                .expect("nested component must have a parent section_idx");
+            let parent_section_idx =
+                parent_section_idx.expect("nested component must have a parent section_idx");
             ctx.inner.push_component(comp);
             self.events
                 .push(VisitEvent::enter_comp(parent_section_idx, idx, comp));
@@ -71,8 +71,8 @@ impl<'ir> TopoCtx<'ir> {
         }
 
         if let Some(idx) = idx {
-            let parent_section_idx = parent_section_idx
-                .expect("nested component must have a parent section_idx");
+            let parent_section_idx =
+                parent_section_idx.expect("nested component must have a parent section_idx");
             ctx.inner.pop_component();
             self.events
                 .push(VisitEvent::exit_comp(parent_section_idx, idx, comp));
@@ -263,18 +263,8 @@ impl<'ir> TopoCtx<'ir> {
             )
         } else {
             (
-                VisitEvent::enter_core_type(
-                    section_idx,
-                    node.index_space_of().into(),
-                    idx,
-                    node,
-                ),
-                VisitEvent::exit_core_type(
-                    section_idx,
-                    node.index_space_of().into(),
-                    idx,
-                    node,
-                ),
+                VisitEvent::enter_core_type(section_idx, node.index_space_of().into(), idx, node),
+                VisitEvent::exit_core_type(section_idx, node.index_space_of().into(), idx, node),
             )
         };
 
@@ -455,12 +445,9 @@ impl<'ir> TopoCtx<'ir> {
             let idx = start_idx + i;
 
             match section {
-                ComponentSection::Component => self.collect_component(
-                    &comp.components[idx],
-                    Some(idx),
-                    Some(section_idx),
-                    ctx,
-                ),
+                ComponentSection::Component => {
+                    self.collect_component(&comp.components[idx], Some(idx), Some(section_idx), ctx)
+                }
 
                 ComponentSection::Module => {
                     self.collect_module(section_idx, &comp.modules[idx], idx, ctx)
@@ -473,12 +460,9 @@ impl<'ir> TopoCtx<'ir> {
                     ctx,
                 ),
 
-                ComponentSection::ComponentInstance => self.collect_comp_inst(
-                    section_idx,
-                    &comp.component_instance[idx],
-                    idx,
-                    ctx,
-                ),
+                ComponentSection::ComponentInstance => {
+                    self.collect_comp_inst(section_idx, &comp.component_instance[idx], idx, ctx)
+                }
 
                 ComponentSection::Canon => {
                     self.collect_canon(section_idx, &comp.canons.items[idx], idx, ctx)
@@ -511,12 +495,9 @@ impl<'ir> TopoCtx<'ir> {
                     ctx,
                 ),
 
-                ComponentSection::ComponentStartSection => self.collect_start_section(
-                    section_idx,
-                    &comp.start_section[idx],
-                    idx,
-                    ctx,
-                ),
+                ComponentSection::ComponentStartSection => {
+                    self.collect_start_section(section_idx, &comp.start_section[idx], idx, ctx)
+                }
             }
         }
     }
@@ -551,11 +532,7 @@ impl<'ir> TopoCtx<'ir> {
     /// Each dep lives in its own section in `referenced_comp` — we look that up via
     /// [`section_idx_for_main_vec`] and [`section_idx_of_kth_item`] so the queued event
     /// carries the correct ordinal even when the dep crosses an outer-component boundary.
-    fn collect_deps<T: ReferencedIndices + 'ir>(
-        &mut self,
-        item: &'ir T,
-        ctx: &mut VisitCtx<'ir>,
-    ) {
+    fn collect_deps<T: ReferencedIndices + 'ir>(&mut self, item: &'ir T, ctx: &mut VisitCtx<'ir>) {
         let refs = item.referenced_indices();
         for RefKind { ref_, .. } in refs.iter() {
             let (vec, idx, subidx) = ctx.inner.index_from_assumed_id(ref_);
@@ -573,8 +550,7 @@ impl<'ir> TopoCtx<'ir> {
             match vec {
                 SpaceSubtype::Main => match space {
                     Space::Comp => {
-                        let dep_section =
-                            section_idx_for_main_vec(referenced_comp, space, idx);
+                        let dep_section = section_idx_for_main_vec(referenced_comp, space, idx);
                         self.collect_component(
                             &referenced_comp.components[idx],
                             Some(idx),
@@ -583,8 +559,7 @@ impl<'ir> TopoCtx<'ir> {
                         )
                     }
                     Space::CompType => {
-                        let dep_section =
-                            section_idx_for_main_vec(referenced_comp, space, idx);
+                        let dep_section = section_idx_for_main_vec(referenced_comp, space, idx);
                         self.collect_component_type(
                             dep_section,
                             &referenced_comp.component_types.items[idx],
@@ -593,8 +568,7 @@ impl<'ir> TopoCtx<'ir> {
                         )
                     }
                     Space::CompInst => {
-                        let dep_section =
-                            section_idx_for_main_vec(referenced_comp, space, idx);
+                        let dep_section = section_idx_for_main_vec(referenced_comp, space, idx);
                         self.collect_comp_inst(
                             dep_section,
                             &referenced_comp.component_instance[idx],
@@ -603,8 +577,7 @@ impl<'ir> TopoCtx<'ir> {
                         )
                     }
                     Space::CoreInst => {
-                        let dep_section =
-                            section_idx_for_main_vec(referenced_comp, space, idx);
+                        let dep_section = section_idx_for_main_vec(referenced_comp, space, idx);
                         self.collect_core_inst(
                             dep_section,
                             &referenced_comp.instances[idx],
@@ -613,18 +586,11 @@ impl<'ir> TopoCtx<'ir> {
                         )
                     }
                     Space::CoreModule => {
-                        let dep_section =
-                            section_idx_for_main_vec(referenced_comp, space, idx);
-                        self.collect_module(
-                            dep_section,
-                            &referenced_comp.modules[idx],
-                            idx,
-                            ctx,
-                        )
+                        let dep_section = section_idx_for_main_vec(referenced_comp, space, idx);
+                        self.collect_module(dep_section, &referenced_comp.modules[idx], idx, ctx)
                     }
                     Space::CoreType => {
-                        let dep_section =
-                            section_idx_for_main_vec(referenced_comp, space, idx);
+                        let dep_section = section_idx_for_main_vec(referenced_comp, space, idx);
                         self.collect_core_type(
                             dep_section,
                             &referenced_comp.core_types[idx],
@@ -633,8 +599,7 @@ impl<'ir> TopoCtx<'ir> {
                         )
                     }
                     Space::CompFunc | Space::CoreFunc => {
-                        let dep_section =
-                            section_idx_for_main_vec(referenced_comp, space, idx);
+                        let dep_section = section_idx_for_main_vec(referenced_comp, space, idx);
                         self.collect_canon(
                             dep_section,
                             &referenced_comp.canons.items[idx],
@@ -657,12 +622,7 @@ impl<'ir> TopoCtx<'ir> {
                         ComponentSection::ComponentExport,
                         idx,
                     );
-                    self.collect_export(
-                        dep_section,
-                        &referenced_comp.exports[idx],
-                        idx,
-                        ctx,
-                    )
+                    self.collect_export(dep_section, &referenced_comp.exports[idx], idx, ctx)
                 }
                 SpaceSubtype::Import => {
                     let dep_section = section_idx_of_kth_item(
@@ -670,25 +630,12 @@ impl<'ir> TopoCtx<'ir> {
                         ComponentSection::ComponentImport,
                         idx,
                     );
-                    self.collect_import(
-                        dep_section,
-                        &referenced_comp.imports[idx],
-                        idx,
-                        ctx,
-                    )
+                    self.collect_import(dep_section, &referenced_comp.imports[idx], idx, ctx)
                 }
                 SpaceSubtype::Alias => {
-                    let dep_section = section_idx_of_kth_item(
-                        referenced_comp,
-                        ComponentSection::Alias,
-                        idx,
-                    );
-                    self.collect_alias(
-                        dep_section,
-                        &referenced_comp.alias.items[idx],
-                        idx,
-                        ctx,
-                    )
+                    let dep_section =
+                        section_idx_of_kth_item(referenced_comp, ComponentSection::Alias, idx);
+                    self.collect_alias(dep_section, &referenced_comp.alias.items[idx], idx, ctx)
                 }
             }
         }
@@ -799,9 +746,9 @@ fn section_idx_for_main_vec(comp: &Component, space: Space, vec_idx: usize) -> u
         | Space::CoreTable
         | Space::CoreGlobal
         | Space::CoreTag
-        | Space::NA => panic!(
-            "section_idx_for_main_vec: space {space:?} has no main vector in the IR"
-        ),
+        | Space::NA => {
+            panic!("section_idx_for_main_vec: space {space:?} has no main vector in the IR")
+        }
     };
     section_idx_of_kth_item(comp, target, vec_idx)
 }
@@ -810,11 +757,7 @@ fn section_idx_for_main_vec(comp: &Component, space: Space, vec_idx: usize) -> u
 /// holds the `vec_idx`-th item among all sections of the given kind. Panics if the
 /// component has fewer than `vec_idx + 1` items of that kind, since that indicates a
 /// bug in the caller's index resolution.
-fn section_idx_of_kth_item(
-    comp: &Component,
-    target: ComponentSection,
-    vec_idx: usize,
-) -> usize {
+fn section_idx_of_kth_item(comp: &Component, target: ComponentSection, vec_idx: usize) -> usize {
     let mut cumulative = 0usize;
     for (section_idx, (num, section)) in comp.sections.iter().enumerate() {
         if std::mem::discriminant(section) == std::mem::discriminant(&target) {

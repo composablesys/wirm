@@ -319,7 +319,7 @@ fn concretize_export_all_patterns_same_signature() {
         let bytes = wat::parse_str(wat).expect("WAT parse failed");
         let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
         let comp = Box::leak(Box::new(Component::parse(bytes, false, false).unwrap()));
-        let Some(ConcreteType::Instance { funcs: mut funcs, .. }) = comp.concretize_export("iface") else {
+        let Some(ConcreteType::Instance { mut funcs, .. }) = comp.concretize_export("iface") else {
             panic!("expected Instance");
         };
         funcs.remove(0).1
@@ -658,10 +658,16 @@ fn server_and_middleware_concretize_to_same_func_type() {
         Component::parse(middleware_a_s, false, false).unwrap(),
     ));
 
-    let Some(ConcreteType::Instance { funcs: sb_funcs, .. }) = sb.concretize_export("my:iface@1.0") else {
+    let Some(ConcreteType::Instance {
+        funcs: sb_funcs, ..
+    }) = sb.concretize_export("my:iface@1.0")
+    else {
         panic!("server_b: expected Some(Instance)");
     };
-    let Some(ConcreteType::Instance { funcs: ma_funcs, .. }) = ma.concretize_export("my:iface@1.0") else {
+    let Some(ConcreteType::Instance {
+        funcs: ma_funcs, ..
+    }) = ma.concretize_export("my:iface@1.0")
+    else {
         panic!("middleware_a: expected Some(Instance)");
     };
 
@@ -734,10 +740,16 @@ fn server_and_middleware_same_func_type_explicit_type_decl() {
         Component::parse(middleware_a_s, false, false).unwrap(),
     ));
 
-    let Some(ConcreteType::Instance { funcs: sb_funcs, .. }) = sb.concretize_export("my:iface@1.0") else {
+    let Some(ConcreteType::Instance {
+        funcs: sb_funcs, ..
+    }) = sb.concretize_export("my:iface@1.0")
+    else {
         panic!("server_b: expected Some(Instance)");
     };
-    let Some(ConcreteType::Instance { funcs: ma_funcs, .. }) = ma.concretize_export("my:iface@1.0") else {
+    let Some(ConcreteType::Instance {
+        funcs: ma_funcs, ..
+    }) = ma.concretize_export("my:iface@1.0")
+    else {
         panic!("middleware_a (explicit type decl): expected Some(Instance)");
     };
 

@@ -38,8 +38,8 @@ use crate::Component;
 use std::collections::HashMap;
 use wasmparser::{
     ComponentAlias, ComponentDefinedType, ComponentExport, ComponentExternalKind,
-    ComponentFuncType, ComponentInstance, ComponentOuterAliasKind, ComponentType,
-    ComponentTypeRef, ComponentValType, InstanceTypeDeclaration, PrimitiveValType, TypeBounds,
+    ComponentFuncType, ComponentInstance, ComponentOuterAliasKind, ComponentType, ComponentTypeRef,
+    ComponentValType, InstanceTypeDeclaration, PrimitiveValType, TypeBounds,
 };
 // ============================================================
 // Public output types
@@ -218,7 +218,12 @@ fn concretize_comp_type<'a>(
         }
         ComponentType::Func(ft) => {
             let cx = comp.enter_type_scope(ty);
-            Some(ConcreteType::Func(concretize_func_ty(ft, comp, &cx, &HashMap::new())))
+            Some(ConcreteType::Func(concretize_func_ty(
+                ft,
+                comp,
+                &cx,
+                &HashMap::new(),
+            )))
         }
         ComponentType::Resource { .. } => Some(ConcreteType::Resource),
         _ => None,
@@ -339,7 +344,7 @@ fn build_component_resource_map<'a>(
             space: Space::CompType,
             index: export.index,
         };
-        if resolved_is_resource(cx.resolve(&type_ref), comp, cx, 0) {
+        if resolved_is_resource(cx.resolve(&type_ref), cx, 0) {
             map.insert(export.index, export.name.0);
         }
     }
@@ -347,12 +352,7 @@ fn build_component_resource_map<'a>(
 }
 
 /// Returns `true` if `resolved` ultimately resolves to a sub-resource type.
-fn resolved_is_resource<'a>(
-    resolved: ResolvedItem<'a, '_>,
-    comp: &'a Component<'a>,
-    cx: &VisitCtx<'a>,
-    depth: u32,
-) -> bool {
+fn resolved_is_resource<'a>(resolved: ResolvedItem<'a, '_>, cx: &VisitCtx<'a>, depth: u32) -> bool {
     if depth > 16 {
         return false; // guard against infinite alias chains
     }
@@ -362,7 +362,7 @@ fn resolved_is_resource<'a>(
             matches!(imp.ty, ComponentTypeRef::Type(TypeBounds::SubResource))
         }
         ResolvedItem::Alias(_, alias) => {
-            resolved_is_resource(cx.resolve(&alias.get_item_ref().ref_), comp, cx, depth + 1)
+            resolved_is_resource(cx.resolve(&alias.get_item_ref().ref_), cx, depth + 1)
         }
         _ => false,
     }
@@ -399,9 +399,9 @@ fn concretize_instance_decls<'a>(
                         ComponentTypeRef::Type(TypeBounds::Eq(_)) => {
                             // Re-resolve (first resolve was consumed by resolve_and_concretize_func).
                             let resolved2 = cx.resolve(&type_ref.ref_);
-                            if let Some(cvt) = concretize_from_resolved_to_val(
-                                resolved2, comp, cx, &resource_map,
-                            ) {
+                            if let Some(cvt) =
+                                concretize_from_resolved_to_val(resolved2, comp, cx, &resource_map)
+                            {
                                 type_exports.push((name.0, cvt));
                             }
                         }
@@ -470,7 +470,12 @@ fn resolve_and_concretize_func<'a>(
             Some(concretize_func_ty(ft, comp, cx, resource_map))
         }
         ResolvedItem::Alias(_, alias @ ComponentAlias::Outer { .. }) => {
-            resolve_and_concretize_func(cx.resolve(&alias.get_item_ref().ref_), comp, cx, resource_map)
+            resolve_and_concretize_func(
+                cx.resolve(&alias.get_item_ref().ref_),
+                comp,
+                cx,
+                resource_map,
+            )
         }
         // `InstanceExport` aliases carry the instance index relative to the owning component's
         // instance namespace.  Resolve through the instantiated component's export instead of
@@ -559,9 +564,12 @@ fn concretize_from_resolved<'a>(
 ) -> ConcreteValType<'a> {
     match resolved {
         ResolvedItem::CompType(_, ty) => concretize_comp_type_to_val(ty, comp, cx, resource_map),
-        ResolvedItem::Alias(_, alias @ ComponentAlias::Outer { .. }) => {
-            concretize_from_resolved(cx.resolve(&alias.get_item_ref().ref_), comp, cx, resource_map)
-        }
+        ResolvedItem::Alias(_, alias @ ComponentAlias::Outer { .. }) => concretize_from_resolved(
+            cx.resolve(&alias.get_item_ref().ref_),
+            comp,
+            cx,
+            resource_map,
+        ),
         // Same fix as in `resolve_and_concretize_func`: bypass `cx.resolve()` for InstanceExport
         // and look up the type directly through the instantiated component's export chain.
         ResolvedItem::Alias(
@@ -645,7 +653,12 @@ fn concretize_defined_type<'a>(
         ComponentDefinedType::Record(fields) => ConcreteValType::Record(
             fields
                 .iter()
-                .map(|(name, ty)| (*name, Box::new(concretize_val_type(ty, comp, cx, resource_map))))
+                .map(|(name, ty)| {
+                    (
+                        *name,
+                        Box::new(concretize_val_type(ty, comp, cx, resource_map)),
+                    )
+                })
                 .collect(),
         ),
         ComponentDefinedType::Variant(cases) => ConcreteValType::Variant(
@@ -686,9 +699,10 @@ fn concretize_defined_type<'a>(
             Box::new(concretize_val_type(key, comp, cx, resource_map)),
             Box::new(concretize_val_type(val, comp, cx, resource_map)),
         ),
-        ComponentDefinedType::FixedSizeList(elem, size) => {
-            ConcreteValType::FixedSizeList(Box::new(concretize_val_type(elem, comp, cx, resource_map)), *size)
-        }
+        ComponentDefinedType::FixedSizeList(elem, size) => ConcreteValType::FixedSizeList(
+            Box::new(concretize_val_type(elem, comp, cx, resource_map)),
+            *size,
+        ),
         ComponentDefinedType::Own(res_idx) => {
             if let Some(&name) = resource_map.get(res_idx) {
                 ConcreteValType::NamedResource(name)
@@ -782,9 +796,7 @@ fn concretize_comp_func_exports<'a>(comp: &'a Component<'a>) -> Option<ConcreteT
         match export.kind {
             ComponentExternalKind::Func => {
                 let resolved = comp.resolve(&export.get_item_ref().ref_);
-                if let Some(ft) =
-                    resolve_and_concretize_func(resolved, comp, &cx, &resource_map)
-                {
+                if let Some(ft) = resolve_and_concretize_func(resolved, comp, &cx, &resource_map) {
                     funcs.push((export.name.0, ft));
                 }
             }
@@ -795,9 +807,10 @@ fn concretize_comp_func_exports<'a>(comp: &'a Component<'a>) -> Option<ConcreteT
                     index: export.index,
                 };
                 let resolved = cx.resolve(&type_ref);
-                if resolved_is_resource(cx.resolve(&type_ref), comp, &cx, 0) {
+                if resolved_is_resource(cx.resolve(&type_ref), &cx, 0) {
                     // Use NamedResource so the vid matches function param resource vids.
-                    type_exports.push((export.name.0, ConcreteValType::NamedResource(export.name.0)));
+                    type_exports
+                        .push((export.name.0, ConcreteValType::NamedResource(export.name.0)));
                 } else if let Some(cvt) =
                     concretize_from_resolved_to_val(resolved, comp, &cx, &resource_map)
                 {

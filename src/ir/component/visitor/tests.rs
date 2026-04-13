@@ -483,12 +483,8 @@ fn check_equality(evts0: &Vec<VisitEvent>, evts1: &Vec<VisitEvent>) {
                 assert_eq!(a_ty, b_ty);
             }
             (
-                VisitEvent::ExitCoreRecGroup {
-                    section_idx: a_sec,
-                },
-                VisitEvent::ExitCoreRecGroup {
-                    section_idx: b_sec,
-                },
+                VisitEvent::ExitCoreRecGroup { section_idx: a_sec },
+                VisitEvent::ExitCoreRecGroup { section_idx: b_sec },
             ) => {
                 assert_eq!(a_sec, b_sec);
             }

@@ -150,9 +150,7 @@ pub fn drive_event<'ir, V: ComponentVisitor<'ir>>(
             visitor.visit_alias(ctx, *kind, id, alias);
             ctx.inner.maybe_exit_scope(*alias);
         }
-        VisitEvent::Import {
-            kind, idx, imp, ..
-        } => {
+        VisitEvent::Import { kind, idx, imp, .. } => {
             ctx.inner.maybe_enter_scope(*imp);
             let space = imp.index_space_of();
             let id = ctx
@@ -161,9 +159,7 @@ pub fn drive_event<'ir, V: ComponentVisitor<'ir>>(
             visitor.visit_comp_import(ctx, *kind, id, imp);
             ctx.inner.maybe_exit_scope(*imp);
         }
-        VisitEvent::Export {
-            kind, idx, exp, ..
-        } => {
+        VisitEvent::Export { kind, idx, exp, .. } => {
             ctx.inner.maybe_enter_scope(*exp);
             let space = exp.index_space_of();
             let id = ctx
@@ -439,12 +435,7 @@ impl<'ir> VisitEvent<'ir> {
             component,
         }
     }
-    pub fn module(
-        section_idx: usize,
-        _: ItemKind,
-        idx: usize,
-        module: &'ir Module<'ir>,
-    ) -> Self {
+    pub fn module(section_idx: usize, _: ItemKind, idx: usize, module: &'ir Module<'ir>) -> Self {
         Self::Module {
             section_idx,
             idx,
