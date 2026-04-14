@@ -35,7 +35,7 @@ use crate::ir::component::refs::{Depth, GetCompRefs, GetItemRef, GetTypeRefs, In
 use crate::ir::component::visitor::utils::{TypeBodyDecls, VisitCtxInner};
 use crate::ir::component::visitor::{ResolvedItem, VisitCtx};
 use crate::Component;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use wasmparser::{
     ComponentAlias, ComponentDefinedType, ComponentExport, ComponentExternalKind,
     ComponentFuncType, ComponentInstance, ComponentOuterAliasKind, ComponentType, ComponentTypeRef,
@@ -327,7 +327,7 @@ fn build_component_resource_map<'a>(
             continue;
         }
         let type_ref = export.get_item_ref().ref_;
-        if resolved_is_resource(cx.resolve(&type_ref), cx, 0) {
+        if resolved_is_resource(cx.resolve(&type_ref), cx, &mut HashSet::new()) {
             map.insert(export.index, export.name.0);
         }
     }
@@ -335,17 +335,22 @@ fn build_component_resource_map<'a>(
 }
 
 /// Returns `true` if `resolved` ultimately resolves to a sub-resource type.
-fn resolved_is_resource<'a>(resolved: ResolvedItem<'a, '_>, cx: &VisitCtx<'a>, depth: u32) -> bool {
-    if depth > 16 {
-        return false; // guard against infinite alias chains
-    }
+fn resolved_is_resource<'a>(
+    resolved: ResolvedItem<'a, '_>,
+    cx: &VisitCtx<'a>,
+    visited: &mut HashSet<IndexedRef>,
+) -> bool {
     match resolved {
         ResolvedItem::CompType(_, ComponentType::Resource { .. }) => true,
         ResolvedItem::Import(_, imp) => {
             matches!(imp.ty, ComponentTypeRef::Type(TypeBounds::SubResource))
         }
         ResolvedItem::Alias(_, alias) => {
-            resolved_is_resource(cx.resolve(&alias.get_item_ref().ref_), cx, depth + 1)
+            let next = alias.get_item_ref().ref_;
+            if !visited.insert(next) {
+                return false; // cycle: already walked this ref
+            }
+            resolved_is_resource(cx.resolve(&next), cx, visited)
         }
         _ => false,
     }
@@ -786,7 +791,7 @@ fn concretize_comp_func_exports<'a>(comp: &'a Component<'a>) -> Option<ConcreteT
             ComponentExternalKind::Type => {
                 let type_ref = export.get_item_ref().ref_;
                 let resolved = cx.resolve(&type_ref);
-                if resolved_is_resource(cx.resolve(&type_ref), &cx, 0) {
+                if resolved_is_resource(cx.resolve(&type_ref), &cx, &mut HashSet::new()) {
                     // Use NamedResource so the vid matches function param resource vids.
                     type_exports
                         .push((export.name.0, ConcreteValType::NamedResource(export.name.0)));
