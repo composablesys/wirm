@@ -16,6 +16,7 @@ pub enum Error {
     UnknownSection {
         section_id: u8,
     },
+    UnhandledPayload(String),
     MissingFunctionEnd {
         func_range: Range<usize>,
     },
@@ -76,6 +77,9 @@ impl std::fmt::Display for Error {
             }
             Error::UnknownSection { section_id } => {
                 write!(f, "Unknown section: {}", section_id)
+            }
+            Error::UnhandledPayload(debug) => {
+                write!(f, "Unhandled payload variant: {}", debug)
             }
             Error::MissingFunctionEnd { func_range } => {
                 write!(

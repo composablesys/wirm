@@ -265,7 +265,6 @@ impl<'a> Component<'a> {
     }
 
     fn add_to_sections(
-        _has_subscope: bool,
         sections: &mut Vec<(u32, ComponentSection)>,
         new_sections: &[ComponentSection],
         num_sections: &mut usize,
@@ -424,7 +423,6 @@ impl<'a> Component<'a> {
                     );
                     imports.append(&mut temp);
                     Self::add_to_sections(
-                        false,
                         &mut sections,
                         &new_sections,
                         &mut num_sections,
@@ -445,7 +443,6 @@ impl<'a> Component<'a> {
                     );
                     exports.append(&mut temp);
                     Self::add_to_sections(
-                        false,
                         &mut sections,
                         &new_sections,
                         &mut num_sections,
@@ -466,7 +463,6 @@ impl<'a> Component<'a> {
                     );
                     instances.append(&mut temp);
                     Self::add_to_sections(
-                        false,
                         &mut sections,
                         &new_sections,
                         &mut num_sections,
@@ -484,21 +480,18 @@ impl<'a> Component<'a> {
                     core_types.append(&mut temp);
 
                     let mut new_sects = vec![];
-                    let mut has_subscope = false;
                     for (idx, ty) in core_types[old_len..].iter().enumerate() {
-                        let (new_sect, sect_has_subscope) =
+                        let (new_sect, _) =
                             get_sections_for_core_ty_and_assign_top_level_ids(
                                 ty,
                                 old_len + idx,
                                 &space_id,
                                 store_handle.clone(),
                             );
-                        has_subscope |= sect_has_subscope;
                         new_sects.push(new_sect);
                     }
 
                     Self::add_to_sections(
-                        has_subscope,
                         &mut sections,
                         &new_sects,
                         &mut num_sections,
@@ -516,10 +509,8 @@ impl<'a> Component<'a> {
                     component_types.append(&mut temp);
 
                     let mut new_sects = vec![];
-                    let mut has_subscope = false;
                     for ty in &component_types[old_len..] {
-                        let (new_sect, sect_has_subscope) = get_sections_for_comp_ty(ty);
-                        has_subscope |= sect_has_subscope;
+                        let (new_sect, _) = get_sections_for_comp_ty(ty);
                         new_sects.push(new_sect);
                     }
 
@@ -530,7 +521,6 @@ impl<'a> Component<'a> {
                         &new_sects,
                     );
                     Self::add_to_sections(
-                        has_subscope,
                         &mut sections,
                         &new_sects,
                         &mut num_sections,
@@ -550,7 +540,6 @@ impl<'a> Component<'a> {
                     );
                     component_instance.append(&mut temp);
                     Self::add_to_sections(
-                        false,
                         &mut sections,
                         &new_sections,
                         &mut num_sections,
@@ -570,7 +559,6 @@ impl<'a> Component<'a> {
                     );
                     alias.append(&mut temp);
                     Self::add_to_sections(
-                        false,
                         &mut sections,
                         &new_sections,
                         &mut num_sections,
@@ -590,7 +578,6 @@ impl<'a> Component<'a> {
                     );
                     canons.append(&mut temp);
                     Self::add_to_sections(
-                        false,
                         &mut sections,
                         &new_sections,
                         &mut num_sections,
@@ -618,7 +605,6 @@ impl<'a> Component<'a> {
                     );
                     modules.push(m);
                     Self::add_to_sections(
-                        false,
                         &mut sections,
                         &[ComponentSection::Module],
                         &mut num_sections,
@@ -654,12 +640,11 @@ impl<'a> Component<'a> {
                     );
                     components.push(cmp);
 
-                    Self::add_to_sections(true, &mut sections, &[sect], &mut num_sections, 1);
+                    Self::add_to_sections(&mut sections, &[sect], &mut num_sections, 1);
                 }
                 Payload::ComponentStartSection { start, range: _ } => {
                     start_section.push(start);
                     Self::add_to_sections(
-                        false,
                         &mut sections,
                         &[ComponentSection::ComponentStartSection],
                         &mut num_sections,
@@ -722,7 +707,6 @@ impl<'a> Component<'a> {
                             custom_sections
                                 .push((custom_section_reader.name(), custom_section_reader.data()));
                             Self::add_to_sections(
-                                false,
                                 &mut sections,
                                 &[ComponentSection::CustomSection],
                                 &mut num_sections,
@@ -737,11 +721,7 @@ impl<'a> Component<'a> {
                     range: _,
                 } => return Err(Error::UnknownSection { section_id: id }),
                 Payload::Version { .. } | Payload::End { .. } => {} // nothing to do
-                _ => {
-                    // Unhandled payload variant — silently skipped. If you
-                    // hit a parsing surprise here, add a `TODO` arm and
-                    // re-enable a debug print to find out which one fired.
-                }
+                other => return Err(Error::UnhandledPayload(format!("{other:?}"))),
             }
         }
 

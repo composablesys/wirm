@@ -547,7 +547,7 @@ impl<'a> Module<'a> {
                 | Payload::ComponentImportSection(_)
                 | Payload::ComponentExportSection(_)
                 | Payload::End(_) => {}
-                _ => todo!(),
+                other => return Err(Error::UnhandledPayload(format!("{:?}", other))),
             }
         }
 
