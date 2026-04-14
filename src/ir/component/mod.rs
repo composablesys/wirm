@@ -861,7 +861,7 @@ impl<'a> Component<'a> {
     /// refs found in a component's own exports, imports, types, etc.
     ///
     /// This uses the index space that was built at parse time — no walk is required.
-    /// Because all nested components share the same [`IndexStore`] and scope registry
+    /// Because all nested components share the same index store and scope registry
     /// (via `Rc`), this method works correctly on any component in the tree, not just the root.
     pub fn resolve<'s>(&'s self, ref_: &IndexedRef) -> ResolvedItem<'s, 'a> {
         let store = self.index_store.borrow();

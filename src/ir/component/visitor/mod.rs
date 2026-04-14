@@ -163,7 +163,7 @@ pub trait ComponentVisitor<'a> {
     ///
     /// For `Instance` and `Component` types, which carry inner declaration
     /// bodies, use [`ComponentVisitor::enter_component_type_inst`] /
-    /// [`ComponentVisitor::enter_comp_component_type`] instead.
+    /// [`ComponentVisitor::enter_component_type_comp`] instead.
     fn visit_comp_type(&mut self, _cx: &VisitCtx<'a>, _id: u32, _comp_type: &ComponentType<'a>) {}
 
     /// Invoked when entering an instance type (`ComponentType::Instance`).
