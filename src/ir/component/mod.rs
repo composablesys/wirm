@@ -276,24 +276,10 @@ impl<'a> Component<'a> {
         );
         let _ = sections_added;
 
-        // Group consecutive same-kind items WITHIN this single call
-        // into one `(count, kind)` entry. Each call to
-        // `add_to_sections` corresponds to exactly one binary section
-        // in the source wasm — we deliberately do NOT fold across
-        // calls, because doing so would erase the binary section
-        // boundary and cause consumers that walk the binary
-        // independently (e.g. via wasmparser) to disagree with wirm
-        // about section ordinals.
-        //
-        // The previous version of this function spread items
-        // one-per-entry whenever `has_subscope` was true (i.e. the
-        // section contained at least one Instance/Component type
-        // with a nested scope). That broke the
-        // "one binary payload = one wirm entry" invariant for type
-        // sections that mix leaf types and instance/component types.
-        // Visitor scope accounting (maybe_enter_scope /
-        // maybe_exit_scope in the driver) is per-item and doesn't
-        // depend on section grouping, so the spread isn't needed.
+        // Group consecutive same-kind items within this call into one
+        // `(count, kind)` entry. Do NOT fold across calls: one call == one
+        // binary section, and collapsing would desync section ordinals from
+        // wasmparser-based consumers.
         let mut i = 0usize;
         while i < new_sections.len() {
             let kind = new_sections[i].clone();
@@ -481,22 +467,16 @@ impl<'a> Component<'a> {
 
                     let mut new_sects = vec![];
                     for (idx, ty) in core_types[old_len..].iter().enumerate() {
-                        let (new_sect, _) =
-                            get_sections_for_core_ty_and_assign_top_level_ids(
-                                ty,
-                                old_len + idx,
-                                &space_id,
-                                store_handle.clone(),
-                            );
+                        let (new_sect, _) = get_sections_for_core_ty_and_assign_top_level_ids(
+                            ty,
+                            old_len + idx,
+                            &space_id,
+                            store_handle.clone(),
+                        );
                         new_sects.push(new_sect);
                     }
 
-                    Self::add_to_sections(
-                        &mut sections,
-                        &new_sects,
-                        &mut num_sections,
-                        l as u32,
-                    );
+                    Self::add_to_sections(&mut sections, &new_sects, &mut num_sections, l as u32);
                 }
                 Payload::ComponentTypeSection(component_type_reader) => {
                     let mut temp: Vec<Box<ComponentType>> = component_type_reader
@@ -520,12 +500,7 @@ impl<'a> Component<'a> {
                         old_len,
                         &new_sects,
                     );
-                    Self::add_to_sections(
-                        &mut sections,
-                        &new_sects,
-                        &mut num_sections,
-                        l as u32,
-                    );
+                    Self::add_to_sections(&mut sections, &new_sects, &mut num_sections, l as u32);
                 }
                 Payload::ComponentInstanceSection(component_instances) => {
                     let mut temp: Vec<ComponentInstance> =

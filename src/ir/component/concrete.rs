@@ -55,8 +55,8 @@ pub enum ConcreteType<'a> {
     /// `funcs`: `(function_name, signature)` pairs for each exported function.
     /// `type_exports`: `(export_name, concrete_val_type)` pairs for named type
     /// exports (records, variants, resources exported with `(type (eq N))` or
-    /// `(type (sub resource))` bounds).  These are needed by adapter generators
-    /// that must re-export the same types from a types-instance import.
+    /// `(type (sub resource))` bounds). Exposed so downstream consumers can
+    /// reason about or re-emit the instance's named types.
     Instance {
         funcs: Vec<(&'a str, ConcreteFuncType<'a>)>,
         type_exports: Vec<(&'a str, ConcreteValType<'a>)>,
@@ -140,14 +140,9 @@ impl<'a> Component<'a> {
             ResolvedItem::CompInst(_, ComponentInstance::FromExports(exports)) => {
                 concretize_from_exports_instance(self, exports)
             }
-            // The export resolves to a real instantiated component (e.g. a wit-component shim
-            // that re-exports individual functions under short names like "handle").
-            //
-            // Strategy: if the outer component imports an interface under the *same name*
-            // (the common wit-component shim pattern where the middleware imports and then
-            // The export is a real instantiated component (e.g. a wit-component shim).
-            // Prefer reconstructing from the nested component's exports (which preserves
-            // resource names via build_component_resource_map).  Fall back to the import's
+            // Export resolves to an instantiated component. Prefer reconstructing
+            // from the nested component's own exports (preserves resource names
+            // via build_component_resource_map); fall back to the import's
             // declared type when the nested component can't be resolved.
             ResolvedItem::CompInst(_, inst @ ComponentInstance::Instantiate { .. }) => {
                 let comp_ref = inst.get_comp_refs().into_iter().next();
@@ -155,17 +150,13 @@ impl<'a> Component<'a> {
                     ResolvedItem::Component(_, nested) => Some(nested),
                     _ => None,
                 });
-                // Try the nested component's own concretize_export first — this
-                // follows through to shim components recursively.  Fall back to
-                // concretize_comp_func_exports (for shim components with direct
-                // function exports), then to concretize_import.
                 nested
                     .and_then(|n| n.concretize_export(name))
                     .or_else(|| nested.and_then(concretize_comp_func_exports))
                     .or_else(|| self.concretize_import(name))
             }
-            // The export directly re-exposes an imported instance (pass-through middleware).
-            // Concretize by following the import's declared instance type.
+            // Export directly re-exposes an imported instance; follow the
+            // import's declared instance type.
             ResolvedItem::Import(_, imp) => {
                 let type_ref = imp.get_type_refs().into_iter().next()?;
                 let ty = match self.resolve(&type_ref.ref_) {
@@ -284,18 +275,14 @@ fn build_instance_resource_map<'a>(
                 // If the parent type was an InstanceExport alias (e.g.
                 // `(alias export $types-inst "request" (type))`),
                 // the name tells us this is a named resource/type.
-                if let ComponentAlias::Outer {
-                    kind: ComponentOuterAliasKind::Type,
-                    index,
-                    count,
-                } = alias
-                {
-                    let ref_ = IndexedRef {
-                        depth: Depth::default().outer_at(*count),
-                        space: Space::CompType,
-                        index: *index,
-                    };
-                    let resolved = cx.resolve(&ref_);
+                if matches!(
+                    alias,
+                    ComponentAlias::Outer {
+                        kind: ComponentOuterAliasKind::Type,
+                        ..
+                    }
+                ) {
+                    let resolved = cx.resolve(&alias.get_item_ref().ref_);
                     if let ResolvedItem::Alias(
                         _,
                         ComponentAlias::InstanceExport {
@@ -339,11 +326,7 @@ fn build_component_resource_map<'a>(
         if export.kind != ComponentExternalKind::Type {
             continue;
         }
-        let type_ref = IndexedRef {
-            depth: Depth::default(),
-            space: Space::CompType,
-            index: export.index,
-        };
+        let type_ref = export.get_item_ref().ref_;
         if resolved_is_resource(cx.resolve(&type_ref), cx, 0) {
             map.insert(export.index, export.name.0);
         }
@@ -801,11 +784,7 @@ fn concretize_comp_func_exports<'a>(comp: &'a Component<'a>) -> Option<ConcreteT
                 }
             }
             ComponentExternalKind::Type => {
-                let type_ref = IndexedRef {
-                    depth: Depth::default(),
-                    space: Space::CompType,
-                    index: export.index,
-                };
+                let type_ref = export.get_item_ref().ref_;
                 let resolved = cx.resolve(&type_ref);
                 if resolved_is_resource(cx.resolve(&type_ref), &cx, 0) {
                     // Use NamedResource so the vid matches function param resource vids.

@@ -829,29 +829,13 @@ fn concretize_func_param_via_alias_to_imported_instance_type_direct() {
     ));
 }
 
-// ============================================================
-// Section count invariant
-// ============================================================
-//
-// Regression coverage for the cross-call fold bug in
-// `Component::add_to_sections`. The contract: each binary section
-// payload corresponds to **exactly one** entry in `comp.sections`.
-// Toolchains like wac-compose emit each item as its own binary section
-// (e.g. three separate ComponentAliasSection payloads instead of one
-// ComponentAliasSection with three items). The parser must NOT
-// collapse those into a single `(count, kind)` entry — doing so makes
-// `comp.sections` count diverge from any wasmparser-based consumer
-// walking the same binary, and breaks the contract that
-// `cx.curr_section_idx()` matches binary section ordinals.
-//
-// `wat::parse_str` always merges consecutive same-kind items into one
-// section, so we use `wasm_encoder` directly to construct the
-// "separate sections" pattern that triggered the original bug.
+// Section count invariant: each binary section payload must map to exactly
+// one `comp.sections` entry, so `cx.curr_section_idx()` stays aligned with
+// wasmparser-based consumers. Uses `wasm_encoder` directly because
+// `wat::parse_str` merges consecutive same-kind sections.
 
-/// Build a component binary with `n` separate single-item alias
-/// sections, sandwiched between a leading type+import section pair
-/// and a trailing type+import section pair. Mirrors the section
-/// layout that wac-compose produces for split components.
+/// Build a component binary with `n` separate single-item alias sections,
+/// mirroring the layout wac-compose produces for split components.
 fn build_binary_with_separate_alias_sections(n: usize) -> Vec<u8> {
     use wasm_encoder::{
         Alias, Component, ComponentAliasSection, ComponentExportKind, ComponentImportSection,
