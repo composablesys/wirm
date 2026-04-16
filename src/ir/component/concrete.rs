@@ -576,41 +576,43 @@ fn concretize_from_resolved<'a>(
                 return resolve_type_from_import_instance(comp, *instance_index, name);
             };
             match nested_comp.concretize_export(name) {
-                Some(ConcreteType::Resource) | None => ConcreteValType::Resource,
-                // TODO(beyond-wit): An `InstanceExport` alias used as a *value type*
-                // should only ever resolve to a resource or defined type in the WIT
-                // subset — functions and instances are not value types. If you hit
-                // this with a non-WIT component, extend `ConcreteValType` and add a
-                // proper case here.
-                Some(ConcreteType::Instance { .. } | ConcreteType::Func(_)) => {
-                    ConcreteValType::Resource
-                }
+                Some(ConcreteType::Resource) => ConcreteValType::Resource,
+                // `concretize_export` returns `None` for exports the
+                // concretizer doesn't reconstruct today (notably
+                // `Defined` types). Flesh out handling here when a
+                // case hits — silently downgrading to `Resource`
+                // produces wrong output.
+                None => panic!(
+                    "invalid component: alias-export `{name}` used as a val type does not \
+                     resolve to a known val-type kind"
+                ),
+                Some(ConcreteType::Instance { .. }) | Some(ConcreteType::Func(_)) => panic!(
+                    "invalid component: alias-export `{name}` used as a val type resolves \
+                     to a non-val-type (Instance or Func)"
+                ),
             }
         }
+        // The component model spec defines val types as primitives,
+        // records, variants, lists, options, results, tuples, flags,
+        // enums, strings, resources, and async-handles. The arms
+        // below (Import / InstTyDeclExport / everything else) can
+        // only appear as val types when properly typed.
         ResolvedItem::Import(_, import) => {
-            if let Some(type_ref) = import.get_type_refs().into_iter().next() {
-                concretize_from_resolved(cx.resolve(&type_ref.ref_), comp, cx, resource_map)
-            } else {
-                // TODO(beyond-wit): In WIT, an import used as a val type always carries
-                // a type ref. Module imports have no type refs but can't appear as val
-                // types. Audit this if concretizing non-WIT component imports.
-                ConcreteValType::Resource
-            }
+            let type_ref = import
+                .get_type_refs()
+                .into_iter()
+                .next()
+                .expect("invalid component: Import used as a val type has no type ref");
+            concretize_from_resolved(cx.resolve(&type_ref.ref_), comp, cx, resource_map)
         }
         ResolvedItem::InstTyDeclExport(_, decl) => {
-            if let Some(type_ref) = decl.get_type_refs().into_iter().next() {
-                concretize_from_resolved(cx.resolve(&type_ref.ref_), comp, cx, resource_map)
-            } else {
-                // TODO(beyond-wit): Same as the Import case above — no type ref on a
-                // decl used as a val type shouldn't arise in WIT. Audit for non-WIT use.
-                ConcreteValType::Resource
-            }
+            let type_ref =
+                decl.get_type_refs().into_iter().next().expect(
+                    "invalid component: InstTyDeclExport used as a val type has no type ref",
+                );
+            concretize_from_resolved(cx.resolve(&type_ref.ref_), comp, cx, resource_map)
         }
-        // TODO(beyond-wit): All other `ResolvedItem` variants (`CompInst`, `Component`,
-        // `Module`, `CoreType`, etc.) cannot appear as val types in a valid WIT binary.
-        // If you extend concretization beyond WIT, audit every variant of `ResolvedItem`
-        // and add explicit arms for any that can legitimately carry a val type.
-        _ => ConcreteValType::Resource,
+        other => panic!("invalid component: {other:?} is not a val-type kind"),
     }
 }
 
@@ -622,11 +624,10 @@ fn concretize_comp_type_to_val<'a>(
 ) -> ConcreteValType<'a> {
     match ty {
         ComponentType::Defined(def) => concretize_defined_type(def, comp, cx, resource_map),
-        // `ComponentType::Resource` legitimately maps to `ConcreteValType::Resource`.
-        // TODO(beyond-wit): `Func`, `Instance`, and `Component` variants here indicate
-        // a type reference that resolved to a non-value type, which shouldn't happen in
-        // a valid WIT binary. Add explicit handling if concretizing non-WIT components.
-        _ => ConcreteValType::Resource,
+        ComponentType::Resource { .. } => ConcreteValType::Resource,
+        ComponentType::Func(_) | ComponentType::Instance(_) | ComponentType::Component(_) => {
+            panic!("invalid component: {ty:?} is not a val-type kind")
+        }
     }
 }
 
@@ -836,21 +837,32 @@ fn resolve_type_from_import_instance<'a>(
         space: Space::CompInst,
         index: instance_index,
     };
+    // Precondition: `instance_index` points to an imported instance
+    // whose declared type is a component-model `Instance` type.
     let import = match comp.resolve(&inst_ref) {
         ResolvedItem::Import(_, imp) => imp,
-        _ => return ConcreteValType::Resource,
+        _ => panic!("invalid component: instance {instance_index} is not an import"),
     };
-    let type_ref = match import.get_type_refs().into_iter().next() {
-        Some(tr) => tr,
-        None => return ConcreteValType::Resource,
-    };
+    let type_ref = import
+        .get_type_refs()
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| {
+            panic!("invalid component: import for instance {instance_index} carries no type ref")
+        });
     let ty = match comp.resolve(&type_ref.ref_) {
         ResolvedItem::CompType(_, ty) => ty,
-        _ => return ConcreteValType::Resource,
+        _ => panic!(
+            "invalid component: type ref for instance {instance_index} does not resolve \
+             to a component type"
+        ),
     };
     let decls = match ty {
         ComponentType::Instance(decls) => decls,
-        _ => return ConcreteValType::Resource,
+        _ => panic!(
+            "invalid component: instance {instance_index}'s declared type is not an \
+             instance type (looking up export `{type_name}`)"
+        ),
     };
     // Build a type-body scope so that outer-alias refs inside the decls resolve
     // against the component's own type space (same as `enter_type_scope`).
