@@ -13,7 +13,7 @@ use wirm::ir::types::InstrumentationMode;
 use wirm::iterator::component_iterator::ComponentIterator;
 use wirm::iterator::iterator_trait::{IteratingInstrumenter, Iterator as WirmIterator};
 use wirm::iterator::module_iterator::ModuleIterator;
-use wirm::opcode::{Inject, Instrumenter, Opcode};
+use wirm::opcode::{Inject, Instrumenter, MacroOpcode, Opcode};
 use wirm::{Component, Location, Module};
 
 pub const WASM_OUTPUT_DIR: &str = "output/wasm";
@@ -275,6 +275,8 @@ impl<'a> Inject<'a> for OpRecorder<'a> {
 
 impl<'a> Opcode<'a> for OpRecorder<'a> {}
 
+impl<'a> MacroOpcode<'a> for OpRecorder<'a> {}
+
 /// Defines a `#[test]` that injects a chain of `Opcode` method calls before the first instruction
 /// of function `$target` in `$wat`, then asserts the encoded body begins with exactly those
 /// operators. The macro expands the chain twice — once on an [`OpRecorder`] to derive the expected
@@ -287,6 +289,8 @@ macro_rules! opcode_test {
         fn $name() {
             #[allow(unused_imports)]
             use ::wirm::Opcode as _;
+            #[allow(unused_imports)]
+            use ::wirm::opcode::MacroOpcode as _;
             #[allow(unused_imports)]
             use ::wirm::iterator::iterator_trait::IteratingInstrumenter as _;
             let mut rec = $crate::common::OpRecorder::new();
@@ -342,11 +346,7 @@ fn operator_variant_name(op: &Operator<'_>) -> String {
 
 /// Parse `wasm_bytes` and assert the local function at `target_func_idx` begins with operators
 /// matching `expected`'s variant names.
-fn assert_function_body_prefix(
-    wasm_bytes: &[u8],
-    target_func_idx: u32,
-    expected: &[Operator<'_>],
-) {
+fn assert_function_body_prefix(wasm_bytes: &[u8], target_func_idx: u32, expected: &[Operator<'_>]) {
     let mut func_bodies: Vec<Vec<String>> = Vec::new();
     for payload in wasmparser::Parser::new(0).parse_all(wasm_bytes) {
         let payload = payload.expect("failed to parse emitted wasm");

@@ -3,8 +3,8 @@
 //! Deferred: `v128_const` — `wasmparser::V128` has no public constructor in 0.244, so tests
 //! that need a v128 value on the stack use `i32.const X; i8x16.splat` to produce one instead.
 
-use wasmparser::MemArg;
 use crate::opcode_test;
+use wasmparser::MemArg;
 
 const BASE_WAT: &str = r#"
     (module
@@ -14,11 +14,36 @@ const BASE_WAT: &str = r#"
 
 const TARGET: u32 = 0;
 
-const M0: MemArg = MemArg { align: 0, max_align: 0, offset: 0, memory: 0 };
-const M1: MemArg = MemArg { align: 1, max_align: 1, offset: 0, memory: 0 };
-const M2: MemArg = MemArg { align: 2, max_align: 2, offset: 0, memory: 0 };
-const M3: MemArg = MemArg { align: 3, max_align: 3, offset: 0, memory: 0 };
-const M4: MemArg = MemArg { align: 4, max_align: 4, offset: 0, memory: 0 };
+const M0: MemArg = MemArg {
+    align: 0,
+    max_align: 0,
+    offset: 0,
+    memory: 0,
+};
+const M1: MemArg = MemArg {
+    align: 1,
+    max_align: 1,
+    offset: 0,
+    memory: 0,
+};
+const M2: MemArg = MemArg {
+    align: 2,
+    max_align: 2,
+    offset: 0,
+    memory: 0,
+};
+const M3: MemArg = MemArg {
+    align: 3,
+    max_align: 3,
+    offset: 0,
+    memory: 0,
+};
+const M4: MemArg = MemArg {
+    align: 4,
+    max_align: 4,
+    offset: 0,
+    memory: 0,
+};
 
 opcode_test!(v128_load_store, BASE_WAT, TARGET,
     .i32_const(0).v128_load(M4).drop()

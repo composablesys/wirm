@@ -16,7 +16,10 @@ const BASE_WAT: &str = r#"
 const TARGET: u32 = 0;
 
 fn funcref_ht() -> HeapType {
-    HeapType::Abstract { shared: false, ty: AbstractHeapType::Func }
+    HeapType::Abstract {
+        shared: false,
+        ty: AbstractHeapType::Func,
+    }
 }
 
 opcode_test!(ref_ops, BASE_WAT, TARGET,

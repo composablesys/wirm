@@ -13,7 +13,12 @@ const BASE_WAT: &str = r#"
 
 const TARGET: u32 = 0;
 
-const MEM2_64: MemArg = MemArg { align: 2, max_align: 2, offset: 0, memory: 0 };
+const MEM2_64: MemArg = MemArg {
+    align: 2,
+    max_align: 2,
+    offset: 0,
+    memory: 0,
+};
 
 opcode_test!(memory64_ops, BASE_WAT, TARGET,
     .i64_const(0).i32_load(MEM2_64).drop()

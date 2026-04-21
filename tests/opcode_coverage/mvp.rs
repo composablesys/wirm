@@ -29,9 +29,24 @@ const BASE_WAT: &str = r#"
 
 const TARGET: u32 = 0;
 
-const MEM0: MemArg = MemArg { align: 0, max_align: 0, offset: 0, memory: 0 };
-const MEM2: MemArg = MemArg { align: 2, max_align: 2, offset: 0, memory: 0 };
-const MEM3: MemArg = MemArg { align: 3, max_align: 3, offset: 0, memory: 0 };
+const MEM0: MemArg = MemArg {
+    align: 0,
+    max_align: 0,
+    offset: 0,
+    memory: 0,
+};
+const MEM2: MemArg = MemArg {
+    align: 2,
+    max_align: 2,
+    offset: 0,
+    memory: 0,
+};
+const MEM3: MemArg = MemArg {
+    align: 3,
+    max_align: 3,
+    offset: 0,
+    memory: 0,
+};
 
 opcode_test!(i32_arithmetic, BASE_WAT, TARGET,
     .i32_const(1).i32_const(2).i32_add().drop()

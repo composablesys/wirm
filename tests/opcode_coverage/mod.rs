@@ -6,12 +6,17 @@
 //! (features = all).
 
 mod bulk_memory;
+mod custom_descriptors;
 mod exceptions;
 mod function_references;
 mod gc;
+mod legacy_exceptions;
+mod macro_opcode;
 mod memory64;
+mod memory_control;
 mod mvp;
 mod reference_types;
+mod relaxed_simd;
 mod saturating_float_to_int;
 mod sign_extension;
 mod simd;
