@@ -180,6 +180,16 @@ macro_rules! define_opcode_methods {
     (one @shared_everything_threads $($rest:tt)*) => {};
 
     // ── Skip operators requiring manual implementations ──────────────────────
+    //
+    // TODO: the following skipped ops still need manual impls added to the
+    // `Opcode` trait — they're currently unreachable via the public API:
+    //   @reference_types     TypedSelect, TypedSelectMulti  (ValType / Vec<ValType>)
+    //   @exceptions          TryTable                       (wasmparser::TryTable<'a>)
+    //   @legacy_exceptions   Try                            (BlockType)
+    //   @gc                  BrOnCast, BrOnCastFail         (RefType × 2 + relative_depth)
+    //   @custom_descriptors  RefCastDescNonNull, RefCastDescNullable  (HeapType)
+    //                        BrOnCastDesc, BrOnCastDescFail            (RefType × 2 + depth)
+    //
     // Keyword conflicts / BlockType conversions:
     (one @mvp Block    $($rest:tt)*) => {};
     (one @mvp Loop     $($rest:tt)*) => {};

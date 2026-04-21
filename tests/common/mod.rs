@@ -13,7 +13,7 @@ use wirm::ir::types::InstrumentationMode;
 use wirm::iterator::component_iterator::ComponentIterator;
 use wirm::iterator::iterator_trait::{IteratingInstrumenter, Iterator as WirmIterator};
 use wirm::iterator::module_iterator::ModuleIterator;
-use wirm::opcode::{Inject, Instrumenter};
+use wirm::opcode::{Inject, Instrumenter, Opcode};
 use wirm::{Component, Location, Module};
 
 pub const WASM_OUTPUT_DIR: &str = "output/wasm";
@@ -242,10 +242,78 @@ where
     check_instrumentation_encoding(&out, file).expect("instrumentation encoding mismatch");
 }
 
-/// Parse an inline WAT string, run `instrument` with a `ModuleIterator`, encode, and validate
-/// with wasmparser. Intended for opcode-coverage tests that have no golden annotation file.
-pub fn validate_module_instr<F>(wat_src: &str, instrument: F)
-where
+/// Sink for `Opcode` injection that stores operators in a `Vec` instead of mutating a module.
+///
+/// Used by [`opcode_test!`] to replay the same method chain against a recorder and produce the
+/// `expected` operator list automatically, eliminating the need for test authors to write each
+/// injection twice (once as a method call, once as an `Operator` literal).
+pub struct OpRecorder<'a> {
+    ops: Vec<Operator<'a>>,
+}
+
+impl<'a> OpRecorder<'a> {
+    pub fn new() -> Self {
+        Self { ops: Vec::new() }
+    }
+
+    pub fn finish(self) -> Vec<Operator<'a>> {
+        self.ops
+    }
+}
+
+impl<'a> Default for OpRecorder<'a> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<'a> Inject<'a> for OpRecorder<'a> {
+    fn inject(&mut self, instr: Operator<'a>) {
+        self.ops.push(instr);
+    }
+}
+
+impl<'a> Opcode<'a> for OpRecorder<'a> {}
+
+/// Defines a `#[test]` that injects a chain of `Opcode` method calls before the first instruction
+/// of function `$target` in `$wat`, then asserts the encoded body begins with exactly those
+/// operators. The macro expands the chain twice — once on an [`OpRecorder`] to derive the expected
+/// operator list and once on `mod_it.before()` to perform the injection — so the test author
+/// writes the chain once.
+#[macro_export]
+macro_rules! opcode_test {
+    ($name:ident, $wat:expr, $target:expr, $($chain:tt)*) => {
+        #[test]
+        fn $name() {
+            #[allow(unused_imports)]
+            use ::wirm::Opcode as _;
+            #[allow(unused_imports)]
+            use ::wirm::iterator::iterator_trait::IteratingInstrumenter as _;
+            let mut rec = $crate::common::OpRecorder::new();
+            let _ = (&mut rec) $($chain)*;
+            let expected = rec.finish();
+            $crate::common::validate_module_instr($wat, $target, &expected, |mod_it| {
+                let _ = mod_it.before() $($chain)*;
+            });
+        }
+    };
+}
+
+/// Parse an inline WAT string, run `instrument` with a `ModuleIterator`, encode, validate, and
+/// assert that the resulting body of local function `target_func_idx` starts with operators whose
+/// variant names equal those in `expected` (in order). The name-only comparison sidesteps
+/// `MemArg.max_align` round-trip differences and `Operator<'a>` lifetime mismatches.
+///
+/// Intended for opcode-coverage tests that have no golden annotation file. A test passing means:
+/// (a) the injection closure compiles (so the `Opcode` trait method was present and typed right),
+/// (b) the encoded bytes validate as Wasm with all features, and
+/// (c) the injected operators actually landed at the start of the target function body.
+pub fn validate_module_instr<F>(
+    wat_src: &str,
+    target_func_idx: u32,
+    expected: &[Operator<'_>],
+    instrument: F,
+) where
     F: for<'a, 'b> FnOnce(&mut ModuleIterator<'a, 'b>),
 {
     let buff = wat::parse_str(wat_src).expect("couldn't parse WAT");
@@ -258,6 +326,62 @@ where
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(&result)
         .expect("wasm validation failed");
+    assert_function_body_prefix(&result, target_func_idx, expected);
+}
+
+/// Variant name of an `Operator`, e.g. `"I32Add"` / `"I32Const"`. We compare on variant name so
+/// payload fields (like `MemArg.max_align`, which the encoder sets from the instruction's natural
+/// alignment) don't derail equality.
+fn operator_variant_name(op: &Operator<'_>) -> String {
+    let dbg = format!("{:?}", op);
+    dbg.split(|c: char| c.is_whitespace() || c == '(' || c == '{')
+        .next()
+        .unwrap_or(&dbg)
+        .to_string()
+}
+
+/// Parse `wasm_bytes` and assert the local function at `target_func_idx` begins with operators
+/// matching `expected`'s variant names.
+fn assert_function_body_prefix(
+    wasm_bytes: &[u8],
+    target_func_idx: u32,
+    expected: &[Operator<'_>],
+) {
+    let mut func_bodies: Vec<Vec<String>> = Vec::new();
+    for payload in wasmparser::Parser::new(0).parse_all(wasm_bytes) {
+        let payload = payload.expect("failed to parse emitted wasm");
+        if let wasmparser::Payload::CodeSectionEntry(body) = payload {
+            let mut ops = Vec::new();
+            let mut reader = body.get_operators_reader().expect("operators reader");
+            while !reader.eof() {
+                let op = reader.read().expect("operator read");
+                ops.push(operator_variant_name(&op));
+            }
+            func_bodies.push(ops);
+        }
+    }
+    let body = func_bodies
+        .get(target_func_idx as usize)
+        .unwrap_or_else(|| {
+            panic!(
+                "target function index {} has no code entry (found {} functions)",
+                target_func_idx,
+                func_bodies.len()
+            )
+        });
+    let expected_names: Vec<String> = expected.iter().map(operator_variant_name).collect();
+    assert!(
+        body.len() >= expected_names.len(),
+        "target function body is shorter than expected injection: body={:?}, expected={:?}",
+        body,
+        expected_names,
+    );
+    assert_eq!(
+        &body[..expected_names.len()],
+        expected_names.as_slice(),
+        "injected operator sequence did not appear at the start of function {}",
+        target_func_idx,
+    );
 }
 
 pub fn run_block_injection<'a, 'b, 'c>(
