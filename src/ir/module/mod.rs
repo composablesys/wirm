@@ -251,7 +251,7 @@ impl<'a> Module<'a> {
             let payload = payload?;
             match payload {
                 Payload::ImportSection(import_section_reader) => {
-                    let import_vec = expand_imports(import_section_reader.into_iter())?;
+                    let import_vec = expand_imports(import_section_reader)?;
                     imports = ModuleImports::new(import_vec);
                 }
                 Payload::TypeSection(type_section_reader) => {
@@ -547,7 +547,7 @@ impl<'a> Module<'a> {
                 | Payload::ComponentImportSection(_)
                 | Payload::ComponentExportSection(_)
                 | Payload::End(_) => {}
-                _ => todo!(),
+                other => return Err(Error::UnhandledPayload(format!("{:?}", other))),
             }
         }
 
@@ -831,7 +831,7 @@ impl<'a> Module<'a> {
                     .get_ops()
                     .to_vec()
                     .into_iter()
-                    .zip(flags.into_iter());
+                    .zip(flags);
                 for (idx, (op, instrumentation)) in readable_copy_of_body.enumerate() {
                     // resolve function-level instrumentation
                     if let Some(on_entry) = &mut instr_func_on_entry {

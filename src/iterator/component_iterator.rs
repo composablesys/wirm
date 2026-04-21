@@ -21,15 +21,6 @@ pub struct ComponentIterator<'a, 'b> {
     comp_iterator: ComponentSubIterator,
 }
 
-fn print_metadata(metadata: &HashMap<ModuleID, Vec<(FunctionID, usize)>>) {
-    for c in metadata.keys() {
-        println!("Module: {:?}", c);
-        for (m, i) in metadata.get(c).unwrap().iter() {
-            println!("Function: {:?} Instr: {:?}", m, i);
-        }
-    }
-}
-
 #[allow(dead_code)]
 impl<'a, 'b> ComponentIterator<'a, 'b> {
     /// Creates a new Component Iterator
@@ -42,7 +33,6 @@ impl<'a, 'b> ComponentIterator<'a, 'b> {
         for (mod_idx, m) in comp.modules.iter().enumerate() {
             metadata.insert(ModuleID(mod_idx as u32), m.get_func_metadata());
         }
-        print_metadata(&metadata);
         let num_modules = comp.modules.len();
         ComponentIterator {
             comp,

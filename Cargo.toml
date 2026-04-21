@@ -1,6 +1,6 @@
 [package]
 name = "wirm"
-version = "4.0.0-rc2"
+version = "4.0.0-rc3"
 edition = "2021"
 authors = ["Suhas Thalanki", "Alex Bai", "Elizabeth Gilbert"]
 description = "A lightweight WebAssembly Transformation Library for the Component Model"

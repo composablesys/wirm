@@ -66,6 +66,12 @@ pub struct VisitCtxInner<'a> {
     pub(crate) store: StoreHandle,
     pub(crate) comp_store: ComponentStore<'a>,
     section_tracker_stack: Vec<SectionTracker>,
+    /// Top-level section ordinal of the event currently being driven, relative to the
+    /// immediately-containing component. Set by `drive_event` from each event's recorded
+    /// section_idx; readable by visitor callbacks via `VisitCtx::curr_section_idx()`.
+    /// `None` while driving root-component enter/exit events, which are not associated
+    /// with any section.
+    pub(crate) current_section_idx: Option<usize>,
 }
 
 // =======================================
@@ -85,6 +91,7 @@ impl<'a> VisitCtxInner<'a> {
             type_body_stack: Vec::new(),
             store: root.index_store.clone(),
             comp_store,
+            current_section_idx: None,
         }
     }
 
@@ -540,9 +547,10 @@ pub fn for_each_indexed<'ir, T>(
 
 pub fn emit_indexed<'ir, T: IndexSpaceOf>(
     out: &mut Vec<VisitEvent<'ir>>,
+    section_idx: usize,
     idx: usize,
     item: &'ir T,
-    make: fn(ItemKind, usize, &'ir T) -> VisitEvent<'ir>,
+    make: fn(usize, ItemKind, usize, &'ir T) -> VisitEvent<'ir>,
 ) {
-    out.push(make(item.index_space_of().into(), idx, item));
+    out.push(make(section_idx, item.index_space_of().into(), idx, item));
 }

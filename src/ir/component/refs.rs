@@ -219,7 +219,7 @@ impl RefKind {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Depth(usize);
 impl Depth {
     pub fn val(&self) -> usize {
@@ -253,7 +253,7 @@ impl Depth {
 /// - `index` → The numeric index within that namespace
 ///
 /// Resolution is performed via [`crate::ir::component::visitor::VisitCtx::resolve`].
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub struct IndexedRef {
     /// The depth of the index space scope to look this up in.
     ///

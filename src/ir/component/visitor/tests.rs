@@ -238,272 +238,348 @@ fn check_equality(evts0: &Vec<VisitEvent>, evts1: &Vec<VisitEvent>) {
             }
             (
                 VisitEvent::EnterComp {
+                    section_idx: a_sec,
                     idx: a_idx,
                     component: a_comp,
                 },
                 VisitEvent::EnterComp {
+                    section_idx: b_sec,
                     idx: b_idx,
                     component: b_comp,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_idx, b_idx);
                 assert_eq!(a_comp.id, b_comp.id);
             }
             (
                 VisitEvent::ExitComp {
+                    section_idx: a_sec,
                     idx: a_idx,
                     component: a_comp,
                 },
                 VisitEvent::ExitComp {
+                    section_idx: b_sec,
                     idx: b_idx,
                     component: b_comp,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_idx, b_idx);
                 assert_eq!(a_comp.id, b_comp.id);
             }
             (
                 VisitEvent::Module {
+                    section_idx: a_sec,
                     idx: a_idx,
                     module: a_mod,
                 },
                 VisitEvent::Module {
+                    section_idx: b_sec,
                     idx: b_idx,
                     module: b_mod,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_idx, b_idx);
                 // check pointing to same memory region
                 assert_eq!(*a_mod as *const Module, *b_mod as *const Module);
             }
             (
                 VisitEvent::EnterCompType {
+                    section_idx: a_sec,
                     idx: a_idx,
                     ty: a_ty,
                 },
                 VisitEvent::EnterCompType {
+                    section_idx: b_sec,
                     idx: b_idx,
                     ty: b_ty,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_idx, b_idx);
                 assert_eq!(a_ty, b_ty);
             }
             (
                 VisitEvent::ExitCompType {
+                    section_idx: a_sec,
                     idx: a_idx,
                     ty: a_ty,
                 },
                 VisitEvent::ExitCompType {
+                    section_idx: b_sec,
                     idx: b_idx,
                     ty: b_ty,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_idx, b_idx);
                 assert_eq!(a_ty, b_ty);
             }
             (
                 VisitEvent::CompTypeDecl {
+                    section_idx: a_sec,
                     parent: a_parent,
                     idx: a_idx,
                     decl: a_decl,
                 },
                 VisitEvent::CompTypeDecl {
+                    section_idx: b_sec,
                     parent: b_parent,
                     idx: b_idx,
                     decl: b_decl,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_parent, b_parent);
                 assert_eq!(a_idx, b_idx);
                 assert_eq!(a_decl, b_decl);
             }
             (
                 VisitEvent::InstTypeDecl {
+                    section_idx: a_sec,
                     parent: a_parent,
                     idx: a_idx,
                     decl: a_decl,
                 },
                 VisitEvent::InstTypeDecl {
+                    section_idx: b_sec,
                     parent: b_parent,
                     idx: b_idx,
                     decl: b_decl,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_parent, b_parent);
                 assert_eq!(a_idx, b_idx);
                 assert_eq!(a_decl, b_decl);
             }
             (
                 VisitEvent::CompInst {
+                    section_idx: a_sec,
                     idx: a_idx,
                     inst: a_inst,
                 },
                 VisitEvent::CompInst {
+                    section_idx: b_sec,
                     idx: b_idx,
                     inst: b_inst,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_idx, b_idx);
                 assert_eq!(a_inst, b_inst);
             }
             (
                 VisitEvent::Canon {
+                    section_idx: a_sec,
                     kind: a_kind,
                     idx: a_idx,
                     canon: a_canon,
                 },
                 VisitEvent::Canon {
+                    section_idx: b_sec,
                     kind: b_kind,
                     idx: b_idx,
                     canon: b_canon,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_kind, b_kind);
                 assert_eq!(a_idx, b_idx);
                 assert_eq!(a_canon, b_canon);
             }
             (
                 VisitEvent::Alias {
+                    section_idx: a_sec,
                     kind: a_kind,
                     idx: a_idx,
                     alias: a_alias,
                 },
                 VisitEvent::Alias {
+                    section_idx: b_sec,
                     kind: b_kind,
                     idx: b_idx,
                     alias: b_alias,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_kind, b_kind);
                 assert_eq!(a_idx, b_idx);
                 assert_eq!(a_alias, b_alias);
             }
             (
                 VisitEvent::Import {
+                    section_idx: a_sec,
                     kind: a_kind,
                     idx: a_idx,
                     imp: a_imp,
                 },
                 VisitEvent::Import {
+                    section_idx: b_sec,
                     kind: b_kind,
                     idx: b_idx,
                     imp: b_imp,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_kind, b_kind);
                 assert_eq!(a_idx, b_idx);
                 assert_eq!(a_imp, b_imp);
             }
             (
                 VisitEvent::Export {
+                    section_idx: a_sec,
                     kind: a_kind,
                     idx: a_idx,
                     exp: a_exp,
                 },
                 VisitEvent::Export {
+                    section_idx: b_sec,
                     kind: b_kind,
                     idx: b_idx,
                     exp: b_exp,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_kind, b_kind);
                 assert_eq!(a_idx, b_idx);
                 assert_eq!(a_exp, b_exp);
             }
             (
                 VisitEvent::EnterCoreRecGroup {
+                    section_idx: a_sec,
                     ty: a_ty,
                     count: a_count,
                 },
                 VisitEvent::EnterCoreRecGroup {
+                    section_idx: b_sec,
                     ty: b_ty,
                     count: b_count,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_ty, b_ty);
                 assert_eq!(a_count, b_count);
             }
             (
                 VisitEvent::CoreSubtype {
+                    section_idx: a_sec,
                     parent_idx: a_pidx,
                     subvec_idx: a_sidx,
                     subtype: a_ty,
                 },
                 VisitEvent::CoreSubtype {
+                    section_idx: b_sec,
                     parent_idx: b_pidx,
                     subvec_idx: b_sidx,
                     subtype: b_ty,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_pidx, b_pidx);
                 assert_eq!(a_sidx, b_sidx);
                 assert_eq!(a_ty, b_ty);
             }
-            (VisitEvent::ExitCoreRecGroup {}, VisitEvent::ExitCoreRecGroup {}) => {} // just variant equivalence is enough
+            (
+                VisitEvent::ExitCoreRecGroup { section_idx: a_sec },
+                VisitEvent::ExitCoreRecGroup { section_idx: b_sec },
+            ) => {
+                assert_eq!(a_sec, b_sec);
+            }
             (
                 VisitEvent::EnterCoreType {
+                    section_idx: a_sec,
                     idx: a_idx,
                     ty: a_ty,
                 },
                 VisitEvent::EnterCoreType {
+                    section_idx: b_sec,
                     idx: b_idx,
                     ty: b_ty,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_idx, b_idx);
                 assert_eq!(a_ty, b_ty);
             }
             (
                 VisitEvent::ModuleTypeDecl {
+                    section_idx: a_sec,
                     parent: a_parent,
                     idx: a_idx,
                     decl: a_decl,
                 },
                 VisitEvent::ModuleTypeDecl {
+                    section_idx: b_sec,
                     parent: b_parent,
                     idx: b_idx,
                     decl: b_decl,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_parent, b_parent);
                 assert_eq!(a_idx, b_idx);
                 assert_eq!(a_decl, b_decl);
             }
             (
                 VisitEvent::ExitCoreType {
+                    section_idx: a_sec,
                     idx: a_idx,
                     ty: a_ty,
                 },
                 VisitEvent::ExitCoreType {
+                    section_idx: b_sec,
                     idx: b_idx,
                     ty: b_ty,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_idx, b_idx);
                 assert_eq!(a_ty, b_ty);
             }
             (
                 VisitEvent::CoreInst {
+                    section_idx: a_sec,
                     idx: a_idx,
                     inst: a_inst,
                 },
                 VisitEvent::CoreInst {
+                    section_idx: b_sec,
                     idx: b_idx,
                     inst: b_inst,
                 },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_idx, b_idx);
                 assert_eq!(a_inst, b_inst);
             }
             (
-                VisitEvent::CustomSection { sect: a_sect },
-                VisitEvent::CustomSection { sect: b_sect },
+                VisitEvent::CustomSection {
+                    section_idx: a_sec,
+                    sect: a_sect,
+                },
+                VisitEvent::CustomSection {
+                    section_idx: b_sec,
+                    sect: b_sect,
+                },
             ) => {
+                assert_eq!(a_sec, b_sec);
                 // best effort check here
                 assert_eq!(a_sect.name, b_sect.name);
             }
-            (VisitEvent::StartFunc { func: a_func }, VisitEvent::StartFunc { func: b_func }) => {
+            (
+                VisitEvent::StartFunc {
+                    section_idx: a_sec,
+                    func: a_func,
+                },
+                VisitEvent::StartFunc {
+                    section_idx: b_sec,
+                    func: b_func,
+                },
+            ) => {
+                assert_eq!(a_sec, b_sec);
                 assert_eq!(a_func.func_index, b_func.func_index);
                 assert_eq!(a_func.arguments, b_func.arguments);
                 assert_eq!(a_func.results, b_func.results);

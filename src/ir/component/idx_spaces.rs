@@ -573,7 +573,7 @@ pub(crate) enum SpaceSubtype {
 }
 
 // Logic to figure out which index space is being manipulated
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Space {
     // Component-level spaces
     Comp,
