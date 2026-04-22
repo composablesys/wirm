@@ -1,4 +1,4 @@
-//! Trait that defines general injection behaviour
+//! Trait that defines general injection behavior
 
 use crate::ir::id::LocalID;
 use crate::DataType;

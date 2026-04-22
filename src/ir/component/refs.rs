@@ -1,3 +1,32 @@
+//! Traits for pulling referenced indices out of IR nodes.
+//!
+//! Every node that holds references into a Component's index spaces
+//! implements one or more of the traits below. The returned [`RefKind`]
+//! values can then be resolved via [`VisitCtx::resolve`] to obtain the
+//! actual referenced item.
+//!
+//! # Which trait do I call?
+//!
+//! | Want | Call |
+//! |---|---|
+//! | Every ref in the node, regardless of role | [`ReferencedIndices::referenced_indices`] |
+//! | Only refs into one namespace | [`GetCompRefs`], [`GetModuleRefs`], [`GetTypeRefs`], [`GetFuncRefs`], [`GetMemRefs`], [`GetTableRefs`] |
+//! | The single ref when there's exactly one | [`GetFuncRef`], [`GetItemRef`] |
+//! | All refs into a generic "item" position | [`GetItemRefs`] |
+//! | Role-specific slices | [`GetParamRefs`], [`GetResultRefs`], [`GetArgRefs`], [`GetDescriptorRefs`], [`GetDescribesRefs`] |
+//!
+//! Only the traits relevant to each IR node are implemented — consult
+//! `impl …` blocks in this file to see what's available per node.
+//!
+//! # Scope semantics
+//!
+//! References returned by these traits are *shallow*: they only include
+//! refs originating in the node itself, not refs inside nested scopes
+//! (inner core types inside an outer component type, etc.). To pull refs
+//! from a nested scope, call the appropriate trait on the inner IR node.
+//!
+//! [`VisitCtx::resolve`]: crate::ir::component::visitor::VisitCtx::resolve
+
 use crate::ir::component::idx_spaces::{IndexSpaceOf, Space};
 use crate::ir::types::CustomSection;
 use crate::Module;

@@ -1059,7 +1059,7 @@ impl<'a> Module<'a> {
         Ok(())
     }
 
-    /// Reorganises items (both local and imports) in the correct ordering after any potential modifications
+    /// Reorganizes items (both local and imports) in the correct ordering after any potential modifications
     pub(crate) fn reorganize<T: LocalOrImport>(items: &mut Vec<T>) {
         let mut result = vec![];
         let mut new_local = vec![];

@@ -108,9 +108,39 @@ fn walk<'ir, V: ComponentVisitor<'ir>>(
 /// All methods have default no-op implementations. Override only the
 /// callbacks relevant to your use case.
 ///
+/// # Callback dispatch
+///
+/// Callbacks fall into three shapes:
+///
+/// - **Leaf `visit_*`** — a single callback per item; no nested content.
+/// - **Bracketed `enter_* / exit_*`** — a pair that wraps inner content
+///   reported via the per-kind `visit_*_decl` or `visit_*_subtype` callback.
+/// - **Decl callbacks** — only emitted between a matching `enter_*` and
+///   `exit_*` pair.
+///
+/// | IR construct | Callback(s) |
+/// |---|---|
+/// | Root component | `enter_root_component` … `exit_root_component` |
+/// | Subcomponent | `enter_component` … `exit_component` |
+/// | Core module | `visit_module` |
+/// | Leaf `ComponentType` (`Defined` / `Func` / `Resource`) | `visit_comp_type` |
+/// | `ComponentType::Instance` | `enter_component_type_inst` → `visit_inst_type_decl` × N → `exit_component_type_inst` |
+/// | `ComponentType::Component` | `enter_component_type_comp` → `visit_comp_type_decl` × N → `exit_component_type_comp` |
+/// | Component instance | `visit_comp_instance` |
+/// | Canonical function | `visit_canon` |
+/// | Alias | `visit_alias` |
+/// | Component import | `visit_comp_import` |
+/// | Component export | `visit_comp_export` |
+/// | Core recursion group | `enter_core_rec_group` → `visit_core_subtype` × N → `exit_core_rec_group` |
+/// | Core module type (`CoreType::Module`) | `enter_core_module_type` → `visit_module_type_decl` × N → `exit_core_module_type` |
+/// | Core instance | `visit_core_instance` |
+/// | Custom section | `visit_custom_section` |
+/// | Start function | `visit_start_section` |
+///
 /// # Guarantees
 ///
-/// - `enter_component` and `exit_component` are always properly paired.
+/// - Every `enter_*` has a matching `exit_*`; decl callbacks appear only
+///   between a matched pair.
 /// - Nested components are visited in a well-structured manner.
 /// - IDs are resolved and stable within a single traversal.
 ///
