@@ -23,6 +23,7 @@ jobs:
       matrix:
         target:
           - module_roundtrip
+          - module_instrument
     steps:
       - uses: actions/checkout@v4
 
