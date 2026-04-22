@@ -32,6 +32,9 @@ impl<'a, 'b> ModuleIterator<'a, 'b> {
     }
 
     pub fn curr_op_owned(&self) -> Option<Operator<'b>> {
+        if !self.mod_iterator.has_curr() {
+            return None;
+        }
         if let (
             Location::Module {
                 func_idx,
@@ -398,6 +401,9 @@ impl<'a> Iterator for ModuleIterator<'_, 'a> {
 
     /// Returns the current instruction
     fn curr_op(&self) -> Option<&Operator<'_>> {
+        if !self.mod_iterator.has_curr() {
+            return None;
+        }
         if let (
             Location::Module {
                 func_idx,

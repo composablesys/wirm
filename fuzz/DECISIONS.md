@@ -13,7 +13,7 @@ land it, let it bake in CI, then expand to the next.
 ### Tier 1 — Modules (in progress)
 
 - [x] `module_roundtrip` — wasm-smith → wirm parse → wirm encode → wasmparser validate.
-- [ ] `module_instrument` — wasm-smith → wirm parse → iterate + inject a trivial instruction (e.g. `nop` before every op) → encode → validate.
+- [x] `module_instrument` — wasm-smith → wirm parse → iterate + inject a trivial instruction (e.g. `nop` before every op) → encode → validate.
 
 ### Tier 2 — Components
 

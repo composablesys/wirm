@@ -19,8 +19,19 @@ pub struct ModuleSubIterator {
 impl ModuleSubIterator {
     /// Creates a new ModuleSubIterator
     pub fn new(metadata: Vec<(FunctionID, usize)>, skip_funcs: Vec<FunctionID>) -> Self {
-        let curr_idx = 0;
+        // A module with no local functions (imports-only, or empty)
+        // yields an iterator that's already "done": `has_curr` is false,
+        // `next` returns false on the first call, `curr_op` returns None.
+        if metadata.is_empty() {
+            return ModuleSubIterator {
+                curr_idx: 0,
+                metadata,
+                func_iterator: FuncSubIterator::new(0),
+                skip_funcs,
+            };
+        }
 
+        let curr_idx = 0;
         let (_curr_fid, curr_num_instrs) = metadata[curr_idx];
         let mut mod_it = ModuleSubIterator {
             curr_idx,
@@ -31,6 +42,13 @@ impl ModuleSubIterator {
         mod_it.handle_skips();
 
         mod_it
+    }
+
+    /// Whether the iterator is currently positioned at a valid function.
+    /// Returns `false` for a module with no local functions (or when the
+    /// iterator has advanced past the last function).
+    pub fn has_curr(&self) -> bool {
+        self.curr_idx < self.metadata.len()
     }
 
     pub fn get_curr_func(&self) -> (FunctionID, usize) {

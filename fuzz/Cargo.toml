@@ -23,3 +23,10 @@ path = "fuzz_targets/module_roundtrip.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "module_instrument"
+path = "fuzz_targets/module_instrument.rs"
+test = false
+doc = false
+bench = false
