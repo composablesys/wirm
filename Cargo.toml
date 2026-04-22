@@ -16,12 +16,11 @@ include = ["src/**/*.rs", "Cargo.toml"]
 log = "0.4.22"
 paste = "1"
 rayon = { version = "1.8", optional = true }
-serde_json = "1.0.121"
-tempfile = "3.10.1"
 wasm-encoder = { version = "0.245.0", features = ["wasmparser"] }
 wasmparser = "0.245.0"
 
 [dev-dependencies]
+wast = "245.0.0"
 wasmprinter = "0.245.0"
 wat = "1.245.0"
 wasmtime = "40.0.0"

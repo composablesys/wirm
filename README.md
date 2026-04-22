@@ -34,10 +34,3 @@ Enable the feature by adding the `parallel` feature to your `Cargo.toml`:
 [dependencies]
 wirm = { version = "1.1.0", features = ["parallel"] }
 ```
-
-## Environment Setup ##
-
-To install `wasm-tools`:
-```shell
-$ cargo install wasm-tools
-```

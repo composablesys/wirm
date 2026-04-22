@@ -47,11 +47,6 @@ jobs:
       # Caching per OS
       - uses: Swatinem/rust-cache@v2
 
-      # TODO: Remove the dependency on wasm-tools when have time.
-      - name: Install wasm-tools
-        run: |
-          cargo install wasm-tools --version 1.244.0 --locked
-
       - name: Build
         run: cargo build --locked --verbose
 

@@ -3,10 +3,8 @@ use crate::ir::component::visitor::events_structural::get_structural_events;
 use crate::ir::component::visitor::events_topological::get_topological_events;
 use crate::ir::component::visitor::VisitCtx;
 use crate::{Component, Module};
-use serde_json::Value;
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 use wasmparser::{ComponentTypeDeclaration, InstanceTypeDeclaration};
 
 const WASM_TOOLS_TEST_COMP_INPUTS: &str = "./tests/wasm-tools/component-model";
@@ -589,91 +587,37 @@ fn check_equality(evts0: &Vec<VisitEvent>, evts1: &Vec<VisitEvent>) {
     }
 }
 
-fn wasm_tools() -> Command {
-    Command::new("wasm-tools")
-}
-
-fn test_event_generation(filename: &str) {
-    println!("\nfilename: {:?}", filename);
-    let buff = wat::parse_file(filename).expect("couldn't convert the input wat to Wasm");
-    let original = wasmprinter::print_bytes(&buff).expect("couldn't convert original Wasm to wat");
+fn test_event_generation(label: &str, bytes: &[u8]) {
+    println!("\n{label}");
+    let original = wasmprinter::print_bytes(bytes).expect("couldn't convert original Wasm to wat");
     println!("original: {:?}", original);
 
-    let comp = Component::parse(&buff, false, false).expect("Unable to parse");
+    let comp = Component::parse(bytes, false, false).expect("Unable to parse");
     let evts_struct = get_events(&comp, get_structural_events);
     let evts_topo = get_events(&comp, get_topological_events);
     check_event_validity(&evts_struct, &evts_topo);
 }
 
-pub fn tests_from_wast(path: &Path, run_test: fn(&str)) {
-    let path = path.to_str().unwrap().replace("\\", "/");
-    for entry in fs::read_dir(path).unwrap() {
+pub fn tests_from_wast(path: &Path, run_test: fn(&str, &[u8])) {
+    for_each_wast_in_dir(path, |wast_path| {
+        for_each_valid_wasm_in_wast(wast_path, &run_test);
+    });
+}
+
+/// Iterates `*.wast` files in `dir` (non-recursive), invoking `f` with each.
+fn for_each_wast_in_dir(dir: &Path, mut f: impl FnMut(&Path)) {
+    let dir = dir.to_str().unwrap().replace("\\", "/");
+    for entry in fs::read_dir(&dir).unwrap() {
         let file = entry.unwrap();
-        match file.path().extension() {
-            None => continue,
-            Some(ext) => {
-                if ext.to_str() != Some("wast") {
-                    continue;
-                }
-            }
-        }
-        let mut cmd = wasm_tools();
-        let td = tempfile::TempDir::new().unwrap();
-        cmd.arg("json-from-wast")
-            .arg(file.path())
-            .arg("--pretty")
-            .arg("--wasm-dir")
-            .arg(td.path())
-            .arg("-o")
-            .arg(td.path().join(format!(
-                "{:?}.json",
-                Path::new(&file.path())
-                    .file_stem()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-            )));
-        let output = cmd.output().unwrap();
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            panic!("failed to run {cmd:?}\nstdout: {stdout}\nstderr: {stderr}");
-        }
-        // For every file that is not invalid in the output, do round-trip
-        for entry in fs::read_dir(td.path()).unwrap() {
-            let file_json = entry.unwrap();
-            match file_json.path().extension() {
-                None => continue,
-                Some(ext) => {
-                    if ext.to_str() != Some("json") {
-                        continue;
-                    }
-                }
-            }
-            let json: Value = serde_json::from_str(
-                &fs::read_to_string(file_json.path()).expect("Unable to open file"),
-            )
-            .unwrap();
-            if let Value::Object(map) = json {
-                if let Value::Array(vals) = map.get_key_value("commands").unwrap().1 {
-                    for value in vals {
-                        if let Value::Object(testcase) = value {
-                            // If assert is not in the string, that means it is a valid test case
-                            if let Value::String(ty) = testcase.get_key_value("type").unwrap().1 {
-                                if !ty.contains("assert") && testcase.contains_key("filename") {
-                                    if let Value::String(test_file) =
-                                        testcase.get_key_value("filename").unwrap().1
-                                    {
-                                        run_test(
-                                            Path::new(td.path()).join(test_file).to_str().unwrap(),
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+        if file.path().extension().and_then(|e| e.to_str()) == Some("wast") {
+            f(&file.path());
         }
     }
 }
+
+// Shared with the integration test in tests/round_trip_wast.rs. Kept in
+// tests/common/ so all test-only code lives under tests/; reached from
+// here via #[path] because lib tests can't normally see tests/.
+#[path = "../../../../tests/common/wast_iter.rs"]
+mod wast_iter;
+use wast_iter::for_each_valid_wasm_in_wast;
