@@ -770,7 +770,7 @@ impl DataSegmentKind {
                 offset_expr,
             } => DataSegmentKind::Active {
                 memory_index,
-                offset_expr: InitExpr::eval(&offset_expr),
+                offset_expr: InitExpr::eval(&offset_expr)?,
             },
         })
     }
@@ -797,7 +797,7 @@ impl ElementKind {
                 offset_expr,
             } => Ok(ElementKind::Active {
                 table_index,
-                offset_expr: InitExpr::eval(&offset_expr),
+                offset_expr: InitExpr::eval(&offset_expr)?,
             }),
         }
     }
@@ -827,7 +827,10 @@ impl ElementItems {
                     .collect::<std::result::Result<Vec<_>, _>>()?;
                 Ok(ElementItems::ConstExprs {
                     ty: ref_type,
-                    exprs: exprs.iter().map(|expr| InitExpr::eval(expr)).collect(),
+                    exprs: exprs
+                        .iter()
+                        .map(InitExpr::eval)
+                        .collect::<Result<Vec<_>>>()?,
                 })
             }
         }
@@ -1716,12 +1719,13 @@ impl InitExpr {
         self.exprs.as_slice()
     }
 
-    pub(crate) fn eval(init: &ConstExpr) -> InitExpr {
+    pub(crate) fn eval(init: &ConstExpr) -> Result<InitExpr> {
         use wasmparser::Operator::*;
         let mut reader = init.get_operators_reader();
         let mut instrs = vec![];
         loop {
-            let val = match reader.read().unwrap() {
+            let op = reader.read()?;
+            let val = match op {
                 I32Const { value } => InitInstr::Value(Value::I32(value)),
                 I64Const { value } => InitInstr::Value(Value::I64(value)),
                 F32Const { value } => InitInstr::Value(Value::F32(f32::from_bits(value.bits()))),
@@ -1729,7 +1733,11 @@ impl InitExpr {
                 V128Const { value } => InitInstr::Value(Value::V128(v128_to_u128(&value))),
                 GlobalGet { global_index } => InitInstr::Global(GlobalID(global_index)),
                 // Marking nullable as true as it's a null reference
-                RefNull { hty } => InitInstr::RefNull(RefType::new(true, hty).unwrap()),
+                RefNull { hty } => InitInstr::RefNull(RefType::new(true, hty).ok_or_else(|| {
+                    Error::ConversionError(format!(
+                        "ref.null in constant expression references an unrepresentable heap type: {hty:?}"
+                    ))
+                })?),
                 RefFunc { function_index } => InitInstr::RefFunc(FunctionID(function_index)),
                 StructNew { struct_type_index } => InitInstr::StructNew(TypeID(struct_type_index)),
                 StructNewDefault { struct_type_index } => {
@@ -1762,15 +1770,20 @@ impl InitExpr {
                 },
                 RefI31 => InitInstr::RefI31,
                 End => break,
-                _ => panic!("Invalid constant expression"),
+                other => {
+                    return Err(Error::ConversionError(format!(
+                        "unsupported operator in constant expression: {other:?}"
+                    )));
+                }
             };
             instrs.push(val);
         }
-        assert!(
-            reader.eof(),
-            "Internal error: There was more data after the function end!"
-        );
-        InitExpr { exprs: instrs }
+        if !reader.eof() {
+            return Err(Error::ConversionError(
+                "trailing bytes after `end` in constant expression".to_string(),
+            ));
+        }
+        Ok(InitExpr { exprs: instrs })
     }
 
     pub(crate) fn to_wasmencoder_type(&self) -> wasm_encoder::ConstExpr {

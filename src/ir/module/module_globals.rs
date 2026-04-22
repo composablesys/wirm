@@ -105,7 +105,7 @@ impl Global {
     /// Assumes this is a locally-defined global (not imported).
     pub(crate) fn from_wasmparser(global: wasmparser::Global) -> Result<Global> {
         let ty = global.ty;
-        let init_expr = InitExpr::eval(&global.init_expr);
+        let init_expr = InitExpr::eval(&global.init_expr)?;
         Ok(Global {
             kind: GlobalKind::Local(LocalGlobal {
                 global_id: GlobalID(0),
