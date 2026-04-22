@@ -213,7 +213,7 @@ impl RefKind {
     }
     pub(crate) fn describes(ref_: IndexedRef) -> Self {
         Self {
-            role: RefRole::Descriptor,
+            role: RefRole::Describes,
             ref_,
         }
     }
