@@ -903,17 +903,20 @@ fn encode_canon_section(
         } => {
             canon_sec.thread_new_indirect(func_ty_index, table_index);
         }
-        CanonicalFunction::ThreadSwitchTo { cancellable } => {
-            canon_sec.thread_switch_to(cancellable);
-        }
         CanonicalFunction::ThreadSuspend { cancellable } => {
             canon_sec.thread_suspend(cancellable);
         }
-        CanonicalFunction::ThreadResumeLater => {
-            canon_sec.thread_resume_later();
+        CanonicalFunction::ThreadSuspendToSuspended { cancellable } => {
+            canon_sec.thread_suspend_to_suspended(cancellable);
         }
-        CanonicalFunction::ThreadYieldTo { cancellable } => {
-            canon_sec.thread_yield_to(cancellable);
+        CanonicalFunction::ThreadSuspendTo { cancellable } => {
+            canon_sec.thread_suspend_to(cancellable);
+        }
+        CanonicalFunction::ThreadUnsuspend => {
+            canon_sec.thread_unsuspend();
+        }
+        CanonicalFunction::ThreadYieldToSuspended { cancellable } => {
+            canon_sec.thread_yield_to_suspended(cancellable);
         }
     }
     component.section(&canon_sec);
@@ -1064,7 +1067,6 @@ fn encode_comp_defined_ty(
             (
                 variant.name,
                 variant.ty.map(|ty| reencode.component_val_type(ty)),
-                variant.refines,
             )
         })),
         ComponentDefinedType::List(l) => enc.list(reencode.component_val_type(l)),
@@ -1087,8 +1089,8 @@ fn encode_comp_defined_ty(
         ComponentDefinedType::Stream(opt) => {
             enc.stream(opt.map(|opt| reencode.component_val_type(opt)))
         }
-        ComponentDefinedType::FixedSizeList(ty, i) => {
-            enc.fixed_size_list(reencode.component_val_type(ty), i)
+        ComponentDefinedType::FixedLengthList(ty, i) => {
+            enc.fixed_length_list(reencode.component_val_type(ty), i)
         }
         ComponentDefinedType::Map(key_ty, val_ty) => enc.map(
             reencode.component_val_type(key_ty),

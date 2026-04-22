@@ -208,10 +208,10 @@ macro_rules! define_opcode_methods {
     (one @gc RefCastNullable $($rest:tt)*) => {};
     (one @gc BrOnCast        $($rest:tt)*) => {};
     (one @gc BrOnCastFail    $($rest:tt)*) => {};
-    (one @custom_descriptors RefCastDescNonNull  $($rest:tt)*) => {};
-    (one @custom_descriptors RefCastDescNullable $($rest:tt)*) => {};
-    (one @custom_descriptors BrOnCastDesc        $($rest:tt)*) => {};
-    (one @custom_descriptors BrOnCastDescFail    $($rest:tt)*) => {};
+    (one @custom_descriptors RefCastDescEqNonNull  $($rest:tt)*) => {};
+    (one @custom_descriptors RefCastDescEqNullable $($rest:tt)*) => {};
+    (one @custom_descriptors BrOnCastDescEq       $($rest:tt)*) => {};
+    (one @custom_descriptors BrOnCastDescEqFail   $($rest:tt)*) => {};
 
     // ── Auto-generate: operator with no arguments ────────────────────────────
     (one @$_proposal:ident $op:ident => $visit:ident) => {
@@ -489,7 +489,7 @@ pub trait Opcode<'a>: Inject<'a> {
 
     /// Inject a `ref.cast_desc` (non-null) instruction. Custom-descriptors proposal.
     fn ref_cast_desc(&mut self, heap_type: HeapType) -> &mut Self {
-        self.inject(Operator::RefCastDescNonNull {
+        self.inject(Operator::RefCastDescEqNonNull {
             hty: wasmparser::HeapType::from(heap_type),
         });
         self
@@ -497,7 +497,7 @@ pub trait Opcode<'a>: Inject<'a> {
 
     /// Inject a `ref.cast_desc null` (nullable) instruction. Custom-descriptors proposal.
     fn ref_cast_desc_null(&mut self, heap_type: HeapType) -> &mut Self {
-        self.inject(Operator::RefCastDescNullable {
+        self.inject(Operator::RefCastDescEqNullable {
             hty: wasmparser::HeapType::from(heap_type),
         });
         self
@@ -556,7 +556,7 @@ pub trait Opcode<'a>: Inject<'a> {
         from_ref_type: wasmparser::RefType,
         to_ref_type: wasmparser::RefType,
     ) -> &mut Self {
-        self.inject(Operator::BrOnCastDesc {
+        self.inject(Operator::BrOnCastDescEq {
             relative_depth,
             from_ref_type,
             to_ref_type,
@@ -571,7 +571,7 @@ pub trait Opcode<'a>: Inject<'a> {
         from_ref_type: wasmparser::RefType,
         to_ref_type: wasmparser::RefType,
     ) -> &mut Self {
-        self.inject(Operator::BrOnCastDescFail {
+        self.inject(Operator::BrOnCastDescEqFail {
             relative_depth,
             from_ref_type,
             to_ref_type,

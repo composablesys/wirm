@@ -481,10 +481,11 @@ impl FixIndicesImpl for CanonicalFunction {
             | CanonicalFunction::ContextSet(_)
             | CanonicalFunction::ThreadYield { .. }
             | CanonicalFunction::ThreadIndex
-            | CanonicalFunction::ThreadSwitchTo { .. }
             | CanonicalFunction::ThreadSuspend { .. }
-            | CanonicalFunction::ThreadResumeLater
-            | CanonicalFunction::ThreadYieldTo {..}
+            | CanonicalFunction::ThreadSuspendToSuspended { .. }
+            | CanonicalFunction::ThreadSuspendTo { .. }
+            | CanonicalFunction::ThreadUnsuspend
+            | CanonicalFunction::ThreadYieldToSuspended { .. }
             | CanonicalFunction::ErrorContextDrop => self.clone(),
         }
     }
@@ -578,7 +579,7 @@ impl FixIndicesImpl for ComponentDefinedType<'_> {
                 ComponentDefinedType::Variant(new_tys.into_boxed_slice())
             },
             ComponentDefinedType::List(ty) => ComponentDefinedType::List(ty.fix(ids, cx)),
-            ComponentDefinedType::FixedSizeList(ty, len) => ComponentDefinedType::FixedSizeList(ty.fix(ids, cx), *len),
+            ComponentDefinedType::FixedLengthList(ty, len) => ComponentDefinedType::FixedLengthList(ty.fix(ids, cx), *len),
             ComponentDefinedType::Tuple(tys) => {
                 let mut new_tys = vec![];
                 for t in tys.iter() {
@@ -630,12 +631,6 @@ impl FixIndicesImpl for VariantCase<'_> {
         Self {
             name: self.name,
             ty: self.ty.map(|ty| ty.fix(ids, cx)),
-            refines: self.refines.map(|_| {
-                ids.lookup_actual_id_or_panic(
-                    cx,
-                    &self.get_type_refs().first().unwrap().ref_
-                ) as u32
-            }),
         }
     }
 }
