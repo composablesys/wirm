@@ -439,9 +439,28 @@ pub trait Opcode<'a>: Inject<'a> {
         self
     }
 
-    /// Inject a `br_table` instruction.
-    fn br_table(&mut self, targets: wasmparser::BrTable<'a>) -> &mut Self {
-        self.inject(Operator::BrTable { targets });
+    /// Inject a `br_table` instruction with the given target labels and default.
+    fn br_table(&mut self, default: u32, labels: impl IntoIterator<Item = u32>) -> &mut Self {
+        use std::borrow::Cow;
+        use wasm_encoder::{Encode, Instruction};
+        use wasmparser::{BinaryReader, OperatorsReader};
+
+        // wasmparser::BrTable<'a>'s fields are pub(crate), so we round-trip
+        // through wasm_encoder + OperatorsReader to obtain one. The bytes are
+        // leaked because Operator::BrTable borrows them and must outlive the
+        // injection (~5 * (N + 3) bytes per call; negligible in practice).
+        // If this ever grows to matter, lift the wirm IR above wasmparser's
+        // Operator so br_table injections can store (default, labels) directly.
+        let labels: Vec<u32> = labels.into_iter().collect();
+        let mut bytes = Vec::new();
+        Instruction::BrTable(Cow::Borrowed(&labels), default).encode(&mut bytes);
+        let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+
+        let mut reader = OperatorsReader::new(BinaryReader::new(bytes, 0));
+        let op = reader
+            .read()
+            .expect("round-tripping our own br_table encoding must succeed");
+        self.inject(op);
         self
     }
 
