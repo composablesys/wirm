@@ -100,11 +100,3 @@ cargo +nightly fuzz run module_roundtrip
 
 - Do we want a long-form corpus checked in, or rely purely on fuzzer-generated coverage? (Currently: no committed corpus; cargo-fuzz starts from scratch each run.)
 - Should the instrumentation targets validate *semantically* (the injected ops are observable in the encoded body) rather than just "valid wasm"? Probably yes once the round-trip target is stable.
-
----
-
-## Findings
-
-Bugs surfaced by fuzzing. Each entry: fuzz target / summary / file:line / suggested fix.
-
-- **`module_roundtrip` — `InitExpr::eval` panics on unknown const-expr variants.** `src/ir/types.rs:1765`: `_ => panic!("Invalid constant expression")` turns an unrecognized `ConstExpr` into a library panic instead of a parse error. Found on the first 15-second run. Fix: return a proper `Err` (probably through the same error type `Module::parse` already uses) so consumers can catch it instead of aborting. `src/ir/types.rs:1769`'s `assert!(reader.eof(), …)` is the same class of issue — also an "internal error" panic on malformed post-end bytes. Address both in one pass.
