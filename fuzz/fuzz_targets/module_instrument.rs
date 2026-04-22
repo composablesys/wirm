@@ -1,9 +1,11 @@
 //! wasm-smith → wirm parse → inject `nop` before every op → encode → validate.
 //!
 //! Exercises the instrumentation pipeline (iterator + injection) on top of the
-//! parse/encode surface that `module_roundtrip` already covers. Any smith-
-//! produced module wirm accepts should survive a trivial injection pass and
-//! re-encode to valid wasm.
+//! parse/encode surface that `module_roundtrip` already covers. In addition to
+//! "re-encoded output validates", we count operators in the binary before and
+//! after instrumentation and assert the count grew by exactly the number of
+//! injections — catches silent drops where `.before().nop()` is accepted but
+//! not emitted.
 //!
 //! Design per fuzz/DECISIONS.md:
 //!
@@ -20,6 +22,7 @@ use wasm_smith::Module as SmithModule;
 use wirm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
 use wirm::iterator::module_iterator::ModuleIterator;
 use wirm::Opcode;
+use wirm_fuzz::count_ops;
 
 fuzz_target!(|smith: SmithModule| {
     let bytes = smith.to_bytes();
@@ -38,11 +41,15 @@ fuzz_target!(|smith: SmithModule| {
         Err(_) => return,
     };
 
+    let pre_count = count_ops(&bytes);
+
+    let mut injected = 0usize;
     {
         let mut it = ModuleIterator::new(&mut module, &vec![]);
         loop {
             if it.curr_op().is_some() {
                 it.before().nop();
+                injected += 1;
             }
             if it.next().is_none() {
                 break;
@@ -57,4 +64,12 @@ fuzz_target!(|smith: SmithModule| {
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(&encoded)
         .expect("instrumented module failed wasmparser validation");
+
+    let post_count = count_ops(&encoded);
+    assert_eq!(
+        post_count,
+        pre_count + injected,
+        "injected nops not observable in re-encoded body: \
+         pre={pre_count}, injected={injected}, post={post_count}",
+    );
 });
