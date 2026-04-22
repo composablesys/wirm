@@ -1,0 +1,117 @@
+name: Fuzz
+
+# Runs wasm-smith-based fuzzing on a weekly schedule. Not wired into per-PR
+# CI because (a) fuzz runs need time to be useful and (b) fuzz-discovered
+# crashes shouldn't block unrelated PRs. See fuzz/DECISIONS.md.
+#
+# Also runnable manually via the "Run workflow" button on the Actions tab.
+
+on:
+  # TODO: re-enable the scheduled run once `module_roundtrip` is green.
+  # `module_roundtrip` currently trips the `InitExpr::eval` panic in
+  # `src/ir/types.rs:1765` (see fuzz/DECISIONS.md § Findings) within the
+  # first few seconds of a run, so the Sunday job would be red from day
+  # one. Flip the schedule back on in the same PR that fixes that panic.
+  # schedule:
+  #   - cron: "0 6 * * 0"  # 06:00 UTC every Sunday
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - module_roundtrip
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "fuzz -> target"
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      # Persist the corpus between runs so the fuzzer builds on prior
+      # discoveries instead of re-exploring the same surface each time.
+      # Cache key rotates weekly (Sunday of the year) so the corpus
+      # doesn't grow unbounded forever — older inputs eventually age
+      # out and libfuzzer re-seeds from scratch for a given week.
+      - name: Restore corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
+      - name: Fuzz ${{ matrix.target }}
+        # 10 minutes per target per week. Bump if coverage plateaus.
+        run: cargo fuzz run ${{ matrix.target }} -- -max_total_time=600
+
+      # On failure, dump each crash input in its Arbitrary-decoded form so the
+      # CI log alone is enough to see what shape of module triggered it. The
+      # raw artifact bytes are also uploaded below for exact reproduction.
+      - name: Decode crash inputs
+        if: failure()
+        run: |
+          shopt -s nullglob
+          crashes=(fuzz/artifacts/${{ matrix.target }}/crash-*)
+          if [ ${#crashes[@]} -eq 0 ]; then
+            echo "(no crash artifacts present — failure was not a fuzzer crash)"
+            exit 0
+          fi
+          for f in "${crashes[@]}"; do
+            echo ""
+            echo "============================================================"
+            echo "Crash: $f"
+            echo "============================================================"
+            cargo fuzz fmt ${{ matrix.target }} "$f" || true
+          done
+
+      - name: Print reproduction instructions
+        if: failure()
+        run: |
+          cat <<'EOF'
+
+          ============================================================
+          How to reproduce this failure locally
+          ============================================================
+
+          1. Download the "fuzz-artifacts-${{ matrix.target }}" artifact
+             from this workflow run (see the "Artifacts" section at the
+             top of the run page).
+
+          2. Unzip it into the repo root so the path layout matches what
+             libFuzzer wrote:
+
+                 wirm/fuzz/artifacts/${{ matrix.target }}/crash-<hash>
+
+          3. Reproduce:
+
+                 cargo +nightly fuzz run ${{ matrix.target }} \
+                     fuzz/artifacts/${{ matrix.target }}/crash-<hash>
+
+          4. (Optional) Minimize the crash input for a smaller reproducer:
+
+                 cargo +nightly fuzz tmin ${{ matrix.target }} \
+                     fuzz/artifacts/${{ matrix.target }}/crash-<hash>
+
+          See fuzz/README.md for more.
+          EOF
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts-${{ matrix.target }}
+          path: fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
