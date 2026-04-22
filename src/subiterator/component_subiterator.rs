@@ -27,6 +27,21 @@ impl ComponentSubIterator {
         metadata: HashMap<ModuleID, Vec<(FunctionID, usize)>>,
         skip_funcs: HashMap<ModuleID, Vec<FunctionID>>,
     ) -> Self {
+        // A component with no core modules yields an iterator that's
+        // already "done": `end()` returns true (curr_mod == num_mods == 0)
+        // and `ComponentIterator::curr_op` / `next` short-circuit on that.
+        // The inner `ModuleSubIterator` gets an empty metadata vec so its
+        // own bounds-checking stays consistent.
+        if num_mods == 0 {
+            return ComponentSubIterator {
+                curr_mod,
+                num_mods,
+                metadata,
+                mod_iterator: ModuleSubIterator::new(vec![], vec![]),
+                skip_funcs,
+            };
+        }
+
         // Get current skip func
         // initializes to the first module
         ComponentSubIterator {
@@ -88,6 +103,18 @@ impl ComponentSubIterator {
     /// Checks if the SubIterator has finished traversing all the modules
     pub fn end(&self) -> bool {
         *self.curr_mod as usize == self.num_mods
+    }
+
+    /// Whether the iterator currently points at a valid instruction.
+    ///
+    /// Stronger than [`end`]: returns `false` both when all modules have
+    /// been traversed *and* when the current module has no local functions
+    /// (nothing to point at inside it). Callers that need "is there an
+    /// op here right now?" should use this instead of [`end`].
+    ///
+    /// [`end`]: Self::end
+    pub fn has_curr(&self) -> bool {
+        !self.end() && self.mod_iterator.has_curr()
     }
 
     /// Returns the Current Location as a Location and a bool value that
