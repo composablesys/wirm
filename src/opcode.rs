@@ -181,14 +181,10 @@ macro_rules! define_opcode_methods {
 
     // ── Skip operators requiring manual implementations ──────────────────────
     //
-    // TODO: the following skipped ops still need manual impls added to the
-    // `Opcode` trait — they're currently unreachable via the public API:
-    //   @reference_types     TypedSelect, TypedSelectMulti  (ValType / Vec<ValType>)
-    //   @exceptions          TryTable                       (wasmparser::TryTable<'a>)
-    //   @legacy_exceptions   Try                            (BlockType)
-    //   @gc                  BrOnCast, BrOnCastFail         (RefType × 2 + relative_depth)
-    //   @custom_descriptors  RefCastDescNonNull, RefCastDescNullable  (HeapType)
-    //                        BrOnCastDesc, BrOnCastDescFail            (RefType × 2 + depth)
+    // Each skipped op below has a hand-written counterpart further down in
+    // this file (look for `fn <name>` in `impl Opcode`), typically because
+    // the argument type needs a wirm-side wrapper (BlockType, HeapType) or
+    // the op's name collides with a Rust keyword.
     //
     // Keyword conflicts / BlockType conversions:
     (one @mvp Block    $($rest:tt)*) => {};
@@ -487,6 +483,120 @@ pub trait Opcode<'a>: Inject<'a> {
     fn ref_cast_null(&mut self, heap_type: HeapType) -> &mut Self {
         self.inject(Operator::RefCastNullable {
             hty: wasmparser::HeapType::from(heap_type),
+        });
+        self
+    }
+
+    /// Inject a `ref.cast_desc` (non-null) instruction. Custom-descriptors proposal.
+    fn ref_cast_desc(&mut self, heap_type: HeapType) -> &mut Self {
+        self.inject(Operator::RefCastDescNonNull {
+            hty: wasmparser::HeapType::from(heap_type),
+        });
+        self
+    }
+
+    /// Inject a `ref.cast_desc null` (nullable) instruction. Custom-descriptors proposal.
+    fn ref_cast_desc_null(&mut self, heap_type: HeapType) -> &mut Self {
+        self.inject(Operator::RefCastDescNullable {
+            hty: wasmparser::HeapType::from(heap_type),
+        });
+        self
+    }
+
+    // ── Reference types: typed select ────────────────────────────────────────
+
+    /// Inject a `select` instruction annotated with a single value type.
+    fn typed_select(&mut self, ty: wasmparser::ValType) -> &mut Self {
+        self.inject(Operator::TypedSelect { ty });
+        self
+    }
+
+    /// Inject a `select` instruction annotated with multiple value types.
+    fn typed_select_multi(&mut self, tys: Vec<wasmparser::ValType>) -> &mut Self {
+        self.inject(Operator::TypedSelectMulti { tys });
+        self
+    }
+
+    // ── GC: br_on_cast / br_on_cast_fail ─────────────────────────────────────
+
+    /// Inject a `br_on_cast` instruction.
+    fn br_on_cast(
+        &mut self,
+        relative_depth: u32,
+        from_ref_type: wasmparser::RefType,
+        to_ref_type: wasmparser::RefType,
+    ) -> &mut Self {
+        self.inject(Operator::BrOnCast {
+            relative_depth,
+            from_ref_type,
+            to_ref_type,
+        });
+        self
+    }
+
+    /// Inject a `br_on_cast_fail` instruction.
+    fn br_on_cast_fail(
+        &mut self,
+        relative_depth: u32,
+        from_ref_type: wasmparser::RefType,
+        to_ref_type: wasmparser::RefType,
+    ) -> &mut Self {
+        self.inject(Operator::BrOnCastFail {
+            relative_depth,
+            from_ref_type,
+            to_ref_type,
+        });
+        self
+    }
+
+    /// Inject a `br_on_cast_desc` instruction. Custom-descriptors proposal.
+    fn br_on_cast_desc(
+        &mut self,
+        relative_depth: u32,
+        from_ref_type: wasmparser::RefType,
+        to_ref_type: wasmparser::RefType,
+    ) -> &mut Self {
+        self.inject(Operator::BrOnCastDesc {
+            relative_depth,
+            from_ref_type,
+            to_ref_type,
+        });
+        self
+    }
+
+    /// Inject a `br_on_cast_desc_fail` instruction. Custom-descriptors proposal.
+    fn br_on_cast_desc_fail(
+        &mut self,
+        relative_depth: u32,
+        from_ref_type: wasmparser::RefType,
+        to_ref_type: wasmparser::RefType,
+    ) -> &mut Self {
+        self.inject(Operator::BrOnCastDescFail {
+            relative_depth,
+            from_ref_type,
+            to_ref_type,
+        });
+        self
+    }
+
+    // ── Exceptions: try_table + legacy try ───────────────────────────────────
+
+    /// Inject a `try_table` instruction with the given block type and catch clauses.
+    fn try_table(&mut self, ty: BlockType, catches: Vec<wasmparser::Catch>) -> &mut Self {
+        self.inject(Operator::TryTable {
+            try_table: wasmparser::TryTable {
+                ty: wasmparser::BlockType::from(ty),
+                catches,
+            },
+        });
+        self
+    }
+
+    /// Inject a legacy `try` instruction (`try` is a Rust keyword; use `try_stmt`).
+    /// Superseded by [`try_table`](Self::try_table) in the exception-handling proposal.
+    fn try_stmt(&mut self, block_type: BlockType) -> &mut Self {
+        self.inject(Operator::Try {
+            blockty: wasmparser::BlockType::from(block_type),
         });
         self
     }
