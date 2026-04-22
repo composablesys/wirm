@@ -36,10 +36,11 @@ cargo +nightly fuzz run module_roundtrip -- -max_total_time=300
 
 ## Current targets
 
-| Target              | Exercises                                                     |
-|---------------------|---------------------------------------------------------------|
-| `module_roundtrip`  | `Module::parse` → `Module::encode` → `wasmparser::Validator`  |
-| `module_instrument` | `module_roundtrip` + iterate and inject `nop` before every op |
+| Target                | Exercises                                                                |
+|-----------------------|--------------------------------------------------------------------------|
+| `module_roundtrip`    | `Module::parse` → `Module::encode` → `wasmparser::Validator`             |
+| `module_instrument`   | `module_roundtrip` + iterate and inject `nop` before every op            |
+| `component_roundtrip` | `Component::parse` → `Component::encode` → `wasmparser::Validator`       |
 
 More targets planned — see `DECISIONS.md`.
 

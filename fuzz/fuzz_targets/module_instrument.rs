@@ -24,6 +24,15 @@ use wirm::Opcode;
 fuzz_target!(|smith: SmithModule| {
     let bytes = smith.to_bytes();
 
+    // Skip inputs wasmparser itself rejects — see module_roundtrip for
+    // the rationale.
+    if wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&bytes)
+        .is_err()
+    {
+        return;
+    }
+
     let mut module = match wirm::Module::parse(&bytes, false, false) {
         Ok(m) => m,
         Err(_) => return,

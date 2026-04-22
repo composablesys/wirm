@@ -17,7 +17,7 @@ land it, let it bake in CI, then expand to the next.
 
 ### Tier 2 — Components
 
-- [ ] `component_roundtrip` — wasm-smith Component → wirm parse → encode → validate.
+- [x] `component_roundtrip` — wasm-smith Component → wirm parse → encode → validate.
 - [ ] `component_instrument` — same as Tier 1's instrument, but driving a `ComponentIterator`.
 - [ ] `component_concretize` — for every import/export, call `concretize_{import,export}` and just verify no panic.
 - [ ] `component_walk_topological` / `component_walk_structural` — drive both walkers on smith-produced components with a no-op visitor; assert no panic, no divergent section_idx between walkers.
@@ -47,13 +47,27 @@ Rationale:
 
 ### Parse failures are silent, not crashes
 
-If `wirm::Module::parse` returns `Err`, the fuzz target returns early
-without panicking. wasm-smith can emit modules using features wirm
-doesn't support (e.g. `shared_everything_threads`, `stack_switching`),
-and "wirm doesn't parse this" is not a bug.
+If `wirm::Module::parse` (or `Component::parse`) returns `Err`, the fuzz
+target returns early without panicking. wasm-smith can emit binaries
+using features wirm doesn't support (e.g. `shared_everything_threads`,
+`stack_switching`), and "wirm doesn't parse this" is not a bug.
 
 Only post-parse failures (encode error, validation error on re-encoded
 bytes) are treated as crashes.
+
+### Inputs that wasmparser itself rejects are silent, not crashes
+
+Each target pre-validates the smith-produced bytes with `wasmparser`
+before handing them to wirm. If wasmparser rejects the input (e.g.
+wasm-smith produced an empty-`flags` component type, which is
+structurally parseable but semantically invalid), the target returns
+early without panicking.
+
+The comparison we care about is apples-to-apples: "if wasmparser
+accepts the input AND wirm parses it, then wirm's re-encoded output
+should also be accepted by wasmparser". Treating wasm-smith-side
+invalid output as a wirm bug would create false positives (we found one
+on the first component run — empty flags).
 
 ### Feature configuration for wasm-smith
 
