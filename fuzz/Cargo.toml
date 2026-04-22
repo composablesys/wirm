@@ -1,0 +1,25 @@
+[package]
+name = "wirm-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# wasm-smith releases in lockstep with wasmparser/wasm-encoder. When
+# bumping wirm's wasmparser dep, bump this to match. See fuzz/DECISIONS.md.
+wasm-smith = "0.245.0"
+wasmparser = "0.245.0"
+
+[dependencies.wirm]
+path = ".."
+
+[[bin]]
+name = "module_roundtrip"
+path = "fuzz_targets/module_roundtrip.rs"
+test = false
+doc = false
+bench = false
