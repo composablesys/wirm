@@ -334,7 +334,6 @@ impl<'a> Component<'a> {
             with_offsets,
             parser,
             0,
-            &mut vec![],
             space_id,
             Rc::new(RefCell::new(registry)),
             Rc::new(RefCell::new(store)),
@@ -349,7 +348,6 @@ impl<'a> Component<'a> {
         with_offsets: bool,
         parser: Parser,
         start: usize,
-        parent_stack: &mut Vec<Encoding>,
         space_id: ScopeId,
         registry_handle: RegistryHandle,
         store_handle: StoreHandle,
@@ -596,7 +594,6 @@ impl<'a> Component<'a> {
                     unchecked_range,
                 } => {
                     // Indicating the start of a new module
-                    parent_stack.push(Encoding::Module);
                     stack.push(Encoding::Module);
                     let m = Module::parse_internal(
                         &wasm[unchecked_range.start - start..unchecked_range.end - start],
@@ -625,7 +622,6 @@ impl<'a> Component<'a> {
                     let sub_space_id = store_handle.borrow_mut().new_scope();
                     let sect = ComponentSection::Component;
 
-                    parent_stack.push(Encoding::Component);
                     stack.push(Encoding::Component);
                     let cmp = Component::parse_comp(
                         &wasm[unchecked_range.start - start..unchecked_range.end - start],
@@ -633,7 +629,6 @@ impl<'a> Component<'a> {
                         with_offsets,
                         parser,
                         unchecked_range.start,
-                        &mut stack,
                         sub_space_id,
                         Rc::clone(&registry_handle),
                         Rc::clone(&store_handle),

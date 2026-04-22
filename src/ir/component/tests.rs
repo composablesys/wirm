@@ -1125,3 +1125,43 @@ fn section_count_invariant_empty_import_section() {
         ComponentSection::ComponentImport
     ));
 }
+
+/// A component with a subcomponent followed by more root-level sections
+/// (instance, alias, core instance, core module, core instance). Regression
+/// guard for the parse_comp skip-depth bug where `parent_stack.push` in the
+/// recursive handlers double-counted with the outer skip-arm's push,
+/// leaving the outer stack permanently non-zero and silently dropping
+/// every root section after the first subcomponent.
+#[test]
+fn parse_comp_handles_root_sections_after_subcomponent() {
+    use crate::ir::component::section::ComponentSection;
+    let b = bytes(
+        r#"(component
+      (component $m
+        (core module $sub (export "module")
+          (func $f (export "") (result i32)
+            i32.const 5)))
+      (instance $a (instantiate $m))
+      (alias export $a "module" (core module $sub))
+      (core instance $b (instantiate $sub))
+      (core module $final
+        (import "" "" (func $b (result i32)))
+        (func (export "get") (result i32)
+          call $b))
+      (core instance (instantiate $final (with "" (instance $b))))
+    )"#,
+    );
+    let comp = parsed(&b);
+    let kinds: Vec<_> = comp.sections.iter().map(|(_, s)| s.clone()).collect();
+    assert_eq!(
+        kinds,
+        vec![
+            ComponentSection::Component,
+            ComponentSection::ComponentInstance,
+            ComponentSection::Alias,
+            ComponentSection::CoreInstance,
+            ComponentSection::Module,
+            ComponentSection::CoreInstance,
+        ]
+    );
+}
