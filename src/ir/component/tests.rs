@@ -1074,3 +1074,54 @@ fn section_count_invariant_merged_alias_section_from_wat() {
         .expect("alias entry");
     assert_eq!(alias_entry.0, 3, "merged alias section should have count=3");
 }
+
+/// An empty section (e.g. a `ComponentImportSection` with count=0)
+/// must still produce one `comp.sections` entry — otherwise
+/// `curr_section_idx()` silently skips the binary section and any
+/// wasmparser-based consumer sees off-by-one mismatches. wasm-smith
+/// can generate empty sections; `wat::parse_str` will not, so this is
+/// constructed directly with `wasm_encoder`.
+#[test]
+fn section_count_invariant_empty_import_section() {
+    use wasm_encoder::{
+        Component, ComponentImportSection, ComponentTypeRef, ComponentTypeSection, TypeBounds,
+    };
+
+    let mut comp = Component::new();
+
+    // 1: empty import section. ComponentImportSection::new() with no
+    // imports added encodes as a payload with count=0.
+    comp.section(&ComponentImportSection::new());
+
+    // 2: a non-empty component type section so we can verify the
+    // following entry's section_idx is 1.
+    let mut types = ComponentTypeSection::new();
+    types
+        .defined_type()
+        .primitive(wasm_encoder::PrimitiveValType::U32);
+    comp.section(&types);
+
+    // 3: an import referencing type 0, so the binary ends up validating.
+    let mut imports = ComponentImportSection::new();
+    imports.import("t", ComponentTypeRef::Type(TypeBounds::Eq(0)));
+    comp.section(&imports);
+
+    let bytes = comp.finish();
+    let comp = assert_section_count_invariant(&bytes);
+
+    use crate::ir::component::section::ComponentSection;
+    assert_eq!(comp.sections.len(), 3, "empty + type + import = 3 entries");
+    assert_eq!(
+        comp.sections[0],
+        (0, ComponentSection::ComponentImport),
+        "empty import section must still produce a (0, ComponentImport) entry"
+    );
+    assert!(matches!(
+        comp.sections[1].1,
+        ComponentSection::ComponentType
+    ));
+    assert!(matches!(
+        comp.sections[2].1,
+        ComponentSection::ComponentImport
+    ));
+}
