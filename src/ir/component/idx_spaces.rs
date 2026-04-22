@@ -1,3 +1,48 @@
+//! Index space model for the component-model IR.
+//!
+//! A Component's items (functions, types, instances, tables, memories,
+//! globals, etc.) each live in a distinct *index space* — a numbered
+//! namespace that WebAssembly uses to reference items by `u32` index.
+//! This module centralizes that model so the visitor, encoder, and ref
+//! machinery all agree on what space an item belongs to and how to look
+//! it up.
+//!
+//! # [`Space`]
+//!
+//! A [`Space`] is the namespace an index lives in — e.g. [`Space::CoreFunc`]
+//! for core functions, [`Space::CompType`] for component types. Consumers
+//! usually get one out of an [`IndexedRef`] or by calling
+//! [`IndexSpaceOf::index_space_of`] on an IR node.
+//!
+//! [`Space::NA`] means "this node isn't part of any index space"
+//! (e.g. custom sections, the component start function).
+//!
+//! # Sources of an index within a space
+//!
+//! Within a single space, an item can originate from one of four places:
+//!
+//! - **`Main`** — defined directly in the component body
+//!   (e.g. an `(import …)` line at the top level, or a `(func …)`).
+//! - **`Import`** — brought in from outside via a component-level
+//!   `import` declaration.
+//! - **`Export`** — re-exposed as part of this component's exports
+//!   (exports also occupy an index in the space they expose).
+//! - **`Alias`** — referenced via an `alias` declaration that reaches
+//!   into an outer or sibling scope.
+//!
+//! Most consumers don't need to distinguish these four — the visitor
+//! already normalizes them into resolved IDs. Knowing the source matters
+//! when a consumer wants to correlate an index back to a specific binary
+//! section (e.g. a filter-and-re-encode pass that copies the original
+//! section bytes for just the items it keeps). In that case, look at the
+//! item's originating section rather than its resolved index.
+//!
+//! # [`IndexSpaceOf`]
+//!
+//! The [`IndexSpaceOf`] trait is implemented for every IR node kind and
+//! answers "which space does *this node* allocate into?". It's what lets
+//! the visitor dispatch generically without special-casing each item type.
+
 use crate::ir::component::refs::IndexedRef;
 use crate::ir::component::section::ComponentSection;
 use crate::ir::types::CustomSection;

@@ -240,7 +240,7 @@ macro_rules! define_opcode_methods {
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Defines instrumentation behaviour.
+/// Defines instrumentation behavior.
 pub trait Instrumenter<'a> {
     /// Can be called after finishing some instrumentation to reset the mode.
     fn finish_instr(&mut self);
@@ -330,7 +330,7 @@ pub trait Instrumenter<'a> {
     fn append_tag_at(&mut self, data: Vec<u8>, loc: Location) -> &mut Self;
 }
 
-/// Defines Injection behaviour at the current location of the Iterator
+/// Defines Injection behavior at the current location of the Iterator
 pub trait Inject<'a> {
     /// Inject an operator at the current location
     fn inject(&mut self, instr: Operator<'a>);
@@ -351,7 +351,7 @@ pub trait InjectAt<'a> {
 }
 
 #[allow(dead_code)]
-/// Defines injection behaviour for every Wasm instruction.
+/// Defines injection behavior for every Wasm instruction.
 ///
 /// Methods are generated automatically via [`wasmparser::for_each_operator`]; the
 /// method name is the snake_case rendering of the operator's PascalCase variant
