@@ -6,15 +6,6 @@ derivable from the code.
 
 ---
 
-## Next
-
-- Tighten `module_instrument` and `component_instrument` to verify the
-  injected ops are observable in the re-encoded body (not just "still
-  valid wasm"). Catches silent no-op bugs where instrumentation is
-  accepted but dropped during encode.
-
----
-
 ## Design choices
 
 ### Validation strategy: "wasmparser accepts = good" (loose)
