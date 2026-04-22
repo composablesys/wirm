@@ -64,7 +64,7 @@ impl<'a, 'b> ComponentIterator<'a, 'b> {
     }
 
     pub fn curr_op_owned(&self) -> Option<Operator<'b>> {
-        if self.comp_iterator.end() {
+        if !self.comp_iterator.has_curr() {
             return None;
         }
 
@@ -462,7 +462,7 @@ impl Iterator for ComponentIterator<'_, '_> {
 
     /// Returns the instruction at the current location
     fn curr_op(&self) -> Option<&Operator<'_>> {
-        if self.comp_iterator.end() {
+        if !self.comp_iterator.has_curr() {
             return None;
         }
 

@@ -17,6 +17,17 @@ use wasm_smith::Module as SmithModule;
 fuzz_target!(|smith: SmithModule| {
     let bytes = smith.to_bytes();
 
+    // wasm-smith can produce structurally-parseable but semantically invalid
+    // output. Skip those — the comparison we care about is "if wasmparser
+    // accepts the input AND wirm parses it, then wirm's re-encode should
+    // also be accepted."
+    if wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&bytes)
+        .is_err()
+    {
+        return;
+    }
+
     let module = match wirm::Module::parse(&bytes, false, false) {
         Ok(m) => m,
         Err(_) => return,

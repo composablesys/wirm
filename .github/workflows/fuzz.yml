@@ -24,6 +24,10 @@ jobs:
         target:
           - module_roundtrip
           - module_instrument
+          - component_roundtrip
+          - component_instrument
+          - component_concretize
+          - component_walks
     steps:
       - uses: actions/checkout@v4
 

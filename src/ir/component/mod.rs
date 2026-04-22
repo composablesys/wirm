@@ -268,14 +268,21 @@ impl<'a> Component<'a> {
         sections: &mut Vec<(u32, ComponentSection)>,
         new_sections: &[ComponentSection],
         num_sections: &mut usize,
-        sections_added: u32,
+        payload_kind: ComponentSection,
     ) {
+        // Empty payload (e.g. an import section with count=0): still push a
+        // `(0, kind)` entry so `section_idx` stays 1:1 with the binary's
+        // section positions. Skipping would desync wasmparser-based consumers
+        // on inputs that contain empty sections.
+        if new_sections.is_empty() {
+            sections.push((0, payload_kind));
+            *num_sections += 1;
+            return;
+        }
         debug_assert!(
-            sections_added as usize == new_sections.len(),
-            "sections_added must equal new_sections length"
+            new_sections.iter().all(|k| *k == payload_kind),
+            "non-empty new_sections must all equal payload_kind"
         );
-        let _ = sections_added;
-
         // Group consecutive same-kind items within this call into one
         // `(count, kind)` entry. Do NOT fold across calls: one call == one
         // binary section, and collapsing would desync section ordinals from
@@ -327,7 +334,6 @@ impl<'a> Component<'a> {
             with_offsets,
             parser,
             0,
-            &mut vec![],
             space_id,
             Rc::new(RefCell::new(registry)),
             Rc::new(RefCell::new(store)),
@@ -342,7 +348,6 @@ impl<'a> Component<'a> {
         with_offsets: bool,
         parser: Parser,
         start: usize,
-        parent_stack: &mut Vec<Encoding>,
         space_id: ScopeId,
         registry_handle: RegistryHandle,
         store_handle: StoreHandle,
@@ -386,14 +391,31 @@ impl<'a> Component<'a> {
 
         for payload in parser.parse_all(wasm) {
             let payload = payload?;
-            if let Payload::End(..) = payload {
-                if !stack.is_empty() {
+
+            // `wasmparser::Parser::parse_all` yields payloads from every
+            // nesting level via its own internal recursion. For subcomponents
+            // and submodules we've already handed off to a separate recursive
+            // `parse_comp` / `parse_internal` call, so we need to skip those
+            // nested payloads here. The `stack` counter tracks how deep we
+            // are inside a nested-but-already-processed section: every nested
+            // `ComponentSection`/`ModuleSection` bumps it, every `End`
+            // unbumps. Top-level `End` (stack empty) and the nested section
+            // that we entered ourselves both fall through to the match.
+            match &payload {
+                Payload::End(_) if !stack.is_empty() => {
                     stack.pop();
+                    continue;
                 }
+                Payload::ComponentSection { .. } | Payload::ModuleSection { .. }
+                    if !stack.is_empty() =>
+                {
+                    stack.push(Encoding::Component); // marker; variant unused
+                    continue;
+                }
+                _ if !stack.is_empty() => continue,
+                _ => {}
             }
-            if !stack.is_empty() {
-                continue;
-            }
+
             match payload {
                 Payload::ComponentImportSection(import_section_reader) => {
                     let mut temp: Vec<ComponentImport> = import_section_reader
@@ -412,7 +434,7 @@ impl<'a> Component<'a> {
                         &mut sections,
                         &new_sections,
                         &mut num_sections,
-                        l as u32,
+                        ComponentSection::ComponentImport,
                     );
                 }
                 Payload::ComponentExportSection(export_section_reader) => {
@@ -432,7 +454,7 @@ impl<'a> Component<'a> {
                         &mut sections,
                         &new_sections,
                         &mut num_sections,
-                        l as u32,
+                        ComponentSection::ComponentExport,
                     );
                 }
                 Payload::InstanceSection(instance_section_reader) => {
@@ -452,7 +474,7 @@ impl<'a> Component<'a> {
                         &mut sections,
                         &new_sections,
                         &mut num_sections,
-                        l as u32,
+                        ComponentSection::CoreInstance,
                     );
                 }
                 Payload::CoreTypeSection(core_type_reader) => {
@@ -462,7 +484,6 @@ impl<'a> Component<'a> {
                         .collect::<Result<_, _>>()?;
 
                     let old_len = core_types.len();
-                    let l = temp.len();
                     core_types.append(&mut temp);
 
                     let mut new_sects = vec![];
@@ -476,7 +497,12 @@ impl<'a> Component<'a> {
                         new_sects.push(new_sect);
                     }
 
-                    Self::add_to_sections(&mut sections, &new_sects, &mut num_sections, l as u32);
+                    Self::add_to_sections(
+                        &mut sections,
+                        &new_sects,
+                        &mut num_sections,
+                        ComponentSection::CoreType,
+                    );
                 }
                 Payload::ComponentTypeSection(component_type_reader) => {
                     let mut temp: Vec<Box<ComponentType>> = component_type_reader
@@ -485,7 +511,6 @@ impl<'a> Component<'a> {
                         .collect::<Result<_, _>>()?;
 
                     let old_len = component_types.len();
-                    let l = temp.len();
                     component_types.append(&mut temp);
 
                     let mut new_sects = vec![];
@@ -500,7 +525,12 @@ impl<'a> Component<'a> {
                         old_len,
                         &new_sects,
                     );
-                    Self::add_to_sections(&mut sections, &new_sects, &mut num_sections, l as u32);
+                    Self::add_to_sections(
+                        &mut sections,
+                        &new_sects,
+                        &mut num_sections,
+                        ComponentSection::ComponentType,
+                    );
                 }
                 Payload::ComponentInstanceSection(component_instances) => {
                     let mut temp: Vec<ComponentInstance> =
@@ -518,7 +548,7 @@ impl<'a> Component<'a> {
                         &mut sections,
                         &new_sections,
                         &mut num_sections,
-                        l as u32,
+                        ComponentSection::ComponentInstance,
                     );
                 }
                 Payload::ComponentAliasSection(alias_reader) => {
@@ -537,7 +567,7 @@ impl<'a> Component<'a> {
                         &mut sections,
                         &new_sections,
                         &mut num_sections,
-                        l as u32,
+                        ComponentSection::Alias,
                     );
                 }
                 Payload::ComponentCanonicalSection(canon_reader) => {
@@ -556,7 +586,7 @@ impl<'a> Component<'a> {
                         &mut sections,
                         &new_sections,
                         &mut num_sections,
-                        l as u32,
+                        ComponentSection::Canon,
                     );
                 }
                 Payload::ModuleSection {
@@ -564,7 +594,6 @@ impl<'a> Component<'a> {
                     unchecked_range,
                 } => {
                     // Indicating the start of a new module
-                    parent_stack.push(Encoding::Module);
                     stack.push(Encoding::Module);
                     let m = Module::parse_internal(
                         &wasm[unchecked_range.start - start..unchecked_range.end - start],
@@ -583,7 +612,7 @@ impl<'a> Component<'a> {
                         &mut sections,
                         &[ComponentSection::Module],
                         &mut num_sections,
-                        1,
+                        ComponentSection::Module,
                     );
                 }
                 Payload::ComponentSection {
@@ -593,7 +622,6 @@ impl<'a> Component<'a> {
                     let sub_space_id = store_handle.borrow_mut().new_scope();
                     let sect = ComponentSection::Component;
 
-                    parent_stack.push(Encoding::Component);
                     stack.push(Encoding::Component);
                     let cmp = Component::parse_comp(
                         &wasm[unchecked_range.start - start..unchecked_range.end - start],
@@ -601,7 +629,6 @@ impl<'a> Component<'a> {
                         with_offsets,
                         parser,
                         unchecked_range.start,
-                        &mut stack,
                         sub_space_id,
                         Rc::clone(&registry_handle),
                         Rc::clone(&store_handle),
@@ -615,7 +642,12 @@ impl<'a> Component<'a> {
                     );
                     components.push(cmp);
 
-                    Self::add_to_sections(&mut sections, &[sect], &mut num_sections, 1);
+                    Self::add_to_sections(
+                        &mut sections,
+                        &[sect],
+                        &mut num_sections,
+                        ComponentSection::Component,
+                    );
                 }
                 Payload::ComponentStartSection { start, range: _ } => {
                     start_section.push(start);
@@ -623,7 +655,7 @@ impl<'a> Component<'a> {
                         &mut sections,
                         &[ComponentSection::ComponentStartSection],
                         &mut num_sections,
-                        1,
+                        ComponentSection::ComponentStartSection,
                     );
                 }
                 Payload::CustomSection(custom_section_reader) => {
@@ -685,7 +717,7 @@ impl<'a> Component<'a> {
                                 &mut sections,
                                 &[ComponentSection::CustomSection],
                                 &mut num_sections,
-                                1,
+                                ComponentSection::CustomSection,
                             );
                         }
                     }
