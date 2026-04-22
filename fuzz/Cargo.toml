@@ -51,3 +51,10 @@ path = "fuzz_targets/component_concretize.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "component_walks"
+path = "fuzz_targets/component_walks.rs"
+test = false
+doc = false
+bench = false

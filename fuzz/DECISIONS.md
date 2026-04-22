@@ -20,7 +20,7 @@ land it, let it bake in CI, then expand to the next.
 - [x] `component_roundtrip` — wasm-smith Component → wirm parse → encode → validate.
 - [x] `component_instrument` — same as Tier 1's instrument, but driving a `ComponentIterator`.
 - [x] `component_concretize` — for every import/export, call `concretize_{import,export}` and just verify no panic.
-- [ ] `component_walk_topological` / `component_walk_structural` — drive both walkers on smith-produced components with a no-op visitor; assert no panic, no divergent section_idx between walkers.
+- [x] `component_walks` — drive both walkers on smith-produced components with a recording visitor; assert no panic, event-for-event equivalence between the two walkers, and that root-component `section_idx` values stay in range against wasmparser and don't go backward within the component.
 
 wasm-smith's component support is less complete than its module support;
 Tier 2 may hit smith-side gaps before wirm-side ones. Revisit dep
