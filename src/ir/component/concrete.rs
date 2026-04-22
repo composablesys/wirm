@@ -94,7 +94,7 @@ pub enum ConcreteValType<'a> {
     Flags(Vec<&'a str>),
     Enum(Vec<&'a str>),
     Map(Box<ConcreteValType<'a>>, Box<ConcreteValType<'a>>),
-    FixedSizeList(Box<ConcreteValType<'a>>, u32),
+    FixedLengthList(Box<ConcreteValType<'a>>, u32),
     /// A resource handle (`own<T>` or `borrow<T>`).
     Resource,
     /// A resource handle whose export name is known (from an instance-type scope).
@@ -688,7 +688,7 @@ fn concretize_defined_type<'a>(
             Box::new(concretize_val_type(key, comp, cx, resource_map)),
             Box::new(concretize_val_type(val, comp, cx, resource_map)),
         ),
-        ComponentDefinedType::FixedSizeList(elem, size) => ConcreteValType::FixedSizeList(
+        ComponentDefinedType::FixedLengthList(elem, size) => ConcreteValType::FixedLengthList(
             Box::new(concretize_val_type(elem, comp, cx, resource_map)),
             *size,
         ),

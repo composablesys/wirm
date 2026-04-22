@@ -746,10 +746,11 @@ impl IndexSpaceOf for CanonicalFunction {
 
             // Thread functions
             CanonicalFunction::ThreadIndex
-            | CanonicalFunction::ThreadSwitchTo { .. }
             | CanonicalFunction::ThreadSuspend { .. }
-            | CanonicalFunction::ThreadResumeLater
-            | CanonicalFunction::ThreadYieldTo { .. }
+            | CanonicalFunction::ThreadSuspendToSuspended { .. }
+            | CanonicalFunction::ThreadSuspendTo { .. }
+            | CanonicalFunction::ThreadUnsuspend
+            | CanonicalFunction::ThreadYieldToSuspended { .. }
             | CanonicalFunction::ThreadYield { .. }
             | CanonicalFunction::ThreadAvailableParallelism => Space::CoreFunc,
 

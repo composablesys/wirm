@@ -5,6 +5,7 @@
 
 use wirm::ir::id::{DataSegmentID, ElementID, FieldID, TypeID};
 use wirm::ir::module::module_types::{AbstractHeapType, HeapType};
+use wirm::ir::types::{BlockType, DataType};
 
 use crate::opcode_test;
 
@@ -114,6 +115,25 @@ opcode_test!(ref_cast_test_ops, BASE_WAT, TARGET,
     .struct_new_default(TypeID(0)).ref_test_null(any_ht()).drop()
     .struct_new_default(TypeID(0)).ref_cast(any_ht()).drop()
     .struct_new_default(TypeID(0)).ref_cast_null(any_ht()).drop()
+);
+
+// br_on_cast / br_on_cast_fail: inside a block whose result type matches the
+// from-type (nullable anyref), cast to a subtype. Block consumes the ref whether
+// the branch is taken or not.
+opcode_test!(br_on_cast_op, BASE_WAT, TARGET,
+    .block(BlockType::Type(DataType::AnyNull))
+        .struct_new_default(TypeID(0))
+        .br_on_cast(0, wasmparser::RefType::ANYREF, wasmparser::RefType::ANYREF)
+    .end()
+    .drop()
+);
+
+opcode_test!(br_on_cast_fail_op, BASE_WAT, TARGET,
+    .block(BlockType::Type(DataType::AnyNull))
+        .struct_new_default(TypeID(0))
+        .br_on_cast_fail(0, wasmparser::RefType::ANYREF, wasmparser::RefType::ANYREF)
+    .end()
+    .drop()
 );
 
 opcode_test!(ref_gc_misc, BASE_WAT, TARGET,

@@ -402,23 +402,14 @@ impl GetTypeRefs for ComponentDefinedType<'_> {
                 }
             }
             ComponentDefinedType::Variant(variants) => {
-                // Explanation of variants.refines:
-                // This case `refines` (is a subtype/specialization of) another case in the same variant.
-                // So the u32 refers to: the index of another case within the current variant’s case list.
-                // It is NOT an index into some global index space (hence not handling it here)
-                for VariantCase {
-                    name: _,
-                    ty,
-                    refines: _,
-                } in variants.iter()
-                {
+                for VariantCase { name: _, ty } in variants.iter() {
                     if let Some(t) = ty {
                         refs.extend(t.get_type_refs());
                     }
                 }
             }
             ComponentDefinedType::List(ty)
-            | ComponentDefinedType::FixedSizeList(ty, _)
+            | ComponentDefinedType::FixedLengthList(ty, _)
             | ComponentDefinedType::Option(ty) => refs.extend(ty.get_type_refs()),
             ComponentDefinedType::Tuple(tys) => {
                 for ty in tys.iter() {
@@ -745,15 +736,6 @@ impl GetTypeRefs for VariantCase<'_> {
         if let Some(ty) = self.ty {
             refs.extend(ty.get_type_refs())
         }
-
-        if let Some(index) = self.refines {
-            refs.push(RefKind::new(IndexedRef {
-                depth: Depth::default(),
-                space: Space::CompType,
-                index,
-            }))
-        }
-
         refs
     }
 }
@@ -895,10 +877,11 @@ impl GetFuncRefs for CanonicalFunction {
             | CanonicalFunction::WaitableJoin
             | CanonicalFunction::ThreadIndex
             | CanonicalFunction::ThreadNewIndirect { .. }
-            | CanonicalFunction::ThreadSwitchTo { .. }
             | CanonicalFunction::ThreadSuspend { .. }
-            | CanonicalFunction::ThreadResumeLater
-            | CanonicalFunction::ThreadYieldTo { .. } => {}
+            | CanonicalFunction::ThreadSuspendToSuspended { .. }
+            | CanonicalFunction::ThreadSuspendTo { .. }
+            | CanonicalFunction::ThreadUnsuspend
+            | CanonicalFunction::ThreadYieldToSuspended { .. } => {}
         }
         refs
     }
@@ -1005,10 +988,11 @@ impl GetTypeRefs for CanonicalFunction {
             | CanonicalFunction::WaitableSetDrop
             | CanonicalFunction::WaitableJoin
             | CanonicalFunction::ThreadIndex
-            | CanonicalFunction::ThreadSwitchTo { .. }
             | CanonicalFunction::ThreadSuspend { .. }
-            | CanonicalFunction::ThreadResumeLater
-            | CanonicalFunction::ThreadYieldTo { .. } => {}
+            | CanonicalFunction::ThreadSuspendToSuspended { .. }
+            | CanonicalFunction::ThreadSuspendTo { .. }
+            | CanonicalFunction::ThreadUnsuspend
+            | CanonicalFunction::ThreadYieldToSuspended { .. } => {}
         }
 
         refs
@@ -1070,10 +1054,11 @@ impl GetMemRefs for CanonicalFunction {
             | CanonicalFunction::WaitableJoin
             | CanonicalFunction::ThreadIndex
             | CanonicalFunction::ThreadNewIndirect { .. }
-            | CanonicalFunction::ThreadSwitchTo { .. }
             | CanonicalFunction::ThreadSuspend { .. }
-            | CanonicalFunction::ThreadResumeLater
-            | CanonicalFunction::ThreadYieldTo { .. } => {}
+            | CanonicalFunction::ThreadSuspendToSuspended { .. }
+            | CanonicalFunction::ThreadSuspendTo { .. }
+            | CanonicalFunction::ThreadUnsuspend
+            | CanonicalFunction::ThreadYieldToSuspended { .. } => {}
         }
         refs
     }
@@ -1130,10 +1115,11 @@ impl GetTableRefs for CanonicalFunction {
             | CanonicalFunction::WaitableSetDrop
             | CanonicalFunction::WaitableJoin
             | CanonicalFunction::ThreadIndex
-            | CanonicalFunction::ThreadSwitchTo { .. }
             | CanonicalFunction::ThreadSuspend { .. }
-            | CanonicalFunction::ThreadResumeLater
-            | CanonicalFunction::ThreadYieldTo { .. } => {}
+            | CanonicalFunction::ThreadSuspendToSuspended { .. }
+            | CanonicalFunction::ThreadSuspendTo { .. }
+            | CanonicalFunction::ThreadUnsuspend
+            | CanonicalFunction::ThreadYieldToSuspended { .. } => {}
         }
         refs
     }

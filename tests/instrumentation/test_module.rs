@@ -1,6 +1,5 @@
 use log::{debug, error};
 use std::path::PathBuf;
-use std::process::Command;
 use wirm::ir::function::FunctionBuilder;
 use wirm::ir::id::{ExportsID, FunctionID, ImportsID, TypeID};
 use wirm::ir::module::module_functions::FuncKind::{Import, Local};
@@ -688,20 +687,21 @@ pub(crate) fn validate(wasm: &Vec<u8>, output_wasm_path: &str) -> Result<(), std
 }
 
 pub(crate) fn validate_wasm(wasm_path: &str) -> bool {
-    debug!("Running 'wasm-tools validate' on file: {wasm_path}");
-    let res = Command::new("wasm-tools")
-        .arg("validate")
-        .arg("-f")
-        .arg("legacy-exceptions")
-        .arg(wasm_path)
-        .output()
-        .expect("failed to execute process");
-    if !res.status.success() {
-        println!("{:?}", std::str::from_utf8(&res.stderr).unwrap());
-        panic!()
+    debug!("Validating wasm at: {wasm_path}");
+    let bytes = match std::fs::read(wasm_path) {
+        Ok(b) => b,
+        Err(e) => {
+            error!("failed to read {wasm_path}: {e}");
+            return false;
+        }
+    };
+    match crate::common::validate::validate_bytes(&bytes) {
+        Ok(()) => true,
+        Err(e) => {
+            error!("{e}");
+            false
+        }
     }
-
-    res.status.success()
 }
 
 fn check_validity(file: &str, module: &mut Module, output_wasm_path: &str, check_encoding: bool) {

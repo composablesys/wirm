@@ -293,6 +293,16 @@ opcode_test!(branch_flow, BASE_WAT, TARGET,
     .block(BlockType::Empty).i32_const(1).br_if(0).end()
 );
 
+opcode_test!(branch_table, BASE_WAT, TARGET,
+    .block(BlockType::Empty)
+        .block(BlockType::Empty)
+            .block(BlockType::Empty)
+                .i32_const(0).br_table(0u32, [0u32, 1, 2])
+            .end()
+        .end()
+    .end()
+);
+
 opcode_test!(return_and_unreachable, BASE_WAT, TARGET,
     .return_stmt()
     .unreachable()

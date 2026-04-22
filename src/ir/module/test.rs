@@ -9,7 +9,11 @@ use crate::{DataType, InitInstr, Module, Opcode};
 use log::debug;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::process::Command;
+
+// Shared with integration tests. See tests/common/wast_iter.rs for the same
+// pattern — keeps the "validate with all features" choice in one place.
+#[path = "../../../tests/common/validate.rs"]
+mod validate;
 
 // FUNCTIONS
 #[test]
@@ -726,17 +730,21 @@ pub(crate) fn encode_and_validate_wasm(module: &mut Module, output_wasm_path: &s
 }
 
 pub(crate) fn validate_wasm(wasm_path: &str) -> bool {
-    debug!("Running 'wasm-tools validate' on file: {wasm_path}");
-    let res = Command::new("wasm-tools")
-        .arg("validate")
-        .arg(wasm_path)
-        .output()
-        .expect("failed to execute process");
-    if !res.status.success() {
-        println!("{:?}", std::str::from_utf8(&res.stderr).unwrap());
+    debug!("Validating wasm at: {wasm_path}");
+    let bytes = match std::fs::read(wasm_path) {
+        Ok(b) => b,
+        Err(e) => {
+            println!("failed to read {wasm_path}: {e}");
+            return false;
+        }
+    };
+    match validate::validate_bytes(&bytes) {
+        Ok(()) => true,
+        Err(e) => {
+            println!("{e}");
+            false
+        }
     }
-
-    res.status.success()
 }
 
 // ====================================
