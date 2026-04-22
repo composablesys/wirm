@@ -386,14 +386,31 @@ impl<'a> Component<'a> {
 
         for payload in parser.parse_all(wasm) {
             let payload = payload?;
-            if let Payload::End(..) = payload {
-                if !stack.is_empty() {
+
+            // `wasmparser::Parser::parse_all` yields payloads from every
+            // nesting level via its own internal recursion. For subcomponents
+            // and submodules we've already handed off to a separate recursive
+            // `parse_comp` / `parse_internal` call, so we need to skip those
+            // nested payloads here. The `stack` counter tracks how deep we
+            // are inside a nested-but-already-processed section: every nested
+            // `ComponentSection`/`ModuleSection` bumps it, every `End`
+            // unbumps. Top-level `End` (stack empty) and the nested section
+            // that we entered ourselves both fall through to the match.
+            match &payload {
+                Payload::End(_) if !stack.is_empty() => {
                     stack.pop();
+                    continue;
                 }
+                Payload::ComponentSection { .. } | Payload::ModuleSection { .. }
+                    if !stack.is_empty() =>
+                {
+                    stack.push(Encoding::Component); // marker; variant unused
+                    continue;
+                }
+                _ if !stack.is_empty() => continue,
+                _ => {}
             }
-            if !stack.is_empty() {
-                continue;
-            }
+
             match payload {
                 Payload::ComponentImportSection(import_section_reader) => {
                     let mut temp: Vec<ComponentImport> = import_section_reader
