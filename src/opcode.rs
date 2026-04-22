@@ -1,18 +1,250 @@
-//! Traits that defines the injection behaviour for wasm opcodes
+//! Traits that define the injection behavior for wasm opcodes.
+//!
+//! The [`Opcode`] trait is the primary interface for injecting instructions.
+//! Its methods are generated automatically from `wasmparser::for_each_operator!`,
+//! so new opcodes added to wasmparser are automatically available here without
+//! any manual additions.
 
-// note: this should be implemented by FunctionBuilder, ModuleIterator, and ComponentIterator
-// note that the location of the injection is handled specific implementation
-// for iterators, we inject at the location the iterator is pointing at (curr_loc)
-// for FunctionBuilder, we inject at the end of the function
-use crate::ir::id::{DataSegmentID, ElementID, FieldID, FunctionID, GlobalID, LocalID, TypeID};
 use crate::ir::module::module_types::HeapType;
 use crate::ir::types::{BlockType, FuncInstrMode, InstrumentationMode};
 use crate::Location;
-use wasmparser::MemArg;
 use wasmparser::Operator;
-use wasmparser::V128;
 
-/// Defines instrumentation behaviour
+// ── Type-substitution helpers ─────────────────────────────────────────────────
+//
+// `wirm_ty!(field_name, original_wasmparser_type)` maps known index field names
+// to their wirm typed-ID equivalents. Every other field falls back to the
+// original wasmparser type unchanged.
+macro_rules! wirm_ty {
+    (function_index, $orig:ty) => {
+        crate::ir::id::FunctionID
+    };
+    (local_index,    $orig:ty) => {
+        crate::ir::id::LocalID
+    };
+    (global_index,   $orig:ty) => {
+        crate::ir::id::GlobalID
+    };
+    (type_index,     $orig:ty) => {
+        crate::ir::id::TypeID
+    };
+    (table_index,    $orig:ty) => {
+        crate::ir::id::TableID
+    };
+    (table,          $orig:ty) => {
+        crate::ir::id::TableID
+    };
+    (dst_table,      $orig:ty) => {
+        crate::ir::id::TableID
+    };
+    (src_table,      $orig:ty) => {
+        crate::ir::id::TableID
+    };
+    (mem,            $orig:ty) => {
+        crate::ir::id::MemoryID
+    };
+    (dst_mem,        $orig:ty) => {
+        crate::ir::id::MemoryID
+    };
+    (src_mem,        $orig:ty) => {
+        crate::ir::id::MemoryID
+    };
+    (data_index,         $orig:ty) => {
+        crate::ir::id::DataSegmentID
+    };
+    (array_data_index,   $orig:ty) => {
+        crate::ir::id::DataSegmentID
+    };
+    (elem_index,         $orig:ty) => {
+        crate::ir::id::ElementID
+    };
+    (array_elem_index,   $orig:ty) => {
+        crate::ir::id::ElementID
+    };
+    (struct_type_index,      $orig:ty) => {
+        crate::ir::id::TypeID
+    };
+    (array_type_index,       $orig:ty) => {
+        crate::ir::id::TypeID
+    };
+    (array_type_index_dst,   $orig:ty) => {
+        crate::ir::id::TypeID
+    };
+    (array_type_index_src,   $orig:ty) => {
+        crate::ir::id::TypeID
+    };
+    (field_index,    $orig:ty) => {
+        crate::ir::id::FieldID
+    };
+    // Fall-through: non-index fields keep their original wasmparser type.
+    ($name:ident,    $orig:ty) => {
+        $orig
+    };
+}
+
+// `wirm_val!(field_name, $ident)` produces `*$ident` for ID-typed fields (deref
+// to u32) and `$ident` unchanged for everything else.
+//
+// The second argument MUST be the same `$arg:ident` metavariable that the outer
+// macro bound at the call site, so that the generated expression carries the
+// correct macro hygiene context for the method parameter it refers to.
+macro_rules! wirm_val {
+    (function_index,      $arg:ident) => {
+        *$arg
+    };
+    (local_index,         $arg:ident) => {
+        *$arg
+    };
+    (global_index,        $arg:ident) => {
+        *$arg
+    };
+    (type_index,          $arg:ident) => {
+        *$arg
+    };
+    (table_index,         $arg:ident) => {
+        *$arg
+    };
+    (table,               $arg:ident) => {
+        *$arg
+    };
+    (dst_table,           $arg:ident) => {
+        *$arg
+    };
+    (src_table,           $arg:ident) => {
+        *$arg
+    };
+    (mem,                 $arg:ident) => {
+        *$arg
+    };
+    (dst_mem,             $arg:ident) => {
+        *$arg
+    };
+    (src_mem,             $arg:ident) => {
+        *$arg
+    };
+    (data_index,          $arg:ident) => {
+        *$arg
+    };
+    (array_data_index,    $arg:ident) => {
+        *$arg
+    };
+    (elem_index,          $arg:ident) => {
+        *$arg
+    };
+    (array_elem_index,    $arg:ident) => {
+        *$arg
+    };
+    (struct_type_index,   $arg:ident) => {
+        *$arg
+    };
+    (array_type_index,    $arg:ident) => {
+        *$arg
+    };
+    (array_type_index_dst, $arg:ident) => {
+        *$arg
+    };
+    (array_type_index_src, $arg:ident) => {
+        *$arg
+    };
+    (field_index,         $arg:ident) => {
+        *$arg
+    };
+    // Fall-through: non-index fields are passed as-is.
+    ($name:ident,         $arg:ident) => {
+        $arg
+    };
+}
+
+// ── Primary opcode-generation macro ──────────────────────────────────────────
+//
+// Driven by `wasmparser::for_each_operator!`.  Each operator that isn't
+// explicitly skipped below gets a trait method whose name is the snake_case
+// form of the operator's PascalCase name (e.g. `I32Add` → `i32_add`).
+//
+// Skipped categories:
+//   • Operators that are Rust keywords when lowercased (Block/Loop/If/Else/Return)
+//     → implemented manually with wirm-style names.
+//   • Operators whose argument types need wirm-specific conversion
+//     (BlockType, Ieee32/64, BrTable, HeapType for ref ops)
+//     → implemented manually below.
+//   • Proposals with argument types that have no current wirm support
+//     (@stack_switching, @shared_everything_threads).
+macro_rules! define_opcode_methods {
+    // Entry: receive the full operator list, dispatch one at a time.
+    ($( @$proposal:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident ($($ann:tt)*))*) => {
+        $( define_opcode_methods!(one @$proposal $op $({ $($arg: $argty),* })? => $visit); )*
+    };
+
+    // ── Skip entire proposals ────────────────────────────────────────────────
+    (one @stack_switching          $($rest:tt)*) => {};
+    (one @shared_everything_threads $($rest:tt)*) => {};
+
+    // ── Skip operators requiring manual implementations ──────────────────────
+    //
+    // TODO: the following skipped ops still need manual impls added to the
+    // `Opcode` trait — they're currently unreachable via the public API:
+    //   @reference_types     TypedSelect, TypedSelectMulti  (ValType / Vec<ValType>)
+    //   @exceptions          TryTable                       (wasmparser::TryTable<'a>)
+    //   @legacy_exceptions   Try                            (BlockType)
+    //   @gc                  BrOnCast, BrOnCastFail         (RefType × 2 + relative_depth)
+    //   @custom_descriptors  RefCastDescNonNull, RefCastDescNullable  (HeapType)
+    //                        BrOnCastDesc, BrOnCastDescFail            (RefType × 2 + depth)
+    //
+    // Keyword conflicts / BlockType conversions:
+    (one @mvp Block    $($rest:tt)*) => {};
+    (one @mvp Loop     $($rest:tt)*) => {};
+    (one @mvp If       $($rest:tt)*) => {};
+    (one @mvp Else     $($rest:tt)*) => {};
+    (one @mvp Return   $($rest:tt)*) => {};
+    // Complex argument types:
+    (one @mvp BrTable          $($rest:tt)*) => {};
+    (one @mvp F32Const         $($rest:tt)*) => {};
+    (one @mvp F64Const         $($rest:tt)*) => {};
+    (one @reference_types RefNull          $($rest:tt)*) => {};
+    (one @reference_types TypedSelect      $($rest:tt)*) => {};
+    (one @reference_types TypedSelectMulti $($rest:tt)*) => {};
+    (one @exceptions    TryTable           $($rest:tt)*) => {};
+    (one @legacy_exceptions Try            $($rest:tt)*) => {};
+    // GC: HeapType / RefType arguments (provided manually with wirm types):
+    (one @gc RefTestNonNull  $($rest:tt)*) => {};
+    (one @gc RefTestNullable $($rest:tt)*) => {};
+    (one @gc RefCastNonNull  $($rest:tt)*) => {};
+    (one @gc RefCastNullable $($rest:tt)*) => {};
+    (one @gc BrOnCast        $($rest:tt)*) => {};
+    (one @gc BrOnCastFail    $($rest:tt)*) => {};
+    (one @custom_descriptors RefCastDescNonNull  $($rest:tt)*) => {};
+    (one @custom_descriptors RefCastDescNullable $($rest:tt)*) => {};
+    (one @custom_descriptors BrOnCastDesc        $($rest:tt)*) => {};
+    (one @custom_descriptors BrOnCastDescFail    $($rest:tt)*) => {};
+
+    // ── Auto-generate: operator with no arguments ────────────────────────────
+    (one @$_proposal:ident $op:ident => $visit:ident) => {
+        paste::paste! {
+            fn [<$op:snake>](&mut self) -> &mut Self {
+                self.inject(Operator::$op);
+                self
+            }
+        }
+    };
+
+    // ── Auto-generate: operator with one or more arguments ───────────────────
+    // For each argument, `wirm_ty!` substitutes known index names with typed IDs;
+    // `wirm_val!` dereferences those IDs back to u32 for the Operator constructor.
+    // `wirm_val!` receives `($arg, $arg)` so the emitted expression uses the
+    // call-site `$arg` metavariable (correct hygiene context, not a literal).
+    (one @$_proposal:ident $op:ident { $($arg:ident: $argty:ty),* } => $visit:ident) => {
+        paste::paste! {
+            fn [<$op:snake>](&mut self, $($arg: wirm_ty!($arg, $argty)),*) -> &mut Self {
+                self.inject(Operator::$op { $($arg: wirm_val!($arg, $arg)),* });
+                self
+            }
+        }
+    };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Defines instrumentation behaviour.
 pub trait Instrumenter<'a> {
     /// Can be called after finishing some instrumentation to reset the mode.
     fn finish_instr(&mut self);
@@ -123,65 +355,40 @@ pub trait InjectAt<'a> {
 }
 
 #[allow(dead_code)]
-/// Defines injection behaviour. Takes a [`wasmparser::Operator`] and instructions are defined [here].
+/// Defines injection behaviour for every Wasm instruction.
 ///
-/// [`wasmparser::Operator`]: https://docs.rs/wasmparser/latest/wasmparser/enum.Operator.html
-/// [here]: https://webassembly.github.io/spec/core/binary/instructions.html
+/// Methods are generated automatically via [`wasmparser::for_each_operator`]; the
+/// method name is the snake_case rendering of the operator's PascalCase variant
+/// name (e.g. `I32Add` → `i32_add`, `V128Load8Lane` → `v128_load8_lane`).
+///
+/// Arguments that represent module-section indices accept wirm's typed ID wrappers
+/// ([`FunctionID`], [`LocalID`], [`GlobalID`], [`TypeID`], [`TableID`],
+/// [`MemoryID`], [`DataSegmentID`], [`ElementID`], [`FieldID`]) rather than bare
+/// `u32`s, providing a semantic signal about what kind of index is expected.
+///
+/// A handful of operators require manual implementations due to keyword conflicts
+/// or type-conversion ergonomics; those are listed at the bottom of this trait.
+///
+/// [`FunctionID`]: crate::ir::id::FunctionID
+/// [`LocalID`]: crate::ir::id::LocalID
+/// [`GlobalID`]: crate::ir::id::GlobalID
+/// [`TypeID`]: crate::ir::id::TypeID
+/// [`TableID`]: crate::ir::id::TableID
+/// [`MemoryID`]: crate::ir::id::MemoryID
+/// [`DataSegmentID`]: crate::ir::id::DataSegmentID
+/// [`ElementID`]: crate::ir::id::ElementID
+/// [`FieldID`]: crate::ir::id::FieldID
 pub trait Opcode<'a>: Inject<'a> {
-    // Control Flow
-    /// Inject a call instruction
-    fn call(&mut self, idx: FunctionID) -> &mut Self {
-        self.inject(Operator::Call {
-            function_index: *idx,
-        });
-        self
-    }
+    // ── Auto-generated methods ────────────────────────────────────────────────
+    // Produced by wasmparser::for_each_operator! for all operators not listed
+    // in define_opcode_methods!'s skip rules.
+    wasmparser::for_each_operator!(define_opcode_methods);
 
-    /// Inject a return statement
-    fn return_stmt(&mut self) -> &mut Self {
-        self.inject(Operator::Return);
-        self
-    }
+    // ── Keyword renames ───────────────────────────────────────────────────────
+    // These operators have names that are Rust keywords when lowercased, so they
+    // get a `_stmt` suffix (or keep their natural name if it isn't a keyword).
 
-    /// Inject a no op instruction
-    fn nop(&mut self) -> &mut Self {
-        self.inject(Operator::Nop);
-        self
-    }
-
-    /// Inject an unreachable instruction
-    fn unreachable(&mut self) -> &mut Self {
-        self.inject(Operator::Unreachable);
-        self
-    }
-
-    /// Inject a select statement
-    fn select(&mut self) -> &mut Self {
-        self.inject(Operator::Select);
-        self
-    }
-
-    /// Inject an if statement
-    fn if_stmt(&mut self, block_type: BlockType) -> &mut Self {
-        self.inject(Operator::If {
-            blockty: wasmparser::BlockType::from(block_type),
-        });
-        self
-    }
-
-    /// Inject an else statement
-    fn else_stmt(&mut self) -> &mut Self {
-        self.inject(Operator::Else);
-        self
-    }
-
-    /// Inject an end statement. Indicates the end of the current scope
-    fn end(&mut self) -> &mut Self {
-        self.inject(Operator::End);
-        self
-    }
-
-    /// Inject a block statement. Indicates the start of a block
+    /// Inject a `block` instruction.
     fn block(&mut self, block_type: BlockType) -> &mut Self {
         self.inject(Operator::Block {
             blockty: wasmparser::BlockType::from(block_type),
@@ -189,7 +396,7 @@ pub trait Opcode<'a>: Inject<'a> {
         self
     }
 
-    /// Inject a loop statement
+    /// Inject a `loop` instruction (`loop` is a Rust keyword; use `loop_stmt`).
     fn loop_stmt(&mut self, block_type: BlockType) -> &mut Self {
         self.inject(Operator::Loop {
             blockty: wasmparser::BlockType::from(block_type),
@@ -197,452 +404,30 @@ pub trait Opcode<'a>: Inject<'a> {
         self
     }
 
-    /// Inject a break statement
-    fn br(&mut self, relative_depth: u32) -> &mut Self {
-        self.inject(Operator::Br { relative_depth });
+    /// Inject an `if` instruction (`if` is a Rust keyword; use `if_stmt`).
+    fn if_stmt(&mut self, block_type: BlockType) -> &mut Self {
+        self.inject(Operator::If {
+            blockty: wasmparser::BlockType::from(block_type),
+        });
         self
     }
 
-    /// Inject a conditional break statement
-    fn br_if(&mut self, relative_depth: u32) -> &mut Self {
-        self.inject(Operator::BrIf { relative_depth });
+    /// Inject an `else` instruction (`else` is a Rust keyword; use `else_stmt`).
+    fn else_stmt(&mut self) -> &mut Self {
+        self.inject(Operator::Else);
         self
     }
 
-    // Numerics
-    /// Inject a local.get
-    fn local_get(&mut self, idx: LocalID) -> &mut Self {
-        self.inject(Operator::LocalGet { local_index: *idx });
+    /// Inject a `return` instruction (`return` is a Rust keyword; use `return_stmt`).
+    fn return_stmt(&mut self) -> &mut Self {
+        self.inject(Operator::Return);
         self
     }
 
-    /// Inject a local.set
-    fn local_set(&mut self, idx: LocalID) -> &mut Self {
-        self.inject(Operator::LocalSet { local_index: *idx });
-        self
-    }
-
-    fn local_tee(&mut self, idx: LocalID) -> &mut Self {
-        self.inject(Operator::LocalTee { local_index: *idx });
-        self
-    }
-
-    // Integers
-    /// Inject an i32.const instruction
-    fn i32_const(&mut self, value: i32) -> &mut Self {
-        self.inject(Operator::I32Const { value });
-        self
-    }
-
-    /// Inject an i32.add instruction
-    fn i32_add(&mut self) -> &mut Self {
-        self.inject(Operator::I32Add);
-        self
-    }
-
-    /// Inject an i32.sub instruction
-    fn i32_sub(&mut self) -> &mut Self {
-        self.inject(Operator::I32Sub);
-        self
-    }
-
-    /// Inject an i32.mul instruction
-    fn i32_mul(&mut self) -> &mut Self {
-        self.inject(Operator::I32Mul);
-        self
-    }
-
-    /// Inject an i32.divs instruction
-    fn i32_div_signed(&mut self) -> &mut Self {
-        self.inject(Operator::I32DivS);
-        self
-    }
-
-    /// Inject an i32.divu instruction
-    fn i32_div_unsigned(&mut self) -> &mut Self {
-        self.inject(Operator::I32DivU);
-        self
-    }
-
-    /// Inject an i32.remu instruction
-    fn i32_rem_unsigned(&mut self) -> &mut Self {
-        self.inject(Operator::I32RemU);
-        self
-    }
-
-    /// Inject an i32.rems instruction
-    fn i32_rem_signed(&mut self) -> &mut Self {
-        self.inject(Operator::I32RemS);
-        self
-    }
-
-    /// Inject an i32.and instruction
-    fn i32_and(&mut self) -> &mut Self {
-        self.inject(Operator::I32And);
-        self
-    }
-
-    /// Inject an i32.or instruction
-    fn i32_or(&mut self) -> &mut Self {
-        self.inject(Operator::I32Or);
-        self
-    }
-
-    /// Inject an i32.xor instruction
-    fn i32_xor(&mut self) -> &mut Self {
-        self.inject(Operator::I32Xor);
-        self
-    }
-
-    /// Inject an i32.shl instruction
-    fn i32_shl(&mut self) -> &mut Self {
-        self.inject(Operator::I32Shl);
-        self
-    }
-
-    /// Inject an i32.shrs instruction
-    fn i32_shr_signed(&mut self) -> &mut Self {
-        self.inject(Operator::I32ShrS);
-        self
-    }
-
-    /// Inject an i32.shru instruction
-    fn i32_shr_unsigned(&mut self) -> &mut Self {
-        self.inject(Operator::I32ShrU);
-        self
-    }
-
-    /// Inject an i32.rotl instruction
-    fn i32_rotl(&mut self) -> &mut Self {
-        self.inject(Operator::I32Rotl);
-        self
-    }
-
-    /// Inject and i32.rotr instruction
-    fn i32_rotr(&mut self) -> &mut Self {
-        self.inject(Operator::I32Rotr);
-        self
-    }
-
-    /// Inject an i32.eq instruction
-    fn i32_eq(&mut self) -> &mut Self {
-        self.inject(Operator::I32Eq);
-        self
-    }
-
-    /// Inject an i32.eqz instruction
-    fn i32_eqz(&mut self) -> &mut Self {
-        self.inject(Operator::I32Eqz);
-        self
-    }
-
-    /// Inject an i32.ne instruction
-    fn i32_ne(&mut self) -> &mut Self {
-        self.inject(Operator::I32Ne);
-        self
-    }
-
-    /// Inject an i32.ltu instruction
-    fn i32_lt_unsigned(&mut self) -> &mut Self {
-        self.inject(Operator::I32LtU);
-        self
-    }
-
-    /// Inject an i32.lts instruction
-    fn i32_lt_signed(&mut self) -> &mut Self {
-        self.inject(Operator::I32LtS);
-        self
-    }
-
-    /// Inject an i32.gtu instruction
-    fn i32_gt_unsigned(&mut self) -> &mut Self {
-        self.inject(Operator::I32GtU);
-        self
-    }
-
-    /// Inject an i32.gts instruction
-    fn i32_gt_signed(&mut self) -> &mut Self {
-        self.inject(Operator::I32GtS);
-        self
-    }
-
-    /// Inject an i32.lteu instruction
-    fn i32_lte_unsigned(&mut self) -> &mut Self {
-        self.inject(Operator::I32LeU);
-        self
-    }
-
-    /// Inject an i32.ltes instruction
-    fn i32_lte_signed(&mut self) -> &mut Self {
-        self.inject(Operator::I32LeS);
-        self
-    }
-
-    /// Inject an i32.gteu instruction
-    fn i32_gte_unsigned(&mut self) -> &mut Self {
-        self.inject(Operator::I32GeU);
-        self
-    }
-
-    /// Inject an i32.gtes instruction
-    fn i32_gte_signed(&mut self) -> &mut Self {
-        self.inject(Operator::I32GeS);
-        self
-    }
-
-    fn i32_wrap_i64(&mut self) -> &mut Self {
-        self.inject(Operator::I32WrapI64);
-        self
-    }
-
-    /// Inject a i32.extend_8s instruction
-    fn i32_extend_8s(&mut self) -> &mut Self {
-        self.inject(Operator::I32Extend8S);
-        self
-    }
-
-    /// Inject a i32.extend_16s instruction
-    fn i32_extend_16s(&mut self) -> &mut Self {
-        self.inject(Operator::I32Extend16S);
-        self
-    }
-
-    /// Inject a i32.trunc_f32s instruction
-    fn i32_trunc_f32s(&mut self) -> &mut Self {
-        self.inject(Operator::I32TruncF32S);
-        self
-    }
-
-    /// Inject a i32.trunc_f32u instruction
-    fn i32_trunc_f32u(&mut self) -> &mut Self {
-        self.inject(Operator::I32TruncF32U);
-        self
-    }
-
-    /// Inject a i32.trunc_f64s instruction
-    fn i32_trunc_f64s(&mut self) -> &mut Self {
-        self.inject(Operator::I32TruncF64S);
-        self
-    }
-
-    /// Inject a i32.trunc_f64u instruction
-    fn i32_trunc_f64u(&mut self) -> &mut Self {
-        self.inject(Operator::I32TruncF64U);
-        self
-    }
-
-    /// Inject a i32.reinterpret_f32 instruction
-    fn i32_reinterpret_f32(&mut self) -> &mut Self {
-        self.inject(Operator::I32ReinterpretF32);
-        self
-    }
-
-    /// Inject an i64.const
-    fn i64_const(&mut self, value: i64) -> &mut Self {
-        self.inject(Operator::I64Const { value });
-        self
-    }
-
-    /// Inject an i64.add instruction
-    fn i64_add(&mut self) -> &mut Self {
-        self.inject(Operator::I64Add);
-        self
-    }
-
-    /// Inject an i64.sub instruction
-    fn i64_sub(&mut self) -> &mut Self {
-        self.inject(Operator::I64Sub);
-        self
-    }
-
-    /// Inject an i64.mul instruction
-    fn i64_mul(&mut self) -> &mut Self {
-        self.inject(Operator::I64Mul);
-        self
-    }
-
-    /// Inject an i64.divs instruction
-    fn i64_div_signed(&mut self) -> &mut Self {
-        self.inject(Operator::I64DivS);
-        self
-    }
-
-    /// Inject an i64.divu instruction
-    fn i64_div_unsigned(&mut self) -> &mut Self {
-        self.inject(Operator::I64DivU);
-        self
-    }
-
-    /// Inject an i64.remu instruction
-    fn i64_rem_unsigned(&mut self) -> &mut Self {
-        self.inject(Operator::I64RemU);
-        self
-    }
-
-    /// Inject an i64.rems instruction
-    fn i64_rem_signed(&mut self) -> &mut Self {
-        self.inject(Operator::I64RemS);
-        self
-    }
-
-    /// Inject an i64.and instruction
-    fn i64_and(&mut self) -> &mut Self {
-        self.inject(Operator::I64And);
-        self
-    }
-
-    /// Inject an i64.or instruction
-    fn i64_or(&mut self) -> &mut Self {
-        self.inject(Operator::I64Or);
-        self
-    }
-
-    /// Inject an i64.xor instruction
-    fn i64_xor(&mut self) -> &mut Self {
-        self.inject(Operator::I64Xor);
-        self
-    }
-
-    /// Inject an i64.shl instruction
-    fn i64_shl(&mut self) -> &mut Self {
-        self.inject(Operator::I64Shl);
-        self
-    }
-
-    /// Inject an i64.shrs instruction
-    fn i64_shr_signed(&mut self) -> &mut Self {
-        self.inject(Operator::I64ShrS);
-        self
-    }
-
-    /// Inject an i64.shru instruction
-    fn i64_shr_unsigned(&mut self) -> &mut Self {
-        self.inject(Operator::I64ShrU);
-        self
-    }
-
-    /// Inject an i64.rotl instruction
-    fn i64_rotl(&mut self) -> &mut Self {
-        self.inject(Operator::I64Rotl);
-        self
-    }
-
-    /// Inject an i64.rotr instruction
-    fn i64_rotr(&mut self) -> &mut Self {
-        self.inject(Operator::I64Rotr);
-        self
-    }
-
-    /// Inject an i64.eq instruction
-    fn i64_eq(&mut self) -> &mut Self {
-        self.inject(Operator::I64Eq);
-        self
-    }
-
-    /// Inject an i64.eqz instruction
-    fn i64_eqz(&mut self) -> &mut Self {
-        self.inject(Operator::I64Eqz);
-        self
-    }
-
-    /// Inject an i64.ne instruction
-    fn i64_ne(&mut self) -> &mut Self {
-        self.inject(Operator::I64Ne);
-        self
-    }
-
-    /// Inject an i64.ltu instruction
-    fn i64_lt_unsigned(&mut self) -> &mut Self {
-        self.inject(Operator::I64LtU);
-        self
-    }
-
-    /// Inject an i64.lts instruction
-    fn i64_lt_signed(&mut self) -> &mut Self {
-        self.inject(Operator::I64LtS);
-        self
-    }
-
-    /// Inject an i64.gtu instruction
-    fn i64_gt_unsigned(&mut self) -> &mut Self {
-        self.inject(Operator::I64GtU);
-        self
-    }
-
-    /// Inject an i64.gts instruction
-    fn i64_gt_signed(&mut self) -> &mut Self {
-        self.inject(Operator::I64GtS);
-        self
-    }
-
-    /// Inject an i64.lteu instruction
-    fn i64_lte_unsigned(&mut self) -> &mut Self {
-        self.inject(Operator::I64LeU);
-        self
-    }
-
-    /// Inject an i64.ltes instruction
-    fn i64_lte_signed(&mut self) -> &mut Self {
-        self.inject(Operator::I64LeS);
-        self
-    }
-
-    /// Inject an i64.gteu instruction
-    fn i64_gte_unsigned(&mut self) -> &mut Self {
-        self.inject(Operator::I64GeU);
-        self
-    }
-
-    /// Inject an i64.gtes instruction
-    fn i64_gte_signed(&mut self) -> &mut Self {
-        self.inject(Operator::I64GeS);
-        self
-    }
-
-    /// Inject a i64.extend_i32_u instruction
-    fn i64_extend_i32u(&mut self) -> &mut Self {
-        self.inject(Operator::I64ExtendI32U);
-        self
-    }
-
-    /// Inject a i64.extend_i32_s instruction
-    fn i64_extend_i32s(&mut self) -> &mut Self {
-        self.inject(Operator::I64ExtendI32S);
-        self
-    }
-
-    /// Inject a i64.trunc_f32s instruction
-    fn i64_trunc_f32s(&mut self) -> &mut Self {
-        self.inject(Operator::I64TruncF32S);
-        self
-    }
-
-    /// Inject a i64.trunc_f32u instruction
-    fn i64_trunc_f32u(&mut self) -> &mut Self {
-        self.inject(Operator::I64TruncF32U);
-        self
-    }
-
-    /// Inject a i64.trunc_f64s instruction
-    fn i64_trunc_f64s(&mut self) -> &mut Self {
-        self.inject(Operator::I64TruncF64S);
-        self
-    }
-
-    /// Inject a i64.trunc_f64u instruction
-    fn i64_trunc_f64u(&mut self) -> &mut Self {
-        self.inject(Operator::I64TruncF64U);
-        self
-    }
-
-    /// Inject a i64.reinterpret_f64 instruction
-    fn i64_reinterpret_f64(&mut self) -> &mut Self {
-        self.inject(Operator::I64ReinterpretF64);
-        self
-    }
+    // ── Type-conversion wrappers ──────────────────────────────────────────────
+    // These accept more ergonomic Rust types and convert internally.
 
-    // Floating point
-    /// Inject a f32.const instruction
+    /// Inject an `f32.const` instruction from a Rust `f32`.
     fn f32_const(&mut self, val: f32) -> &mut Self {
         self.inject(Operator::F32Const {
             value: wasmparser::Ieee32::from(val),
@@ -650,151 +435,7 @@ pub trait Opcode<'a>: Inject<'a> {
         self
     }
 
-    /// Inject a f32.abs instruction
-    fn f32_abs(&mut self) -> &mut Self {
-        self.inject(Operator::F32Abs);
-        self
-    }
-
-    /// Inject a f32.ceil instruction
-    fn f32_ceil(&mut self) -> &mut Self {
-        self.inject(Operator::F32Ceil);
-        self
-    }
-
-    /// Inject a f32.floor instruction
-    fn f32_floor(&mut self) -> &mut Self {
-        self.inject(Operator::F32Floor);
-        self
-    }
-
-    /// Inject a f32.trunc instruction
-    fn f32_trunc(&mut self) -> &mut Self {
-        self.inject(Operator::F32Trunc);
-        self
-    }
-
-    /// Inject a f32.sqrt instruction
-    fn f32_sqrt(&mut self) -> &mut Self {
-        self.inject(Operator::F32Sqrt);
-        self
-    }
-
-    /// Inject a f32.add instruction
-    fn f32_add(&mut self) -> &mut Self {
-        self.inject(Operator::F32Add);
-        self
-    }
-
-    /// Inject a f32.sub instruction
-    fn f32_sub(&mut self) -> &mut Self {
-        self.inject(Operator::F32Sub);
-        self
-    }
-
-    /// Inject a f32.mul instruction
-    fn f32_mul(&mut self) -> &mut Self {
-        self.inject(Operator::F32Mul);
-        self
-    }
-
-    /// Inject a f32.div instruction
-    fn f32_div(&mut self) -> &mut Self {
-        self.inject(Operator::F32Div);
-        self
-    }
-
-    /// Inject a f32.min instruction
-    fn f32_min(&mut self) -> &mut Self {
-        self.inject(Operator::F32Min);
-        self
-    }
-
-    /// Inject a f32.max instruction
-    fn f32_max(&mut self) -> &mut Self {
-        self.inject(Operator::F32Max);
-        self
-    }
-
-    /// Inject a f32.eq instruction
-    fn f32_eq(&mut self) -> &mut Self {
-        self.inject(Operator::F32Eq);
-        self
-    }
-
-    /// Inject a f32.ne instruction
-    fn f32_ne(&mut self) -> &mut Self {
-        self.inject(Operator::F32Ne);
-        self
-    }
-
-    /// Inject a f32.gt instruction
-    fn f32_gt(&mut self) -> &mut Self {
-        self.inject(Operator::F32Gt);
-        self
-    }
-
-    /// Inject a f32.ge instruction
-    fn f32_ge(&mut self) -> &mut Self {
-        self.inject(Operator::F32Ge);
-        self
-    }
-
-    /// Inject a f32.lt instruction
-    fn f32_lt(&mut self) -> &mut Self {
-        self.inject(Operator::F32Lt);
-        self
-    }
-
-    /// Inject a f32.le instruction
-    fn f32_le(&mut self) -> &mut Self {
-        self.inject(Operator::F32Le);
-        self
-    }
-
-    /// Inject a f32_convert_i32s instruction
-    fn f32_convert_i32s(&mut self) -> &mut Self {
-        self.inject(Operator::F32ConvertI32S);
-        self
-    }
-
-    /// Inject a f32_convert_i32u instruction
-    fn f32_convert_i32u(&mut self) -> &mut Self {
-        self.inject(Operator::F32ConvertI32U);
-        self
-    }
-
-    /// Inject a f32_convert_i64s instruction
-    fn f32_convert_i64s(&mut self) -> &mut Self {
-        self.inject(Operator::F32ConvertI64S);
-        self
-    }
-
-    /// Inject a f32_convert_i64u instruction
-    fn f32_convert_i64u(&mut self) -> &mut Self {
-        self.inject(Operator::F32ConvertI64U);
-        self
-    }
-
-    /// Inject a f32_demote_f64 instruction
-    fn f32_demote_f64(&mut self) -> &mut Self {
-        self.inject(Operator::F32DemoteF64);
-        self
-    }
-
-    /// Inject a f32.reinterpret_i32 instruction
-    fn f32_reinterpret_i32(&mut self) -> &mut Self {
-        self.inject(Operator::F32ReinterpretI32);
-        self
-    }
-
-    /// Inject a f32.copysign instruction
-    fn f32_copysign(&mut self) -> &mut Self {
-        self.inject(Operator::F32Copysign);
-        self
-    }
-
-    /// Inject a f64.const instruction
+    /// Inject an `f64.const` instruction from a Rust `f64`.
     fn f64_const(&mut self, val: f64) -> &mut Self {
         self.inject(Operator::F64Const {
             value: wasmparser::Ieee64::from(val),
@@ -802,328 +443,13 @@ pub trait Opcode<'a>: Inject<'a> {
         self
     }
 
-    /// Inject a f64.abs instruction
-    fn f64_abs(&mut self) -> &mut Self {
-        self.inject(Operator::F64Abs);
+    /// Inject a `br_table` instruction.
+    fn br_table(&mut self, targets: wasmparser::BrTable<'a>) -> &mut Self {
+        self.inject(Operator::BrTable { targets });
         self
     }
 
-    /// Inject a f64.ceil instruction
-    fn f64_ceil(&mut self) -> &mut Self {
-        self.inject(Operator::F64Ceil);
-        self
-    }
-
-    /// Inject a f64.floor instruction
-    fn f64_floor(&mut self) -> &mut Self {
-        self.inject(Operator::F64Floor);
-        self
-    }
-
-    /// Inject a f64.trunc instruction
-    fn f64_trunc(&mut self) -> &mut Self {
-        self.inject(Operator::F64Trunc);
-        self
-    }
-
-    /// Inject a f64.sqrt instruction
-    fn f64_sqrt(&mut self) -> &mut Self {
-        self.inject(Operator::F64Sqrt);
-        self
-    }
-
-    /// Inject a f64.add instruction
-    fn f64_add(&mut self) -> &mut Self {
-        self.inject(Operator::F64Add);
-        self
-    }
-
-    /// Inject a f64.sub instruction
-    fn f64_sub(&mut self) -> &mut Self {
-        self.inject(Operator::F64Sub);
-        self
-    }
-
-    /// Inject a f64.mul instruction
-    fn f64_mul(&mut self) -> &mut Self {
-        self.inject(Operator::F64Mul);
-        self
-    }
-
-    /// Inject a f64.div instruction
-    fn f64_div(&mut self) -> &mut Self {
-        self.inject(Operator::F64Div);
-        self
-    }
-
-    /// Inject a f64.min instruction
-    fn f64_min(&mut self) -> &mut Self {
-        self.inject(Operator::F64Min);
-        self
-    }
-
-    /// Inject a f64.max instruction
-    fn f64_max(&mut self) -> &mut Self {
-        self.inject(Operator::F64Max);
-        self
-    }
-
-    /// Inject a f64.eq instruction
-    fn f64_eq(&mut self) -> &mut Self {
-        self.inject(Operator::F64Eq);
-        self
-    }
-
-    /// Inject a f64.ne instruction
-    fn f64_ne(&mut self) -> &mut Self {
-        self.inject(Operator::F64Ne);
-        self
-    }
-
-    /// Inject a f64.gt instruction
-    fn f64_gt(&mut self) -> &mut Self {
-        self.inject(Operator::F64Gt);
-        self
-    }
-
-    /// Inject a f64.ge instruction
-    fn f64_ge(&mut self) -> &mut Self {
-        self.inject(Operator::F64Ge);
-        self
-    }
-
-    /// Inject a f64.lt instruction
-    fn f64_lt(&mut self) -> &mut Self {
-        self.inject(Operator::F64Lt);
-        self
-    }
-
-    /// Inject a f64.le instruction
-    fn f64_le(&mut self) -> &mut Self {
-        self.inject(Operator::F64Le);
-        self
-    }
-
-    /// Inject a f64_reinterpret_i64 instruction
-    fn f64_reinterpret_i64(&mut self) -> &mut Self {
-        self.inject(Operator::F64ReinterpretI64);
-        self
-    }
-
-    /// Inject a f64_promote_f32 instruction
-    fn f64_promote_f32(&mut self) -> &mut Self {
-        self.inject(Operator::F64PromoteF32);
-        self
-    }
-
-    /// Inject a f64_convert_i32s instruction
-    fn f64_convert_i32s(&mut self) -> &mut Self {
-        self.inject(Operator::F64ConvertI32S);
-        self
-    }
-
-    /// Inject a f64_convert_i32u instruction
-    fn f64_convert_i32u(&mut self) -> &mut Self {
-        self.inject(Operator::F64ConvertI32U);
-        self
-    }
-
-    /// Inject a f64_convert_i64s instruction
-    fn f64_convert_i64s(&mut self) -> &mut Self {
-        self.inject(Operator::F64ConvertI64S);
-        self
-    }
-
-    /// Inject a f64_convert_i64u instruction
-    fn f64_convert_i64u(&mut self) -> &mut Self {
-        self.inject(Operator::F64ConvertI64U);
-        self
-    }
-
-    /// Inject a f64.copysign instruction
-    fn f64_copysign(&mut self) -> &mut Self {
-        self.inject(Operator::F64Copysign);
-        self
-    }
-
-    // Memory Instructions
-    /// Inject a memory.init instruction
-    fn memory_init(&mut self, data_index: u32, mem: u32) -> &mut Self {
-        self.inject(Operator::MemoryInit { data_index, mem });
-        self
-    }
-
-    /// Inject a memory.size instruction
-    fn memory_size(&mut self, mem: u32) -> &mut Self {
-        self.inject(Operator::MemorySize { mem });
-        self
-    }
-
-    /// Inject a memory.grow instruction
-    fn memory_grow(&mut self, mem: u32) -> &mut Self {
-        self.inject(Operator::MemoryGrow { mem });
-        self
-    }
-
-    /// Inject a memory.fill instruction
-    fn memory_fill(&mut self, mem: u32) -> &mut Self {
-        self.inject(Operator::MemoryFill { mem });
-        self
-    }
-
-    /// Inject a memory.copy instruction
-    fn memory_copy(&mut self, dst_mem: u32, src_mem: u32) -> &mut Self {
-        self.inject(Operator::MemoryCopy { dst_mem, src_mem });
-        self
-    }
-
-    /// Inject a memory.discard instruction
-    fn memory_discard(&mut self, mem: u32) -> &mut Self {
-        self.inject(Operator::MemoryDiscard { mem });
-        self
-    }
-    /// Inject a data drop instruction
-    fn data_drop(&mut self, data_index: u32) -> &mut Self {
-        self.inject(Operator::DataDrop { data_index });
-        self
-    }
-
-    // Parametric Instructions
-    /// Inject a drop instruction
-    fn drop(&mut self) -> &mut Self {
-        self.inject(Operator::Drop);
-        self
-    }
-
-    // Linear Memory Access
-    // note: walrus does not specify max_align (probably it's the same as align)
-
-    /// load 1 byte and sign-extend i8 to i32
-    fn i32_load8_s(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::I32Load8S { memarg });
-        self
-    }
-
-    /// load 1 byte and zero-extend i8 to i32
-    fn i32_load8_u(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::I32Load8U { memarg });
-        self
-    }
-
-    /// load 2 bytes and sign-extend i16 to i32
-    fn i32_load16_s(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::I32Load16S { memarg });
-        self
-    }
-
-    /// load 2 bytes and zero-extend i16 to i32
-    fn i32_load16_u(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::I32Load16U { memarg });
-        self
-    }
-
-    /// load 4 bytes as i32
-    fn i32_load(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::I32Load { memarg });
-        self
-    }
-
-    fn i32_store(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::I32Store { memarg });
-        self
-    }
-    fn i32_store8(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::I32Store8 { memarg });
-        self
-    }
-    fn i32_store16(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::I32Store16 { memarg });
-        self
-    }
-
-    /// load 1 byte and sign-extend i8 to i64
-    fn i64_load8_s(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::I64Load8S { memarg });
-        self
-    }
-
-    /// load 1 byte and zero-extend i8 to i64
-    fn i64_load8_u(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::I64Load8U { memarg });
-        self
-    }
-
-    /// load 2 bytes and sign-extend i16 to i64
-    fn i64_load16_s(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::I64Load16S { memarg });
-        self
-    }
-
-    /// load 2 bytes and zero-extend i16 to i64
-    fn i64_load16_u(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::I64Load16U { memarg });
-        self
-    }
-
-    /// load 4 bytes and sign-extend i32 to i64
-    fn i64_load32_s(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::I64Load32S { memarg });
-        self
-    }
-
-    /// load 4 bytes and zero-extend i32 to i64
-    fn i64_load32_u(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::I64Load32U { memarg });
-        self
-    }
-
-    /// load 4 bytes as i64
-    fn i64_load(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::I64Load { memarg });
-        self
-    }
-
-    fn i64_store(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::I64Store { memarg });
-        self
-    }
-
-    /// load 4 bytes as f32
-    fn f32_load(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::F32Load { memarg });
-        self
-    }
-
-    fn f32_store(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::F32Store { memarg });
-        self
-    }
-
-    /// load 8 bytes as f64
-    fn f64_load(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::F64Load { memarg });
-        self
-    }
-
-    /// Inject an f64_store instruction
-    fn f64_store(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::F64Store { memarg });
-        self
-    }
-
-    /// Inject a global.get
-    fn global_get(&mut self, idx: GlobalID) -> &mut Self {
-        self.inject(Operator::GlobalGet { global_index: *idx });
-        self
-    }
-
-    /// Inject a global.set
-    fn global_set(&mut self, idx: GlobalID) -> &mut Self {
-        self.inject(Operator::GlobalSet { global_index: *idx });
-        self
-    }
-
-    // GC Instructions
+    /// Inject a `ref.null` instruction using wirm's [`HeapType`].
     fn ref_null(&mut self, heap_type: HeapType) -> &mut Self {
         self.inject(Operator::RefNull {
             hty: wasmparser::HeapType::from(heap_type),
@@ -1131,195 +457,9 @@ pub trait Opcode<'a>: Inject<'a> {
         self
     }
 
-    fn ref_is_null(&mut self) -> &mut Self {
-        self.inject(Operator::RefIsNull);
-        self
-    }
+    // ── GC: ref.test / ref.cast (HeapType conversions) ───────────────────────
 
-    fn ref_func(&mut self, function_index: u32) -> &mut Self {
-        self.inject(Operator::RefFunc { function_index });
-        self
-    }
-
-    fn ref_eq(&mut self) -> &mut Self {
-        self.inject(Operator::RefEq);
-        self
-    }
-
-    fn ref_as_non_null(&mut self) -> &mut Self {
-        self.inject(Operator::RefAsNonNull);
-        self
-    }
-
-    fn struct_new(&mut self, struct_type_index: TypeID) -> &mut Self {
-        self.inject(Operator::StructNew {
-            struct_type_index: *struct_type_index,
-        });
-        self
-    }
-
-    fn struct_new_default(&mut self, struct_type_index: TypeID) -> &mut Self {
-        self.inject(Operator::StructNewDefault {
-            struct_type_index: *struct_type_index,
-        });
-        self
-    }
-
-    fn struct_get(&mut self, struct_type_index: TypeID, field_index: FieldID) -> &mut Self {
-        self.inject(Operator::StructGet {
-            struct_type_index: *struct_type_index,
-            field_index: *field_index,
-        });
-        self
-    }
-
-    fn struct_get_s(&mut self, struct_type_index: TypeID, field_index: FieldID) -> &mut Self {
-        self.inject(Operator::StructGetS {
-            struct_type_index: *struct_type_index,
-            field_index: *field_index,
-        });
-        self
-    }
-
-    fn struct_get_u(&mut self, struct_type_index: TypeID, field_index: FieldID) -> &mut Self {
-        self.inject(Operator::StructGetU {
-            struct_type_index: *struct_type_index,
-            field_index: *field_index,
-        });
-        self
-    }
-
-    fn struct_set(&mut self, struct_type_index: TypeID, field_index: FieldID) -> &mut Self {
-        self.inject(Operator::StructSet {
-            struct_type_index: *struct_type_index,
-            field_index: *field_index,
-        });
-        self
-    }
-
-    fn array_new(&mut self, array_type_index: TypeID) -> &mut Self {
-        self.inject(Operator::ArrayNew {
-            array_type_index: *array_type_index,
-        });
-        self
-    }
-
-    fn array_new_default(&mut self, array_type_index: TypeID) -> &mut Self {
-        self.inject(Operator::ArrayNewDefault {
-            array_type_index: *array_type_index,
-        });
-        self
-    }
-
-    fn array_new_fixed(&mut self, array_type_index: TypeID, array_size: u32) -> &mut Self {
-        self.inject(Operator::ArrayNewFixed {
-            array_type_index: *array_type_index,
-            array_size,
-        });
-        self
-    }
-
-    // TODO: Check the arguments
-    fn array_new_data(
-        &mut self,
-        array_type_index: TypeID,
-        array_data_index: DataSegmentID,
-    ) -> &mut Self {
-        self.inject(Operator::ArrayNewData {
-            array_type_index: *array_type_index,
-            array_data_index: *array_data_index,
-        });
-        self
-    }
-
-    fn array_new_elem(
-        &mut self,
-        array_type_index: TypeID,
-        array_elem_index: ElementID,
-    ) -> &mut Self {
-        self.inject(Operator::ArrayNewElem {
-            array_type_index: *array_type_index,
-            array_elem_index: *array_elem_index,
-        });
-        self
-    }
-
-    fn array_get(&mut self, array_type_index: TypeID) -> &mut Self {
-        self.inject(Operator::ArrayGet {
-            array_type_index: *array_type_index,
-        });
-        self
-    }
-
-    fn array_get_s(&mut self, array_type_index: TypeID) -> &mut Self {
-        self.inject(Operator::ArrayGetS {
-            array_type_index: *array_type_index,
-        });
-        self
-    }
-
-    fn array_get_u(&mut self, array_type_index: TypeID) -> &mut Self {
-        self.inject(Operator::ArrayGetU {
-            array_type_index: *array_type_index,
-        });
-        self
-    }
-
-    fn array_set(&mut self, array_type_index: TypeID) -> &mut Self {
-        self.inject(Operator::ArraySet {
-            array_type_index: *array_type_index,
-        });
-        self
-    }
-
-    fn array_len(&mut self) -> &mut Self {
-        self.inject(Operator::ArrayLen);
-        self
-    }
-
-    fn array_fill(&mut self, array_type_index: TypeID) -> &mut Self {
-        self.inject(Operator::ArrayFill {
-            array_type_index: *array_type_index,
-        });
-        self
-    }
-
-    fn array_copy(
-        &mut self,
-        array_type_index_dest: TypeID,
-        array_type_index_src: TypeID,
-    ) -> &mut Self {
-        self.inject(Operator::ArrayCopy {
-            array_type_index_dst: *array_type_index_dest,
-            array_type_index_src: *array_type_index_src,
-        });
-        self
-    }
-
-    fn array_init_data(
-        &mut self,
-        array_type_index: TypeID,
-        array_data_index: DataSegmentID,
-    ) -> &mut Self {
-        self.inject(Operator::ArrayInitData {
-            array_type_index: *array_type_index,
-            array_data_index: *array_data_index,
-        });
-        self
-    }
-
-    fn array_init_elem(
-        &mut self,
-        array_type_index: TypeID,
-        array_elem_index: ElementID,
-    ) -> &mut Self {
-        self.inject(Operator::ArrayInitElem {
-            array_type_index: *array_type_index,
-            array_elem_index: *array_elem_index,
-        });
-        self
-    }
-
+    /// Inject a `ref.test` (non-null) instruction.
     fn ref_test(&mut self, heap_type: HeapType) -> &mut Self {
         self.inject(Operator::RefTestNonNull {
             hty: wasmparser::HeapType::from(heap_type),
@@ -1327,6 +467,7 @@ pub trait Opcode<'a>: Inject<'a> {
         self
     }
 
+    /// Inject a `ref.test null` (nullable) instruction.
     fn ref_test_null(&mut self, heap_type: HeapType) -> &mut Self {
         self.inject(Operator::RefTestNullable {
             hty: wasmparser::HeapType::from(heap_type),
@@ -1334,6 +475,7 @@ pub trait Opcode<'a>: Inject<'a> {
         self
     }
 
+    /// Inject a `ref.cast` (non-null) instruction.
     fn ref_cast(&mut self, heap_type: HeapType) -> &mut Self {
         self.inject(Operator::RefCastNonNull {
             hty: wasmparser::HeapType::from(heap_type),
@@ -1341,1598 +483,31 @@ pub trait Opcode<'a>: Inject<'a> {
         self
     }
 
+    /// Inject a `ref.cast null` (nullable) instruction.
     fn ref_cast_null(&mut self, heap_type: HeapType) -> &mut Self {
         self.inject(Operator::RefCastNullable {
             hty: wasmparser::HeapType::from(heap_type),
         });
         self
     }
-
-    fn any_convert_extern(&mut self) -> &mut Self {
-        self.inject(Operator::AnyConvertExtern);
-        self
-    }
-
-    fn extern_convert_any(&mut self) -> &mut Self {
-        self.inject(Operator::ExternConvertAny);
-        self
-    }
-
-    fn ref_i31(&mut self) -> &mut Self {
-        self.inject(Operator::RefI31);
-        self
-    }
-
-    fn i31_get_s(&mut self) -> &mut Self {
-        self.inject(Operator::I31GetS);
-        self
-    }
-
-    fn i31_get_u(&mut self) -> &mut Self {
-        self.inject(Operator::I31GetU);
-        self
-    }
-
-    // SIMD Instructions
-
-    /// Inject a v128.load instruction
-    fn v128_load(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::V128Load { memarg });
-        self
-    }
-
-    /// Inject a v128.load8x8_s instruction
-    fn v128_load8x8_s(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::V128Load8x8S { memarg });
-        self
-    }
-
-    /// Inject a v128.load8x8_u instruction
-    fn v128_load8x8_u(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::V128Load8x8U { memarg });
-        self
-    }
-
-    /// Inject a v128.load16x4_s instruction
-    fn v128_load16x4_s(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::V128Load16x4S { memarg });
-        self
-    }
-
-    /// Inject a v128.load16x4_u instruction
-    fn v128_load16x4_u(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::V128Load16x4U { memarg });
-        self
-    }
-
-    /// Inject a v128.load32x2_s instruction
-    fn v128_load32x2_s(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::V128Load32x2S { memarg });
-        self
-    }
-
-    /// Inject a v128.load32x2_u instruction
-    fn v128_load32x2_u(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::V128Load32x2U { memarg });
-        self
-    }
-
-    /// Inject a v128.load8_splat instruction
-    fn v128_load8_splat(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::V128Load8Splat { memarg });
-        self
-    }
-
-    /// Inject a v128.load16_splat instruction
-    fn v128_load16_splat(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::V128Load16Splat { memarg });
-        self
-    }
-
-    /// Inject a v128.load32_splat instruction
-    fn v128_load32_splat(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::V128Load32Splat { memarg });
-        self
-    }
-
-    /// Inject a v128.load64_splat instruction
-    fn v128_load64_splat(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::V128Load64Splat { memarg });
-        self
-    }
-
-    /// Inject a v128.load32_zero instruction
-    fn v128_load32_zero(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::V128Load32Zero { memarg });
-        self
-    }
-
-    /// Inject a v128.load64_zero instruction
-    fn v128_load64_zero(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::V128Load64Zero { memarg });
-        self
-    }
-
-    /// Inject a v128.store instruction
-    fn v128_store(&mut self, memarg: MemArg) -> &mut Self {
-        self.inject(Operator::V128Store { memarg });
-        self
-    }
-
-    /// Inject a v128.load8_lane instruction
-    fn v128_load8_lane(&mut self, memarg: MemArg, lane: u8) -> &mut Self {
-        self.inject(Operator::V128Load8Lane { memarg, lane });
-        self
-    }
-
-    /// Inject a v128.load16_lane instruction
-    fn v128_load16_lane(&mut self, memarg: MemArg, lane: u8) -> &mut Self {
-        self.inject(Operator::V128Load16Lane { memarg, lane });
-        self
-    }
-
-    /// Inject a v128.load32_lane instruction
-    fn v128_load32_lane(&mut self, memarg: MemArg, lane: u8) -> &mut Self {
-        self.inject(Operator::V128Load32Lane { memarg, lane });
-        self
-    }
-
-    /// Inject a v128.load64_lane instruction
-    fn v128_load64_lane(&mut self, memarg: MemArg, lane: u8) -> &mut Self {
-        self.inject(Operator::V128Load64Lane { memarg, lane });
-        self
-    }
-
-    /// Inject a v128.store8_lane instruction
-    fn v128_store8_lane(&mut self, memarg: MemArg, lane: u8) -> &mut Self {
-        self.inject(Operator::V128Store8Lane { memarg, lane });
-        self
-    }
-
-    /// Inject a v128.store16_lane instruction
-    fn v128_store16_lane(&mut self, memarg: MemArg, lane: u8) -> &mut Self {
-        self.inject(Operator::V128Store16Lane { memarg, lane });
-        self
-    }
-
-    /// Inject a v128.store32_lane instruction
-    fn v128_store32_lane(&mut self, memarg: MemArg, lane: u8) -> &mut Self {
-        self.inject(Operator::V128Store32Lane { memarg, lane });
-        self
-    }
-
-    /// Inject a v128.store64_lane instruction
-    fn v128_store64_lane(&mut self, memarg: MemArg, lane: u8) -> &mut Self {
-        self.inject(Operator::V128Store64Lane { memarg, lane });
-        self
-    }
-
-    /// Inject a v128.const instruction
-    fn v128_const(&mut self, value: V128) -> &mut Self {
-        self.inject(Operator::V128Const { value });
-        self
-    }
-
-    /// Inject an i8x16.shuffle instruction
-    fn i8x16_shuffle(&mut self, lanes: [u8; 16]) -> &mut Self {
-        self.inject(Operator::I8x16Shuffle { lanes });
-        self
-    }
-
-    /// Inject an i8x16.extract_lane_s instruction
-    fn i8x16_extract_lane_s(&mut self, lane: u8) -> &mut Self {
-        self.inject(Operator::I8x16ExtractLaneS { lane });
-        self
-    }
-
-    /// Inject an i8x16.extract_lane_u instruction
-    fn i8x16_extract_lane_u(&mut self, lane: u8) -> &mut Self {
-        self.inject(Operator::I8x16ExtractLaneU { lane });
-        self
-    }
-
-    /// Inject an i8x16.replace_lane instruction
-    fn i8x16_replace_lane(&mut self, lane: u8) -> &mut Self {
-        self.inject(Operator::I8x16ReplaceLane { lane });
-        self
-    }
-
-    /// Inject an i16x8.extract_lane_s instruction
-    fn i16x8_extract_lane_s(&mut self, lane: u8) -> &mut Self {
-        self.inject(Operator::I16x8ExtractLaneS { lane });
-        self
-    }
-
-    /// Inject an i16x8.extract_lane_u instruction
-    fn i16x8_extract_lane_u(&mut self, lane: u8) -> &mut Self {
-        self.inject(Operator::I16x8ExtractLaneU { lane });
-        self
-    }
-
-    /// Inject an i16x8.replace_lane instruction
-    fn i16x8_replace_lane(&mut self, lane: u8) -> &mut Self {
-        self.inject(Operator::I16x8ReplaceLane { lane });
-        self
-    }
-
-    /// Inject an i32x4.extract_lane instruction
-    fn i32x4_extract_lane(&mut self, lane: u8) -> &mut Self {
-        self.inject(Operator::I32x4ExtractLane { lane });
-        self
-    }
-
-    /// Inject an i32x4.replace_lane instruction
-    fn i32x4_replace_lane(&mut self, lane: u8) -> &mut Self {
-        self.inject(Operator::I32x4ReplaceLane { lane });
-        self
-    }
-
-    /// Inject an i64x2.extract_lane instruction
-    fn i64x2_extract_lane(&mut self, lane: u8) -> &mut Self {
-        self.inject(Operator::I64x2ExtractLane { lane });
-        self
-    }
-
-    /// Inject an i64x2.replace_lane instruction
-    fn i64x2_replace_lane(&mut self, lane: u8) -> &mut Self {
-        self.inject(Operator::I64x2ReplaceLane { lane });
-        self
-    }
-
-    /// Inject an f32x4.extract_lane instruction
-    fn f32x4_extract_lane(&mut self, lane: u8) -> &mut Self {
-        self.inject(Operator::F32x4ExtractLane { lane });
-        self
-    }
-
-    /// Inject an f32x4.replace_lane instruction
-    fn f32x4_replace_lane(&mut self, lane: u8) -> &mut Self {
-        self.inject(Operator::F32x4ReplaceLane { lane });
-        self
-    }
-
-    /// Inject an f64x2.extract_lane instruction
-    fn f64x2_extract_lane(&mut self, lane: u8) -> &mut Self {
-        self.inject(Operator::F64x2ExtractLane { lane });
-        self
-    }
-
-    /// Inject an f64x2.replace_lane instruction
-    fn f64x2_replace_lane(&mut self, lane: u8) -> &mut Self {
-        self.inject(Operator::F64x2ReplaceLane { lane });
-        self
-    }
-
-    /// Inject an i8x16.swizzle instruction
-    fn i8x16_swizzle(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16Swizzle);
-        self
-    }
-
-    /// Inject an i8x16.splat instruction
-    fn i8x16_splat(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16Splat);
-        self
-    }
-
-    /// Inject an i16x8.splat instruction
-    fn i16x8_splat(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8Splat);
-        self
-    }
-
-    /// Inject an i32x4.splat instruction
-    fn i32x4_splat(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4Splat);
-        self
-    }
-
-    /// Inject an i64x2.splat instruction
-    fn i64x2_splat(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2Splat);
-        self
-    }
-
-    /// Inject an f32x4.splat instruction
-    fn f32x4_splat(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Splat);
-        self
-    }
-
-    /// Inject an f64x2.splat instruction
-    fn f64x2_splat(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Splat);
-        self
-    }
-
-    /// Inject an i8x16.eq instruction
-    fn i8x16_eq(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16Eq);
-        self
-    }
-
-    /// Inject an i8x16.ne instruction
-    fn i8x16_ne(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16Ne);
-        self
-    }
-
-    /// Inject an i8x16.lt_s instruction
-    fn i8x16_lt_s(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16LtS);
-        self
-    }
-
-    /// Inject an i8x16.lt_u instruction
-    fn i8x16_lt_u(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16LtU);
-        self
-    }
-
-    /// Inject an i8x16.gt_s instruction
-    fn i8x16_gt_s(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16GtS);
-        self
-    }
-
-    /// Inject an i8x16.gt_u instruction
-    fn i8x16_gt_u(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16GtU);
-        self
-    }
-
-    /// Inject an i8x16.le_s instruction
-    fn i8x16_le_s(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16LeS);
-        self
-    }
-
-    /// Inject an i8x16.le_u instruction
-    fn i8x16_le_u(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16LeU);
-        self
-    }
-
-    /// Inject an i8x16.ge_s instruction
-    fn i8x16_ge_s(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16GeS);
-        self
-    }
-
-    /// Inject an i8x16.ge_u instruction
-    fn i8x16_ge_u(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16GeU);
-        self
-    }
-
-    /// Inject an i16x8.eq instruction
-    fn i16x8_eq(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8Eq);
-        self
-    }
-
-    /// Inject an i16x8.ne instruction
-    fn i16x8_ne(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8Ne);
-        self
-    }
-
-    /// Inject an i16x8.lt_s instruction
-    fn i16x8_lt_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8LtS);
-        self
-    }
-
-    /// Inject an i16x8.lt_u instruction
-    fn i16x8_lt_u(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8LtU);
-        self
-    }
-
-    /// Inject an i16x8.gt_s instruction
-    fn i16x8_gt_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8GtS);
-        self
-    }
-
-    /// Inject an i16x8.gt_u instruction
-    fn i16x8_gt_u(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8GtU);
-        self
-    }
-
-    /// Inject an i16x8.le_s instruction
-    fn i16x8_le_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8LeS);
-        self
-    }
-
-    /// Inject an i16x8.le_u instruction
-    fn i16x8_le_u(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8LeU);
-        self
-    }
-
-    /// Inject an i16x8.ge_s instruction
-    fn i16x8_ge_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8GeS);
-        self
-    }
-
-    /// Inject an i16x8.ge_u instruction
-    fn i16x8_ge_u(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8GeU);
-        self
-    }
-
-    /// Inject an i32x4.eq instruction
-    fn i32x4_eq(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4Eq);
-        self
-    }
-
-    /// Inject an i32x4.ne instruction
-    fn i32x4_ne(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4Ne);
-        self
-    }
-
-    /// Inject an i32x4.lt_s instruction
-    fn i32x4_lt_s(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4LtS);
-        self
-    }
-
-    /// Inject an i32x4.lt_u instruction
-    fn i32x4_lt_u(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4LtU);
-        self
-    }
-
-    /// Inject an i32x4.gt_s instruction
-    fn i32x4_gt_s(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4GtS);
-        self
-    }
-
-    /// Inject an i32x4.gt_u instruction
-    fn i32x4_gt_u(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4GtU);
-        self
-    }
-
-    /// Inject an i32x4.le_s instruction
-    fn i32x4_le_s(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4LeS);
-        self
-    }
-
-    /// Inject an i32x4.le_u instruction
-    fn i32x4_le_u(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4LeU);
-        self
-    }
-
-    /// Inject an i32x4.ge_s instruction
-    fn i32x4_ge_s(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4GeS);
-        self
-    }
-
-    /// Inject an i32x4.ge_u instruction
-    fn i32x4_ge_u(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4GeU);
-        self
-    }
-
-    /// Inject an i64x2.eq instruction
-    fn i64x2_eq(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2Eq);
-        self
-    }
-
-    /// Inject an i64x2.ne instruction
-    fn i64x2_ne(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2Ne);
-        self
-    }
-
-    /// Inject an i64x2.lt_s instruction
-    fn i64x2_lt_s(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2LtS);
-        self
-    }
-
-    /// Inject an i64x2.gt_s instruction
-    fn i64x2_gt_s(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2GtS);
-        self
-    }
-
-    /// Inject an i64x2.le_s instruction
-    fn i64x2_le_s(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2LeS);
-        self
-    }
-
-    /// Inject an i64x2.ge_s instruction
-    fn i64x2_ge_s(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2GeS);
-        self
-    }
-
-    /// Inject an f32x4.eq instruction
-    fn f32x4_eq(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Eq);
-        self
-    }
-
-    /// Inject an f32x4.ne instruction
-    fn f32x4_ne(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Ne);
-        self
-    }
-
-    /// Inject an f32x4.lt instruction
-    fn f32x4_lt(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Lt);
-        self
-    }
-
-    /// Inject an f32x4.gt instruction
-    fn f32x4_gt(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Gt);
-        self
-    }
-
-    /// Inject an f32x4.le instruction
-    fn f32x4_le(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Le);
-        self
-    }
-
-    /// Inject an f32x4.ge instruction
-    fn f32x4_ge(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Ge);
-        self
-    }
-
-    /// Inject an f64x2.eq instruction
-    fn f64x2_eq(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Eq);
-        self
-    }
-
-    /// Inject an f64x2.ne instruction
-    fn f64x2_ne(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Ne);
-        self
-    }
-
-    /// Inject an f64x2.lt instruction
-    fn f64x2_lt(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Lt);
-        self
-    }
-
-    /// Inject an f64x2.gt instruction
-    fn f64x2_gt(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Gt);
-        self
-    }
-
-    /// Inject an f64x2.le instruction
-    fn f64x2_le(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Le);
-        self
-    }
-
-    /// Inject an f64x2.ge instruction
-    fn f64x2_ge(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Ge);
-        self
-    }
-
-    /// Inject a v128.not instruction
-    fn v128_not(&mut self) -> &mut Self {
-        self.inject(Operator::V128Not);
-        self
-    }
-
-    /// Inject a v128.and instruction
-    fn v128_and(&mut self) -> &mut Self {
-        self.inject(Operator::V128And);
-        self
-    }
-
-    /// Inject a v128.andnot instruction
-    fn v128_andnot(&mut self) -> &mut Self {
-        self.inject(Operator::V128AndNot);
-        self
-    }
-
-    /// Inject a v128.or instruction
-    fn v128_or(&mut self) -> &mut Self {
-        self.inject(Operator::V128Or);
-        self
-    }
-
-    /// Inject a v128.xor instruction
-    fn v128_xor(&mut self) -> &mut Self {
-        self.inject(Operator::V128Xor);
-        self
-    }
-
-    /// Inject a v128.bitselect instruction
-    fn v128_bitselect(&mut self) -> &mut Self {
-        self.inject(Operator::V128Bitselect);
-        self
-    }
-
-    /// Inject a v128.any_true instruction
-    fn v128_any_true(&mut self) -> &mut Self {
-        self.inject(Operator::V128AnyTrue);
-        self
-    }
-
-    /// Inject an i8x16.abs instruction
-    fn i8x16_abs(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16Abs);
-        self
-    }
-
-    /// Inject an i8x16.neg instruction
-    fn i8x16_neg(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16Neg);
-        self
-    }
-
-    /// Inject an i8x16.popcnt instruction
-    fn i8x16_popcnt(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16Popcnt);
-        self
-    }
-
-    /// Inject an i8x16.all_true instruction
-    fn i8x16_all_true(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16AllTrue);
-        self
-    }
-
-    /// Inject an i8x16.bitmask instruction
-    fn i8x16_bitmask(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16Bitmask);
-        self
-    }
-
-    /// Inject an i8x16.narrow_i16x8_s instruction
-    fn i8x16_narrow_i16x8_s(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16NarrowI16x8S);
-        self
-    }
-
-    /// Inject an i8x16.narrow_i16x8_u instruction
-    fn i8x16_narrow_i16x8_u(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16NarrowI16x8U);
-        self
-    }
-
-    /// Inject an i8x16.shl instruction
-    fn i8x16_shl(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16Shl);
-        self
-    }
-
-    /// Inject an i8x16.shr_s instruction
-    fn i8x16_shr_s(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16ShrS);
-        self
-    }
-
-    /// Inject an i8x16.shr_u instruction
-    fn i8x16_shr_u(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16ShrU);
-        self
-    }
-
-    /// Inject an i8x16.add instruction
-    fn i8x16_add(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16Add);
-        self
-    }
-
-    /// Inject an i8x16.add_sat_s instruction
-    fn i8x16_add_sat_s(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16AddSatS);
-        self
-    }
-
-    /// Inject an i8x16.add_sat_u instruction
-    fn i8x16_add_sat_u(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16AddSatU);
-        self
-    }
-
-    /// Inject an i8x16.sub instruction
-    fn i8x16_sub(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16Sub);
-        self
-    }
-
-    /// Inject an i8x16.sub_sat_s instruction
-    fn i8x16_sub_sat_s(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16SubSatS);
-        self
-    }
-
-    /// Inject an i8x16.sub_sat_u instruction
-    fn i8x16_sub_sat_u(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16SubSatU);
-        self
-    }
-
-    /// Inject an i8x16.min_s instruction
-    fn i8x16_min_s(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16MinS);
-        self
-    }
-
-    /// Inject an i8x16.min_u instruction
-    fn i8x16_min_u(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16MinU);
-        self
-    }
-
-    /// Inject an i8x16.max_s instruction
-    fn i8x16_max_s(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16MaxS);
-        self
-    }
-
-    /// Inject an i8x16.max_u instruction
-    fn i8x16_max_u(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16MaxU);
-        self
-    }
-
-    /// Inject an i8x16.avgr_u instruction
-    fn i8x16_avgr_u(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16AvgrU);
-        self
-    }
-
-    /// Inject an i16x8.extadd_pairwise_i8x16_s instruction
-    fn i16x8_extadd_pairwise_i8x16_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8ExtAddPairwiseI8x16S);
-        self
-    }
-
-    /// Inject an i16x8.extadd_pairwise_i8x16_u instruction
-    fn i16x8_extadd_pairwise_i8x16_u(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8ExtAddPairwiseI8x16U);
-        self
-    }
-
-    /// Inject an i16x8.abs instruction
-    fn i16x8_abs(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8Abs);
-        self
-    }
-
-    /// Inject an i16x8.neg instruction
-    fn i16x8_neg(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8Neg);
-        self
-    }
-
-    /// Inject an i16x8.q15mulr_sat_s instruction
-    fn i16x8_q15mulr_sat_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8Q15MulrSatS);
-        self
-    }
-
-    /// Inject an i16x8.all_true instruction
-    fn i16x8_all_true(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8AllTrue);
-        self
-    }
-
-    /// Inject an i16x8.bitmask instruction
-    fn i16x8_bitmask(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8Bitmask);
-        self
-    }
-
-    /// Inject an i16x8.narrow_i32x4_s instruction
-    fn i16x8_narrow_i32x4_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8NarrowI32x4S);
-        self
-    }
-
-    /// Inject an i16x8.narrow_i32x4_u instruction
-    fn i16x8_narrow_i32x4_u(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8NarrowI32x4U);
-        self
-    }
-
-    /// Inject an i16x8.extend_low_i8x16_s instruction
-    fn i16x8_extend_low_i8x16_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8ExtendLowI8x16S);
-        self
-    }
-
-    /// Inject an i16x8.extend_high_i8x16_s instruction
-    fn i16x8_extend_high_i8x16_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8ExtendHighI8x16S);
-        self
-    }
-
-    /// Inject an i16x8.extend_low_i8x16_u instruction
-    fn i16x8_extend_low_i8x16_u(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8ExtendLowI8x16U);
-        self
-    }
-
-    /// Inject an i16x8.extend_high_i8x16_u instruction
-    fn i16x8_extend_high_i8x16_u(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8ExtendHighI8x16U);
-        self
-    }
-
-    /// Inject an i16x8.shl instruction
-    fn i16x8_shl(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8Shl);
-        self
-    }
-
-    /// Inject an i16x8.shr_s instruction
-    fn i16x8_shr_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8ShrS);
-        self
-    }
-
-    /// Inject an i16x8.shr_u instruction
-    fn i16x8_shr_u(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8ShrU);
-        self
-    }
-
-    /// Inject an i16x8.add instruction
-    fn i16x8_add(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8Add);
-        self
-    }
-
-    /// Inject an i16x8.add_sat_s instruction
-    fn i16x8_add_sat_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8AddSatS);
-        self
-    }
-
-    /// Inject an i16x8.add_sat_u instruction
-    fn i16x8_add_sat_u(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8AddSatU);
-        self
-    }
-
-    /// Inject an i16x8.sub instruction
-    fn i16x8_sub(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8Sub);
-        self
-    }
-
-    /// Inject an i16x8.sub_sat_s instruction
-    fn i16x8_sub_sat_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8SubSatS);
-        self
-    }
-
-    /// Inject an i16x8.sub_sat_u instruction
-    fn i16x8_sub_sat_u(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8SubSatU);
-        self
-    }
-
-    /// Inject an i16x8.mul instruction
-    fn i16x8_mul(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8Mul);
-        self
-    }
-
-    /// Inject an i16x8.min_s instruction
-    fn i16x8_min_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8MinS);
-        self
-    }
-
-    /// Inject an i16x8.min_u instruction
-    fn i16x8_min_u(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8MinU);
-        self
-    }
-
-    /// Inject an i16x8.max_s instruction
-    fn i16x8_max_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8MaxS);
-        self
-    }
-
-    /// Inject an i16x8.max_u instruction
-    fn i16x8_max_u(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8MaxU);
-        self
-    }
-
-    /// Inject an i16x8.avgr_u instruction
-    fn i16x8_avgr_u(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8AvgrU);
-        self
-    }
-
-    /// Inject an i16x8.extmul_low_i8x16_s instruction
-    fn i16x8_extmul_low_i8x16_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8ExtMulLowI8x16S);
-        self
-    }
-
-    /// Inject an i16x8.extmul_high_i8x16_s instruction
-    fn i16x8_extmul_high_i8x16_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8ExtMulHighI8x16S);
-        self
-    }
-
-    /// Inject an i16x8.extmul_low_i8x16_u instruction
-    fn i16x8_extmul_low_i8x16_u(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8ExtMulLowI8x16U);
-        self
-    }
-
-    /// Inject an i16x8.extmul_high_i8x16_u instruction
-    fn i16x8_extmul_high_i8x16_u(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8ExtMulHighI8x16U);
-        self
-    }
-
-    /// Inject an i32x4.extadd_pairwise_i16x8_s instruction
-    fn i32x4_extadd_pairwise_i16x8_s(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4ExtAddPairwiseI16x8S);
-        self
-    }
-
-    /// Inject an i32x4.extadd_pairwise_i16x8_u instruction
-    fn i32x4_extadd_pairwise_i16x8_u(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4ExtAddPairwiseI16x8U);
-        self
-    }
-
-    /// Inject an i32x4.abs instruction
-    fn i32x4_abs(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4Abs);
-        self
-    }
-
-    /// Inject an i32x4.neg instruction
-    fn i32x4_neg(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4Neg);
-        self
-    }
-
-    /// Inject an i32x4.all_true instruction
-    fn i32x4_all_true(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4AllTrue);
-        self
-    }
-
-    /// Inject an i32x4.bitmask instruction
-    fn i32x4_bitmask(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4Bitmask);
-        self
-    }
-
-    /// Inject an i32x4.extend_low_i16x8_s instruction
-    fn i32x4_extend_low_i16x8_s(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4ExtendLowI16x8S);
-        self
-    }
-
-    /// Inject an i32x4.extend_high_i16x8_s instruction
-    fn i32x4_extend_high_i16x8_s(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4ExtendHighI16x8S);
-        self
-    }
-
-    /// Inject an i32x4.extend_low_i16x8_u instruction
-    fn i32x4_extend_low_i16x8_u(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4ExtendLowI16x8U);
-        self
-    }
-
-    /// Inject an i32x4.extend_high_i16x8_u instruction
-    fn i32x4_extend_high_i16x8_u(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4ExtendHighI16x8U);
-        self
-    }
-
-    /// Inject an i32x4.shl instruction
-    fn i32x4_shl(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4Shl);
-        self
-    }
-
-    /// Inject an i32x4.shr_s instruction
-    fn i32x4_shr_s(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4ShrS);
-        self
-    }
-
-    /// Inject an i32x4.shr_u instruction
-    fn i32x4_shr_u(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4ShrU);
-        self
-    }
-
-    /// Inject an i32x4.add instruction
-    fn i32x4_add(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4Add);
-        self
-    }
-
-    /// Inject an i32x4.sub instruction
-    fn i32x4_sub(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4Sub);
-        self
-    }
-
-    /// Inject an i32x4.mul instruction
-    fn i32x4_mul(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4Mul);
-        self
-    }
-
-    /// Inject an i32x4.min_s instruction
-    fn i32x4_min_s(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4MinS);
-        self
-    }
-
-    /// Inject an i32x4.min_u instruction
-    fn i32x4_min_u(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4MinU);
-        self
-    }
-
-    /// Inject an i32x4.max_s instruction
-    fn i32x4_max_s(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4MaxS);
-        self
-    }
-
-    /// Inject an i32x4.max_u instruction
-    fn i32x4_max_u(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4MaxU);
-        self
-    }
-
-    /// Inject an i32x4.dot_i16x8_s instruction
-    fn i32x4_dot_i16x8_s(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4DotI16x8S);
-        self
-    }
-
-    /// Inject an i32x4.extmul_low_i16x8_s instruction
-    fn i32x4_extmul_low_i16x8_s(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4ExtMulLowI16x8S);
-        self
-    }
-
-    /// Inject an i32x4.extmul_high_i16x8_s instruction
-    fn i32x4_extmul_high_i16x8_s(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4ExtMulHighI16x8S);
-        self
-    }
-
-    /// Inject an i32x4.extmul_low_i16x8_u instruction
-    fn i32x4_extmul_low_i16x8_u(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4ExtMulLowI16x8U);
-        self
-    }
-
-    /// Inject an i32x4.extmul_high_i16x8_u instruction
-    fn i32x4_extmul_high_i16x8_u(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4ExtMulHighI16x8U);
-        self
-    }
-
-    /// Inject an i64x2.abs instruction
-    fn i64x2_abs(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2Abs);
-        self
-    }
-
-    /// Inject an i64x2.neg instruction
-    fn i64x2_neg(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2Neg);
-        self
-    }
-
-    /// Inject an i64x2.all_true instruction
-    fn i64x2_all_true(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2AllTrue);
-        self
-    }
-
-    /// Inject an i64x2.bitmask instruction
-    fn i64x2_bitmask(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2Bitmask);
-        self
-    }
-
-    /// Inject an i64x2.extend_low_i32x4_s instruction
-    fn i64x2_extend_low_i32x4_s(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2ExtendLowI32x4S);
-        self
-    }
-
-    /// Inject an i64x2.extend_high_i32x4_s instruction
-    fn i64x2_extend_high_i32x4_s(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2ExtendHighI32x4S);
-        self
-    }
-
-    /// Inject an i64x2.extend_low_i32x4_u instruction
-    fn i64x2_extend_low_i32x4_u(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2ExtendLowI32x4U);
-        self
-    }
-
-    /// Inject an i64x2.extend_high_i32x4_u instruction
-    fn i64x2_extend_high_i32x4_u(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2ExtendHighI32x4U);
-        self
-    }
-
-    /// Inject an i64x2.shl instruction
-    fn i64x2_shl(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2Shl);
-        self
-    }
-
-    /// Inject an i64x2.shr_s instruction
-    fn i64x2_shr_s(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2ShrS);
-        self
-    }
-
-    /// Inject an i64x2.shr_u instruction
-    fn i64x2_shr_u(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2ShrU);
-        self
-    }
-
-    /// Inject an i64x2.add instruction
-    fn i64x2_add(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2Add);
-        self
-    }
-
-    /// Inject an i64x2.sub instruction
-    fn i64x2_sub(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2Sub);
-        self
-    }
-
-    /// Inject an i64x2.mul instruction
-    fn i64x2_mul(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2Mul);
-        self
-    }
-
-    /// Inject an i64x2.extmul_low_i32x4_s instruction
-    fn i64x2_extmul_low_i32x4_s(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2ExtMulLowI32x4S);
-        self
-    }
-
-    /// Inject an i64x2.extmul_high_i32x4_s instruction
-    fn i64x2_extmul_high_i32x4_s(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2ExtMulHighI32x4S);
-        self
-    }
-
-    /// Inject an i64x2.extmul_low_i32x4_u instruction
-    fn i64x2_extmul_low_i32x4_u(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2ExtMulLowI32x4U);
-        self
-    }
-
-    /// Inject an i64x2.extmul_high_i32x4_u instruction
-    fn i64x2_extmul_high_i32x4_u(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2ExtMulHighI32x4U);
-        self
-    }
-
-    /// Inject an f32x4.ceil instruction
-    fn f32x4_ceil(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Ceil);
-        self
-    }
-
-    /// Inject an f32x4.floor instruction
-    fn f32x4_floor(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Floor);
-        self
-    }
-
-    /// Inject an f32x4.trunc instruction
-    fn f32x4_trunc(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Trunc);
-        self
-    }
-
-    /// Inject an f32x4.nearest instruction
-    fn f32x4_nearest(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Nearest);
-        self
-    }
-
-    /// Inject an f32x4.abs instruction
-    fn f32x4_abs(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Abs);
-        self
-    }
-
-    /// Inject an f32x4.neg instruction
-    fn f32x4_neg(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Neg);
-        self
-    }
-
-    /// Inject an f32x4.sqrt instruction
-    fn f32x4_sqrt(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Sqrt);
-        self
-    }
-
-    /// Inject an f32x4.add instruction
-    fn f32x4_add(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Add);
-        self
-    }
-
-    /// Inject an f32x4.sub instruction
-    fn f32x4_sub(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Sub);
-        self
-    }
-
-    /// Inject an f32x4.mul instruction
-    fn f32x4_mul(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Mul);
-        self
-    }
-
-    /// Inject an f32x4.div instruction
-    fn f32x4_div(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Div);
-        self
-    }
-
-    /// Inject an f32x4.min instruction
-    fn f32x4_min(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Min);
-        self
-    }
-
-    /// Inject an f32x4.max instruction
-    fn f32x4_max(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4Max);
-        self
-    }
-
-    /// Inject an f32x4.pmin instruction
-    fn f32x4_pmin(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4PMin);
-        self
-    }
-
-    /// Inject an f32x4.pmax instruction
-    fn f32x4_pmax(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4PMax);
-        self
-    }
-
-    /// Inject an f64x2.ceil instruction
-    fn f64x2_ceil(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Ceil);
-        self
-    }
-
-    /// Inject an f64x2.floor instruction
-    fn f64x2_floor(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Floor);
-        self
-    }
-
-    /// Inject an f64x2.trunc instruction
-    fn f64x2_trunc(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Trunc);
-        self
-    }
-
-    /// Inject an f64x2.nearest instruction
-    fn f64x2_nearest(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Nearest);
-        self
-    }
-
-    /// Inject an f64x2.abs instruction
-    fn f64x2_abs(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Abs);
-        self
-    }
-
-    /// Inject an f64x2.neg instruction
-    fn f64x2_neg(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Neg);
-        self
-    }
-
-    /// Inject an f64x2.sqrt instruction
-    fn f64x2_sqrt(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Sqrt);
-        self
-    }
-
-    /// Inject an f64x2.add instruction
-    fn f64x2_add(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Add);
-        self
-    }
-
-    /// Inject an f64x2.sub instruction
-    fn f64x2_sub(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Sub);
-        self
-    }
-
-    /// Inject an f64x2.mul instruction
-    fn f64x2_mul(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Mul);
-        self
-    }
-
-    /// Inject an f64x2.div instruction
-    fn f64x2_div(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Div);
-        self
-    }
-
-    /// Inject an f64x2.min instruction
-    fn f64x2_min(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Min);
-        self
-    }
-
-    /// Inject an f64x2.max instruction
-    fn f64x2_max(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2Max);
-        self
-    }
-
-    /// Inject an f64x2.pmin instruction
-    fn f64x2_pmin(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2PMin);
-        self
-    }
-
-    /// Inject an f64x2.pmax instruction
-    fn f64x2_pmax(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2PMax);
-        self
-    }
-
-    /// Inject an i32x4.trunc_sat_f32x4_s instruction
-    fn i32x4_trunc_sat_f32x4_s(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4TruncSatF32x4S);
-        self
-    }
-
-    /// Inject an i32x4.trunc_sat_f32x4_u instruction
-    fn i32x4_trunc_sat_f32x4_u(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4TruncSatF32x4U);
-        self
-    }
-
-    /// Inject an f32x4.convert_i32x4_s instruction
-    fn f32x4_convert_i32x4_s(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4ConvertI32x4S);
-        self
-    }
-
-    /// Inject an f32x4.convert_i32x4_u instruction
-    fn f32x4_convert_i32x4_u(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4ConvertI32x4U);
-        self
-    }
-
-    /// Inject an i32x4.trunc_sat_f64x2_s_zero instruction
-    fn i32x4_trunc_sat_f64x2_s_zero(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4TruncSatF64x2SZero);
-        self
-    }
-
-    /// Inject an i32x4.trunc_sat_f64x2_u_zero instruction
-    fn i32x4_trunc_sat_f64x2_u_zero(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4TruncSatF64x2UZero);
-        self
-    }
-
-    /// Inject an f64x2.convert_low_i32x4_s instruction
-    fn f64x2_convert_low_i32x4_s(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2ConvertLowI32x4S);
-        self
-    }
-
-    /// Inject an f64x2.convert_low_i32x4_u instruction
-    fn f64x2_convert_low_i32x4_u(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2ConvertLowI32x4U);
-        self
-    }
-
-    /// Inject an f32x4.demote_f64x2_zero instruction
-    fn f32x4_demote_f64x2_zero(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4DemoteF64x2Zero);
-        self
-    }
-
-    /// Inject an f64x2.promote_low_f32x4 instruction
-    fn f64x2_promote_low_f32x4(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2PromoteLowF32x4);
-        self
-    }
-
-    // Relaxed SIMD Instructions
-
-    /// Inject an i8x16.relaxed_swizzle instruction
-    fn i8x16_relaxed_swizzle(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16RelaxedSwizzle);
-        self
-    }
-
-    /// Inject an i32x4.relaxed_trunc_f32x4_s instruction
-    fn i32x4_relaxed_trunc_f32x4_s(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4RelaxedTruncF32x4S);
-        self
-    }
-
-    /// Inject an i32x4.relaxed_trunc_f32x4_u instruction
-    fn i32x4_relaxed_trunc_f32x4_u(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4RelaxedTruncF32x4U);
-        self
-    }
-
-    /// Inject an i32x4.relaxed_trunc_f64x2_s_zero instruction
-    fn i32x4_relaxed_trunc_f64x2_s_zero(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4RelaxedTruncF64x2SZero);
-        self
-    }
-
-    /// Inject an i32x4.relaxed_trunc_f64x2_u_zero instruction
-    fn i32x4_relaxed_trunc_f64x2_u_zero(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4RelaxedTruncF64x2UZero);
-        self
-    }
-
-    /// Inject an f32x4.relaxed_madd instruction
-    fn f32x4_relaxed_madd(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4RelaxedMadd);
-        self
-    }
-
-    /// Inject an f32x4.relaxed_nmadd instruction
-    fn f32x4_relaxed_nmadd(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4RelaxedNmadd);
-        self
-    }
-
-    /// Inject an f64x2.relaxed_madd instruction
-    fn f64x2_relaxed_madd(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2RelaxedMadd);
-        self
-    }
-
-    /// Inject an f64x2.relaxed_nmadd instruction
-    fn f64x2_relaxed_nmadd(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2RelaxedNmadd);
-        self
-    }
-
-    /// Inject an i8x16.relaxed_laneselect instruction
-    fn i8x16_relaxed_laneselect(&mut self) -> &mut Self {
-        self.inject(Operator::I8x16RelaxedLaneselect);
-        self
-    }
-
-    /// Inject an i16x8.relaxed_laneselect instruction
-    fn i16x8_relaxed_laneselect(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8RelaxedLaneselect);
-        self
-    }
-
-    /// Inject an i32x4.relaxed_laneselect instruction
-    fn i32x4_relaxed_laneselect(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4RelaxedLaneselect);
-        self
-    }
-
-    /// Inject an i64x2.relaxed_laneselect instruction
-    fn i64x2_relaxed_laneselect(&mut self) -> &mut Self {
-        self.inject(Operator::I64x2RelaxedLaneselect);
-        self
-    }
-
-    /// Inject an f32x4.relaxed_min instruction
-    fn f32x4_relaxed_min(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4RelaxedMin);
-        self
-    }
-
-    /// Inject an f32x4.relaxed_max instruction
-    fn f32x4_relaxed_max(&mut self) -> &mut Self {
-        self.inject(Operator::F32x4RelaxedMax);
-        self
-    }
-
-    /// Inject an f64x2.relaxed_min instruction
-    fn f64x2_relaxed_min(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2RelaxedMin);
-        self
-    }
-
-    /// Inject an f64x2.relaxed_max instruction
-    fn f64x2_relaxed_max(&mut self) -> &mut Self {
-        self.inject(Operator::F64x2RelaxedMax);
-        self
-    }
-
-    /// Inject an i16x8.relaxed_q15mulr_s instruction
-    fn i16x8_relaxed_q15mulr_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8RelaxedQ15mulrS);
-        self
-    }
-
-    /// Inject an i16x8.relaxed_dot_i8x16_i7x16_s instruction
-    fn i16x8_relaxed_dot_i8x16_i7x16_s(&mut self) -> &mut Self {
-        self.inject(Operator::I16x8RelaxedDotI8x16I7x16S);
-        self
-    }
-
-    /// Inject an i32x4.relaxed_dot_i8x16_i7x16_add_s instruction
-    fn i32x4_relaxed_dot_i8x16_i7x16_add_s(&mut self) -> &mut Self {
-        self.inject(Operator::I32x4RelaxedDotI8x16I7x16AddS);
-        self
-    }
 }
 
 #[allow(dead_code)]
-/// Defines injection behaviour. Takes a [`wasmparser::Operator`] and instructions are defined [here].
-///
-/// [`wasmparser::Operator`]: https://docs.rs/wasmparser/latest/wasmparser/enum.Operator.html
-/// [here]: https://webassembly.github.io/spec/core/binary/instructions.html
+/// Additional convenience injection methods built on top of [`Opcode`].
 pub trait MacroOpcode<'a>: Inject<'a> {
-    /// Helper function to reinterpret an u32 as an i32 and inject an i32.const instruction with that reinterpreted value.
-    /// (Useful to emitting memory addresses.)
-    /// We cast using the `as` keyword to accomplish this.
-    /// See <https://github.com/thesuhas/wirm/issues/133> for an explanation.
+    /// Reinterpret a `u32` as `i32` and inject an `i32.const`.
+    ///
+    /// Useful for emitting memory addresses without a cast at the call site.
+    /// See <https://github.com/thesuhas/wirm/issues/133>.
     fn u32_const(&mut self, value: u32) -> &mut Self {
         let i32_val = value as i32;
         self.inject(Operator::I32Const { value: i32_val });
         self
     }
-    /// Helper function to reinterpret an u64 as an i64 and inject an i64.const instruction with that reinterpreted value.
-    /// (Useful to emitting memory addresses.)
-    /// We cast using the `as` keyword to accomplish this.
-    /// See <https://github.com/thesuhas/wirm/issues/133> for an explanation.
+
+    /// Reinterpret a `u64` as `i64` and inject an `i64.const`.
+    ///
+    /// See <https://github.com/thesuhas/wirm/issues/133>.
     fn u64_const(&mut self, value: u64) -> &mut Self {
         let i64_val = value as i64;
         self.inject(Operator::I64Const { value: i64_val });
