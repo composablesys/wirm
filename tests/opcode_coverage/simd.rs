@@ -1,7 +1,8 @@
 //! Coverage for the fixed-width SIMD proposal.
 //!
-//! Deferred: `v128_const` — `wasmparser::V128` has no public constructor in 0.244, so tests
-//! that need a v128 value on the stack use `i32.const X; i8x16.splat` to produce one instead.
+//! `v128_const` takes a `wasmparser::V128`, which exposes `From<{u128, i128}>` as of
+//! wasmparser 0.245. For ops that need a v128 *on the stack* we still use
+//! `i32.const X; i8x16.splat` since that's simpler than building a lane-wise constant.
 
 use crate::opcode_test;
 use wasmparser::MemArg;
@@ -44,6 +45,10 @@ const M4: MemArg = MemArg {
     offset: 0,
     memory: 0,
 };
+
+opcode_test!(v128_const_op, BASE_WAT, TARGET,
+    .v128_const(wasmparser::V128::from(0x0102030405060708090a0b0c0d0e0f10u128)).drop()
+);
 
 opcode_test!(v128_load_store, BASE_WAT, TARGET,
     .i32_const(0).v128_load(M4).drop()
