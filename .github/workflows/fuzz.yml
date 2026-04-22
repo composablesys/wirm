@@ -25,6 +25,7 @@ jobs:
           - module_roundtrip
           - module_instrument
           - component_roundtrip
+          - component_instrument
     steps:
       - uses: actions/checkout@v4
 
