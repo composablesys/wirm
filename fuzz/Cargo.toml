@@ -44,3 +44,10 @@ path = "fuzz_targets/component_instrument.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "component_concretize"
+path = "fuzz_targets/component_concretize.rs"
+test = false
+doc = false
+bench = false
