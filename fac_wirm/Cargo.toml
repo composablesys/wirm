@@ -5,5 +5,3 @@ edition = "2021"
 
 [dependencies]
 wirm = { path = "../../wirm" }
-wasmprinter = "0.235.0"
-wasmparser = "0.235.0"

@@ -11,8 +11,8 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 # wasm-smith releases in lockstep with wasmparser/wasm-encoder. When
 # bumping wirm's wasmparser dep, bump this to match. See fuzz/DECISIONS.md.
-wasm-smith = { version = "0.245.0", features = ["component-model"] }
-wasmparser = "0.245.0"
+wasm-smith = { version = "0.247.0", features = ["component-model"] }
+wasmparser = "0.247.0"
 
 [dependencies.wirm]
 path = ".."
