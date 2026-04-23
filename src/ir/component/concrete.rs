@@ -94,13 +94,7 @@ pub enum ConcreteValType<'a> {
     Enum(Vec<&'a str>),
     Map(Box<ConcreteValType<'a>>, Box<ConcreteValType<'a>>),
     FixedLengthList(Box<ConcreteValType<'a>>, u32),
-    /// A resource handle (`own<T>` or `borrow<T>`).
-    Resource,
-    /// A resource handle whose export name is known (from an instance-type scope).
-    ///
-    /// Produced when concretizing instance types that explicitly export named resource
-    /// types (e.g. `wasi:http/handler` exporting `"request"` and `"response"`).
-    /// The `&str` is the export name of the resource within the instance type.
+    /// A resource handle carrying its WIT name.
     NamedResource(&'a str),
     /// An async handle (`future<T>` or `stream<T>`).
     AsyncHandle,
@@ -229,8 +223,7 @@ fn concretize_comp_type<'a>(
 /// ```
 /// This function scans the declarations in order, tracking the sequential type index,
 /// and returns a map of `N → "request"` so that when `concretize_defined_type` sees
-/// `ComponentDefinedType::Own(N)`, it can return `ConcreteValType::NamedResource("request")`
-/// instead of the anonymous `ConcreteValType::Resource`.
+/// `ComponentDefinedType::Own(N)`, it returns `ConcreteValType::NamedResource("request")`.
 fn build_instance_resource_map<'a>(
     decls: &'a [InstanceTypeDeclaration<'a>],
     cx: &VisitCtx<'a>,
@@ -415,9 +408,13 @@ fn concretize_from_resolved_to_val<'a>(
         ResolvedItem::CompType(_, ComponentType::Defined(dt)) => {
             Some(concretize_defined_type(dt, comp, cx, resource_map))
         }
-        ResolvedItem::CompType(_, ComponentType::Resource { .. }) => {
-            Some(ConcreteValType::Resource)
-        }
+        // A bare `ComponentType::Resource` has no surrounding name
+        // context. Valid WIT always declares resources under a name
+        // (SubResource export); reaching here means we're processing
+        // a non-WIT-shaped component or the caller failed to pre-
+        // populate `resource_map`. Return None so the caller can
+        // decide to panic with its own context.
+        ResolvedItem::CompType(_, ComponentType::Resource { .. }) => None,
         // Follow outer-aliased type refs. Instance-type declarations of
         // the form `(alias outer N idx) (export "name" (type (eq M)))` —
         // produced by wit-component for `use other:pkg/types.{name}` —
@@ -447,7 +444,12 @@ fn concretize_from_resolved_to_val<'a>(
         ) => {
             if let Some(nested_comp) = resolve_instantiated_comp(comp, *instance_index) {
                 match nested_comp.concretize_export(name) {
-                    Some(ConcreteType::Resource) => Some(ConcreteValType::Resource),
+                    // Preserve the export name on the resource —
+                    // downstream code keys resource identity by name
+                    // (e.g. wit-bindgen-core unwraps it for
+                    // `HandleLift`). Returning bare `Resource` here
+                    // drops the name and panics the consumer.
+                    Some(ConcreteType::Resource) => Some(ConcreteValType::NamedResource(name)),
                     _ => None,
                 }
             } else {
@@ -625,7 +627,11 @@ fn concretize_from_resolved<'a>(
                 return resolve_type_from_import_instance(comp, *instance_index, name);
             };
             match nested_comp.concretize_export(name) {
-                Some(ConcreteType::Resource) => ConcreteValType::Resource,
+                // Preserve the export name on the resource —
+                // downstream code keys resource identity by name
+                // (wit-bindgen-core unwraps it for `HandleLift`).
+                // Returning bare `Resource` here drops the name.
+                Some(ConcreteType::Resource) => ConcreteValType::NamedResource(name),
                 // `concretize_export` returns `None` for exports the
                 // concretizer doesn't reconstruct today (notably
                 // `Defined` types). Flesh out handling here when a
@@ -681,7 +687,11 @@ fn concretize_comp_type_to_val<'a>(
 ) -> ConcreteValType<'a> {
     match ty {
         ComponentType::Defined(def) => concretize_defined_type(def, comp, cx, resource_map),
-        ComponentType::Resource { .. } => ConcreteValType::Resource,
+        ComponentType::Resource { .. } => panic!(
+            "concretize_comp_type_to_val: bare ComponentType::Resource has no name \
+             context — caller should be using resource_map / SubResource decls to \
+             supply the name before reaching here"
+        ),
         ComponentType::Func(_) | ComponentType::Instance(_) | ComponentType::Component(_) => {
             panic!("invalid component: {ty:?} is not a val-type kind")
         }
@@ -749,32 +759,18 @@ fn concretize_defined_type<'a>(
             Box::new(concretize_val_type(elem, comp, cx, resource_map)),
             *size,
         ),
-        ComponentDefinedType::Own(res_idx) => {
-            if let Some(&name) = resource_map.get(res_idx) {
-                ConcreteValType::NamedResource(name)
-            } else {
-                let type_ref = IndexedRef {
-                    depth: Depth::default(),
-                    space: Space::CompType,
-                    index: *res_idx,
-                };
-                let resolved = cx.resolve(&type_ref);
-                let found_name = match resolved {
-                    ResolvedItem::Import(_, imp) => {
-                        let refs = imp.get_type_refs();
-                        refs.iter()
-                            .find_map(|tr| resource_map.get(&tr.ref_.index).copied())
-                    }
-                    _ => None,
-                };
-                if let Some(name) = found_name {
-                    ConcreteValType::NamedResource(name)
-                } else {
-                    ConcreteValType::Resource
-                }
+        // `own<T>` and `borrow<T>` share the same name resolution.
+        ComponentDefinedType::Own(res_idx) | ComponentDefinedType::Borrow(res_idx) => {
+            match resolve_handle_resource_name(*res_idx, comp, cx, resource_map) {
+                Some(name) => ConcreteValType::NamedResource(name),
+                None => panic!(
+                    "wirm concretize: failed to resolve resource name for \
+                     handle idx={res_idx}; component may be non-WIT-shaped or \
+                     a `resolve_handle_resource_name` arm is missing for the \
+                     resolved variant — please report with the component"
+                ),
             }
         }
-        ComponentDefinedType::Borrow(_) => ConcreteValType::Resource,
         ComponentDefinedType::Future(_) | ComponentDefinedType::Stream(_) => {
             ConcreteValType::AsyncHandle
         }
@@ -876,6 +872,85 @@ fn concretize_comp_func_exports<'a>(comp: &'a Component<'a>) -> Option<ConcreteT
     })
 }
 
+/// Resolve the WIT name of the resource `res_idx` refers to, for
+/// `own<T>` / `borrow<T>` handle concretization. Returns `None`
+/// only on chains that terminate without hitting a named
+/// SubResource — caller should treat that as a bug, not an
+/// anonymous resource (valid WIT always declares resources).
+fn resolve_handle_resource_name<'a>(
+    res_idx: u32,
+    comp: &'a Component<'a>,
+    cx: &VisitCtx<'a>,
+    resource_map: &HashMap<u32, &'a str>,
+) -> Option<&'a str> {
+    if let Some(&name) = resource_map.get(&res_idx) {
+        return Some(name);
+    }
+    let type_ref = IndexedRef {
+        depth: Depth::default(),
+        space: Space::CompType,
+        index: res_idx,
+    };
+    match cx.resolve(&type_ref) {
+        ResolvedItem::Import(_, imp) => {
+            // First try the instance-scope resource_map, then fall
+            // back to the component-scope map (shim-component pattern:
+            // `(import "import-type-X" (type (eq N)))` where type N is
+            // a component-scope SubResource re-exported later with
+            // its WIT name).
+            imp.get_type_refs()
+                .iter()
+                .find_map(|tr| resource_map.get(&tr.ref_.index).copied())
+                .or_else(|| {
+                    let comp_map = build_component_resource_map(comp, cx);
+                    imp.get_type_refs()
+                        .iter()
+                        .find_map(|tr| comp_map.get(&tr.ref_.index).copied())
+                })
+        }
+        ResolvedItem::Alias(_, alias @ ComponentAlias::Outer { .. }) => {
+            match cx.resolve(&alias.get_item_ref().ref_) {
+                ResolvedItem::Import(_, imp) => imp
+                    .get_type_refs()
+                    .iter()
+                    .find_map(|tr| resource_map.get(&tr.ref_.index).copied())
+                    .or_else(|| {
+                        let comp_map = build_component_resource_map(comp, cx);
+                        imp.get_type_refs()
+                            .iter()
+                            .find_map(|tr| comp_map.get(&tr.ref_.index).copied())
+                    }),
+                _ => None,
+            }
+        }
+        // `alias export <inst> "name"` — per the spec, `name` IS
+        // the WIT-level resource name.
+        ResolvedItem::Alias(_, ComponentAlias::InstanceExport { name, .. }) => Some(name),
+        // Instance-type body decls. SubResource exports carry the
+        // WIT name directly; Eq-bound Type exports resolve to
+        // whatever type they equal, so follow the type_ref and
+        // re-enter this lookup.
+        ResolvedItem::InstTyDeclExport(
+            _,
+            InstanceTypeDeclaration::Export {
+                name,
+                ty: ComponentTypeRef::Type(TypeBounds::SubResource),
+            },
+        ) => Some(name.0),
+        ResolvedItem::InstTyDeclExport(
+            _,
+            InstanceTypeDeclaration::Export {
+                name,
+                ty: ComponentTypeRef::Type(TypeBounds::Eq(_)),
+            },
+        ) => Some(name.0),
+        other => {
+            eprintln!("[wirm] handle resolve unhandled variant for idx={res_idx}: {other:?}");
+            None
+        }
+    }
+}
+
 /// Resolve a **type** exported by an **import** instance (not a locally-instantiated component).
 ///
 /// When `(alias export $import-inst "type-name" (type $t))` appears inside a component and
@@ -887,7 +962,7 @@ fn concretize_comp_func_exports<'a>(comp: &'a Component<'a>) -> Option<ConcreteT
 fn resolve_type_from_import_instance<'a>(
     comp: &'a Component<'a>,
     instance_index: u32,
-    type_name: &str,
+    type_name: &'a str,
 ) -> ConcreteValType<'a> {
     let inst_ref = IndexedRef {
         depth: Depth::default(),
@@ -945,7 +1020,11 @@ fn resolve_type_from_import_instance<'a>(
             }
         }
     }
-    ConcreteValType::Resource
+    // Fallback when the decl loop doesn't find `type_name` — preserve
+    // the name the caller asked for as a `NamedResource` so downstream
+    // consumers (wit-bindgen-core, splicer) don't end up with
+    // anonymous resources and the name-matching logic stays sound.
+    ConcreteValType::NamedResource(type_name)
 }
 
 /// Follow a function alias that points into an **import** instance (not a locally-instantiated
