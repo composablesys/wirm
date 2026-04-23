@@ -7,28 +7,27 @@
 //!
 //! # WIT interface focus
 //!
-//! The current implementation is scoped to the needs of [WIT]-defined interfaces,
-//! where component imports and exports are either:
+//! The current implementation is scoped to the needs of [WIT]-defined interfaces:
 //!
-//! - **Instance types** whose exports are all **functions** (`ComponentType::Instance`
-//!   with `ComponentTypeRef::Func` exports), or
-//! - **Function types** (`ComponentType::Func`).
+//! - **Function exports** (`ComponentTypeRef::Func`) → `funcs`.
+//! - **Type exports** (`ComponentTypeRef::Type`, both `SubResource` and `Eq`) →
+//!   `type_exports`, including the `(alias outer) + (export (type (eq …)))`
+//!   chain wit-component produces for `use other:pkg/types.{X}`.
+//! - **Function types** (`ComponentType::Func`) at the top level.
 //!
-//! Non-function instance exports (nested instances, type exports, value exports) are
-//! intentionally skipped.  This covers the full surface of every WIT interface today.
+//! Nested instance exports and value exports are still intentionally skipped —
+//! see the TODO below. This covers the full surface of every WIT interface today.
 //!
 //! [WIT]: https://component-model.bytecodealliance.org/design/wit.html
 //!
 //! # TODO: extend beyond WIT interfaces
 //!
-//! A future release should generalise [`ConcreteType::Instance`] to carry all export
-//! kinds, not just functions.  Candidates include:
+//! Generalise [`ConcreteType::Instance`] to carry the remaining export kinds:
 //!
-//! - Type exports (resource declarations, defined types)
 //! - Nested instance exports
 //! - Value exports
 //!
-//! Until then, non-function exports silently produce no entry in the `Instance` vec.
+//! Until then, those exports silently produce no entry in the `Instance` vec.
 
 use crate::ir::component::idx_spaces::Space;
 use crate::ir::component::refs::{Depth, GetCompRefs, GetItemRef, GetTypeRefs, IndexedRef};
@@ -419,6 +418,46 @@ fn concretize_from_resolved_to_val<'a>(
         ResolvedItem::CompType(_, ComponentType::Resource { .. }) => {
             Some(ConcreteValType::Resource)
         }
+        // Follow outer-aliased type refs. Instance-type declarations of
+        // the form `(alias outer N idx) (export "name" (type (eq M)))` —
+        // produced by wit-component for `use other:pkg/types.{name}` —
+        // land here: the export's `Eq(M)` resolves to the alias decl,
+        // and the alias points one scope up at the declared type.
+        ResolvedItem::Alias(_, alias @ ComponentAlias::Outer { .. }) => {
+            concretize_from_resolved_to_val(
+                cx.resolve(&alias.get_item_ref().ref_),
+                comp,
+                cx,
+                resource_map,
+            )
+        }
+        // An outer `alias outer` can land on an instance-export alias
+        // at the parent component scope (e.g.
+        // `alias export $types "order"`). Follow the InstanceExport:
+        // for a locally-instantiated component, resolve through its
+        // export chain; for an imported instance, look up the named
+        // type on the import's declared instance type.
+        ResolvedItem::Alias(
+            _,
+            ComponentAlias::InstanceExport {
+                instance_index,
+                name,
+                ..
+            },
+        ) => {
+            if let Some(nested_comp) = resolve_instantiated_comp(comp, *instance_index) {
+                match nested_comp.concretize_export(name) {
+                    Some(ConcreteType::Resource) => Some(ConcreteValType::Resource),
+                    _ => None,
+                }
+            } else {
+                Some(resolve_type_from_import_instance(
+                    comp,
+                    *instance_index,
+                    name,
+                ))
+            }
+        }
         // Follow import's type refs (handles eq-bound aliases like error-code).
         ResolvedItem::Import(_, imp) => {
             for tr in imp.get_type_refs() {
@@ -429,6 +468,12 @@ fn concretize_from_resolved_to_val<'a>(
             }
             None
         }
+        // Anything else — core aliases, module / core-type / core-inst
+        // refs, non-val `CompType` variants, etc. — isn't a val-type
+        // kind per the component-model spec. `None` is the right
+        // behavior; the sibling `concretize_from_resolved` panics in
+        // the same shape because it's driven from a caller that
+        // already asserted the input should be a val type.
         _ => None,
     }
 }
@@ -502,6 +547,10 @@ fn resolve_and_concretize_func<'a>(
                 _ => None,
             }
         }
+        // Anything else — core aliases, module / core-type refs,
+        // non-`Func` `CompType` variants, etc. — can't resolve to a
+        // WIT function per the component-model spec, so `None` is
+        // correct.
         _ => None,
     }
 }
@@ -612,6 +661,14 @@ fn concretize_from_resolved<'a>(
                 );
             concretize_from_resolved(cx.resolve(&type_ref.ref_), comp, cx, resource_map)
         }
+        // Reaching this arm means the input references a
+        // `Module` / `Func` / `CompInst` / `CoreInst` / `CoreType` /
+        // `Export` / `CompTyDeclExport` / `ModuleTyDecl` (or a core
+        // `ComponentAlias::CoreInstanceExport`) where the component-
+        // model spec requires a val type. Panicking is correct:
+        // `concretize_from_resolved` is only called from sites that
+        // have already established the input must be a val type, so
+        // this is an invariant violation in the input component.
         other => panic!("invalid component: {other:?} is not a val-type kind"),
     }
 }
@@ -841,27 +898,34 @@ fn resolve_type_from_import_instance<'a>(
     // whose declared type is a component-model `Instance` type.
     let import = match comp.resolve(&inst_ref) {
         ResolvedItem::Import(_, imp) => imp,
-        _ => panic!("invalid component: instance {instance_index} is not an import"),
+        other => panic!(
+            "invalid component: instance {instance_index} is not an import \
+             (looking up type export `{type_name}`); resolved to {other:?}"
+        ),
     };
     let type_ref = import
         .get_type_refs()
         .into_iter()
         .next()
         .unwrap_or_else(|| {
-            panic!("invalid component: import for instance {instance_index} carries no type ref")
+            panic!(
+                "invalid component: import for instance {instance_index} carries no \
+                 type ref (looking up type export `{type_name}`)"
+            )
         });
     let ty = match comp.resolve(&type_ref.ref_) {
         ResolvedItem::CompType(_, ty) => ty,
-        _ => panic!(
-            "invalid component: type ref for instance {instance_index} does not resolve \
-             to a component type"
+        other => panic!(
+            "invalid component: type ref for instance {instance_index} does not \
+             resolve to a component type (looking up type export `{type_name}`); \
+             resolved to {other:?}"
         ),
     };
     let decls = match ty {
         ComponentType::Instance(decls) => decls,
-        _ => panic!(
+        other => panic!(
             "invalid component: instance {instance_index}'s declared type is not an \
-             instance type (looking up export `{type_name}`)"
+             instance type (looking up type export `{type_name}`); got {other:?}"
         ),
     };
     // Build a type-body scope so that outer-alias refs inside the decls resolve
