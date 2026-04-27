@@ -91,12 +91,16 @@ pub enum DataType {
     I31,
     I31Null,
     Exn,
+    ExnNull,
     NoExn,
+    NoExnNull,
     Module { ty_id: u32, nullable: bool },
     RecGroup(u32),
     CoreTypeId(u32), // TODO: Look at this
     Cont,
+    ContNull,
     NoCont,
+    NoContNull,
 }
 
 impl fmt::Display for DataType {
@@ -120,14 +124,18 @@ impl fmt::Display for DataType {
             DataType::Array => write!(f, "DataType: Array"),
             DataType::I31 => write!(f, "DataType: I31"),
             DataType::Exn => write!(f, "DataType: Exn"),
+            DataType::ExnNull => write!(f, "exn: null"),
             DataType::NoExn => write!(f, "DataType: NoExn"),
+            DataType::NoExnNull => write!(f, "noexn: null"),
             DataType::Module { ty_id, nullable } => {
                 write!(f, "module: {ty_id}, nullable: {nullable}",)
             }
             DataType::RecGroup(idx) => write!(f, "recgroup: {idx}"),
             DataType::CoreTypeId(idx) => write!(f, "coretypeid: {idx}"),
             DataType::Cont => write!(f, "cont"),
+            DataType::ContNull => write!(f, "cont: null"),
             DataType::NoCont => write!(f, "nocont"),
+            DataType::NoContNull => write!(f, "nocont: null"),
             DataType::FuncRefNull => write!(f, "funcref: null"),
             DataType::ExternRefNull => write!(f, "externref: null"),
             DataType::AnyNull => write!(f, "any: null"),
@@ -242,10 +250,34 @@ impl From<ValType> for DataType {
                             DataType::I31
                         }
                     }
-                    wasmparser::AbstractHeapType::Exn => DataType::Exn,
-                    wasmparser::AbstractHeapType::NoExn => DataType::NoExn,
-                    wasmparser::AbstractHeapType::Cont => DataType::Cont,
-                    wasmparser::AbstractHeapType::NoCont => DataType::NoCont,
+                    wasmparser::AbstractHeapType::Exn => {
+                        if ref_type.is_nullable() {
+                            DataType::ExnNull
+                        } else {
+                            DataType::Exn
+                        }
+                    }
+                    wasmparser::AbstractHeapType::NoExn => {
+                        if ref_type.is_nullable() {
+                            DataType::NoExnNull
+                        } else {
+                            DataType::NoExn
+                        }
+                    }
+                    wasmparser::AbstractHeapType::Cont => {
+                        if ref_type.is_nullable() {
+                            DataType::ContNull
+                        } else {
+                            DataType::Cont
+                        }
+                    }
+                    wasmparser::AbstractHeapType::NoCont => {
+                        if ref_type.is_nullable() {
+                            DataType::NoContNull
+                        } else {
+                            DataType::NoCont
+                        }
+                    }
                 },
                 HeapType::Concrete(u) | HeapType::Exact(u) => match u {
                     UnpackedIndex::Module(idx) => DataType::Module {
@@ -370,8 +402,22 @@ impl From<&DataType> for wasm_encoder::ValType {
                     ty: AbstractHeapType::Exn,
                 },
             }),
+            DataType::ExnNull => wasm_encoder::ValType::Ref(wasm_encoder::RefType {
+                nullable: true,
+                heap_type: wasm_encoder::HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::Exn,
+                },
+            }),
             DataType::NoExn => wasm_encoder::ValType::Ref(wasm_encoder::RefType {
                 nullable: false,
+                heap_type: wasm_encoder::HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::NoExn,
+                },
+            }),
+            DataType::NoExnNull => wasm_encoder::ValType::Ref(wasm_encoder::RefType {
+                nullable: true,
                 heap_type: wasm_encoder::HeapType::Abstract {
                     shared: false,
                     ty: AbstractHeapType::NoExn,
@@ -398,8 +444,22 @@ impl From<&DataType> for wasm_encoder::ValType {
                     ty: AbstractHeapType::Cont,
                 },
             }),
+            DataType::ContNull => wasm_encoder::ValType::Ref(wasm_encoder::RefType {
+                nullable: true,
+                heap_type: wasm_encoder::HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::Cont,
+                },
+            }),
             DataType::NoCont => wasm_encoder::ValType::Ref(wasm_encoder::RefType {
                 nullable: false,
+                heap_type: wasm_encoder::HeapType::Abstract {
+                    shared: false,
+                    ty: AbstractHeapType::NoCont,
+                },
+            }),
+            DataType::NoContNull => wasm_encoder::ValType::Ref(wasm_encoder::RefType {
+                nullable: true,
                 heap_type: wasm_encoder::HeapType::Abstract {
                     shared: false,
                     ty: AbstractHeapType::NoCont,
@@ -589,9 +649,29 @@ impl From<&DataType> for ValType {
                 )
                 .unwrap(),
             ),
+            DataType::ExnNull => ValType::Ref(
+                RefType::new(
+                    true,
+                    HeapType::Abstract {
+                        shared: false,
+                        ty: wasmparser::AbstractHeapType::Exn,
+                    },
+                )
+                .unwrap(),
+            ),
             DataType::NoExn => ValType::Ref(
                 RefType::new(
                     false,
+                    HeapType::Abstract {
+                        shared: false,
+                        ty: wasmparser::AbstractHeapType::NoExn,
+                    },
+                )
+                .unwrap(),
+            ),
+            DataType::NoExnNull => ValType::Ref(
+                RefType::new(
+                    true,
                     HeapType::Abstract {
                         shared: false,
                         ty: wasmparser::AbstractHeapType::NoExn,
@@ -624,9 +704,29 @@ impl From<&DataType> for ValType {
                 )
                 .unwrap(),
             ),
+            DataType::ContNull => ValType::Ref(
+                RefType::new(
+                    true,
+                    HeapType::Abstract {
+                        shared: false,
+                        ty: wasmparser::AbstractHeapType::Cont,
+                    },
+                )
+                .unwrap(),
+            ),
             DataType::NoCont => ValType::Ref(
                 RefType::new(
                     false,
+                    HeapType::Abstract {
+                        shared: false,
+                        ty: wasmparser::AbstractHeapType::NoCont,
+                    },
+                )
+                .unwrap(),
+            ),
+            DataType::NoContNull => ValType::Ref(
+                RefType::new(
+                    true,
                     HeapType::Abstract {
                         shared: false,
                         ty: wasmparser::AbstractHeapType::NoCont,
