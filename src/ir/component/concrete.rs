@@ -202,7 +202,7 @@ fn concretize_comp_type<'a>(
         }
         ComponentType::Func(ft) => {
             let cx = comp.enter_type_scope(ty);
-            // Seed from the component's resource exports — a bare func
+            // Seed from the component's resource exports since a bare func
             // type may reference component-scope resources by index.
             let resource_map = build_component_resource_map(comp, &cx);
             Some(ConcreteType::Func(concretize_func_ty(
