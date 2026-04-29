@@ -2141,7 +2141,8 @@ impl<'a> Module<'a> {
                 import_fn_id: function_id,
                 ty_id,
             }));
-        debug_assert!(self.functions.set_imported_fn_name(function_id, name));
+        let ok = self.functions.set_imported_fn_name(function_id, name);
+        debug_assert!(ok);
         true
     }
 
@@ -2150,10 +2151,12 @@ impl<'a> Module<'a> {
         if *id < self.imports.num_funcs {
             // the function is an import
             self.imports.set_fn_name(name.clone(), id);
-            debug_assert!(self.functions.set_imported_fn_name(id, name));
+            let ok = self.functions.set_imported_fn_name(id, name);
+            debug_assert!(ok);
         } else {
             // the function is local
-            debug_assert!(self.functions.set_local_fn_name(id, name));
+            let ok = self.functions.set_local_fn_name(id, name);
+            debug_assert!(ok);
         }
     }
 
