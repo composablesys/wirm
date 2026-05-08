@@ -1026,6 +1026,24 @@ impl<'a> Component<'a> {
                     );
                 }
                 Payload::ComponentStartSection { start, range: _ } => {
+                    // TODO: bug — each declared result adds a value to the
+                    // component value index space. The counter-bump fix below
+                    // is correct in isolation but exposes a downstream gap:
+                    // refs to start-result values have no resolution path
+                    // through the topological collector / `assign.rs` /
+                    // `ResolvedItem`. Re-enabling requires a dedicated
+                    // `SpaceSubtype::StartResult` (or analogous) and matching
+                    // plumbing in those visitors.
+                    //
+                    // let start_vec_idx = start_section.len();
+                    // for _ in 0..start.results {
+                    //     store_handle.borrow_mut().assign_assumed_id(
+                    //         &space_id,
+                    //         &Space::CompVal,
+                    //         &ComponentSection::ComponentStartSection,
+                    //         start_vec_idx,
+                    //     );
+                    // }
                     start_section.push(start);
                     Self::add_to_sections(
                         &mut sections,
