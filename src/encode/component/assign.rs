@@ -175,6 +175,19 @@ impl ComponentVisitor<'_> for Assigner {
     fn visit_core_instance(&mut self, cx: &VisitCtx<'_>, id: u32, inst: &Instance<'_>) {
         self.assign_actual_id(&cx.inner, true, &inst.index_space_of(), id)
     }
+    fn visit_start_section(
+        &mut self,
+        cx: &VisitCtx<'_>,
+        start: &wasmparser::ComponentStartFunction,
+    ) {
+        // The start function itself has no index-space slot
+        // (`Space::NA`), but each declared result occupies one slot in
+        // [`Space::CompVal`]. Map those parse-time assumed ids to fresh
+        // actual ids so later refs (`(value 1)` etc.) re-resolve correctly.
+        for value_id in cx.get_start_func_result_ids(start) {
+            self.assign_actual_id(&cx.inner, true, &Space::CompVal, *value_id);
+        }
+    }
 }
 
 #[derive(Clone, Default)]

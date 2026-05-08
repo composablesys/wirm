@@ -607,8 +607,26 @@ impl<'ir> TopoCtx<'ir> {
                             ctx,
                         )
                     }
-                    Space::CompVal
-                    | Space::CoreMemory
+                    Space::CompVal => {
+                        // CompVal lands in the main subvec only when the
+                        // value was produced by a start section's result —
+                        // imports/exports/aliases route through their own
+                        // subtypes. Schedule the start as the dep so it's
+                        // emitted (and its actual ids are assigned) before
+                        // anything that references the result.
+                        let dep_section = section_idx_of_kth_item(
+                            referenced_comp,
+                            ComponentSection::ComponentStartSection,
+                            idx,
+                        );
+                        self.collect_start_section(
+                            dep_section,
+                            &referenced_comp.start_section[idx],
+                            idx,
+                            ctx,
+                        )
+                    }
+                    Space::CoreMemory
                     | Space::CoreTable
                     | Space::CoreGlobal
                     | Space::CoreTag

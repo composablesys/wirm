@@ -567,6 +567,15 @@ impl<'a> VisitCtx<'a> {
         self.inner.current_section_idx
     }
 
+    /// Convenience pass-through to [`Component::get_start_func_result_ids`]
+    /// that dispatches against the component currently being visited.
+    pub fn get_start_func_result_ids(
+        &self,
+        start: &wasmparser::ComponentStartFunction,
+    ) -> Vec<crate::ir::id::ValueID> {
+        self.curr_component().get_start_func_result_ids(start)
+    }
+
     pub(crate) fn new(component: &'a Component<'a>) -> Self {
         Self {
             inner: VisitCtxInner::new(component),
@@ -816,6 +825,15 @@ pub enum ResolvedItem<'a, 'b> {
     /// The index is in the parent body's namespace; use
     /// [`ResolvedItem::space`] to get it.
     ModuleTyDecl(u32, &'a ModuleTypeDeclaration<'b>),
+
+    /// A resolved value produced by a component start function. Always in
+    /// [`Space::CompVal`]. The `u32` is the value-space index; the
+    /// `&ComponentStartFunction` is the start that produced it. If the
+    /// start declares multiple results, and you need to know *which* one
+    /// this is, call [`Component::get_start_func_result_ids`] on the
+    /// owning component and find the position of this index in the
+    /// returned list.
+    StartResult(u32, &'a ComponentStartFunction),
 }
 
 impl<'a, 'b> ResolvedItem<'a, 'b> {
@@ -838,7 +856,8 @@ impl<'a, 'b> ResolvedItem<'a, 'b> {
             | ResolvedItem::Export(i, _)
             | ResolvedItem::CompTyDeclExport(i, _)
             | ResolvedItem::InstTyDeclExport(i, _)
-            | ResolvedItem::ModuleTyDecl(i, _) => *i,
+            | ResolvedItem::ModuleTyDecl(i, _)
+            | ResolvedItem::StartResult(i, _) => *i,
         }
     }
 
@@ -866,6 +885,7 @@ impl<'a, 'b> ResolvedItem<'a, 'b> {
             ResolvedItem::CompTyDeclExport(_, decl) => decl.index_space_of(),
             ResolvedItem::InstTyDeclExport(_, decl) => decl.index_space_of(),
             ResolvedItem::ModuleTyDecl(_, decl) => decl.index_space_of(),
+            ResolvedItem::StartResult(_, _) => Space::CompVal,
         }
     }
 }
