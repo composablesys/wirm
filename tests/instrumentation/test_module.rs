@@ -5,7 +5,8 @@ use wirm::ir::id::{ExportsID, FunctionID, ImportsID, TypeID};
 use wirm::ir::module::module_functions::FuncKind::{Import, Local};
 use wirm::ir::module::module_functions::{ImportedFunction, LocalFunction};
 use wirm::ir::types::{Body, InitExpr, Value};
-use wirm::{DataType, InitInstr, Module, Opcode};
+use wirm::opcode::Instrumenter;
+use wirm::{DataType, InitInstr, Location, Module, Opcode};
 
 use crate::common::check_instrumentation_encoding;
 
@@ -625,6 +626,149 @@ fn add_global_with_import() {
         &mut module,
         &format!("{TEST_DEBUG_DIR}/add_global_with_import.wasm"),
         true,
+    );
+}
+
+// Each test below exercises a different special-instrumentation mode on a function
+// created via `FunctionBuilder::finish_module`, then asserts the injected ops
+// survive encoding (i.e. instrumentation on newly added local functions is not
+// silently dropped).
+fn parse_start_module() -> Module<'static> {
+    let file = "tests/test_inputs/handwritten/modules/_start.wat";
+    let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
+    let buff: &'static [u8] = Box::leak(buff.into_boxed_slice());
+    Module::parse(buff, false, false).expect("Unable to parse module")
+}
+
+fn encoded_wat(module: &Module) -> String {
+    let bytes = module.encode().expect("encode failed");
+    wasmprinter::print_bytes(bytes).expect("couldn't translate Wasm to wat")
+}
+
+#[test]
+fn func_entry_on_added_local_fn() {
+    let mut module = parse_start_module();
+
+    let new_fn_id = FunctionBuilder::new(&[], &[]).finish_module(&mut module);
+    let mut new_fn_mod = module.functions.get_fn_modifier(new_fn_id).unwrap();
+    new_fn_mod.func_entry();
+    new_fn_mod.i32_const(42);
+    new_fn_mod.drop();
+
+    let printed = encoded_wat(&module);
+    assert!(
+        printed.contains("i32.const 42"),
+        "func_entry instrumentation was dropped from the encoded module:\n{printed}"
+    );
+}
+
+#[test]
+fn func_exit_on_added_local_fn() {
+    let mut module = parse_start_module();
+
+    let new_fn_id = FunctionBuilder::new(&[], &[]).finish_module(&mut module);
+    let mut new_fn_mod = module.functions.get_fn_modifier(new_fn_id).unwrap();
+    new_fn_mod.func_exit();
+    new_fn_mod.i32_const(123);
+    new_fn_mod.drop();
+
+    let printed = encoded_wat(&module);
+    assert!(
+        printed.contains("i32.const 123"),
+        "func_exit instrumentation was dropped from the encoded module:\n{printed}"
+    );
+}
+
+#[test]
+fn before_at_non_zero_idx_on_added_local_fn() {
+    let mut module = parse_start_module();
+
+    let mut builder = FunctionBuilder::new(&[], &[]);
+    builder.i32_const(1);
+    builder.drop();
+    let new_fn_id = builder.finish_module(&mut module);
+
+    let mut new_fn_mod = module.functions.get_fn_modifier(new_fn_id).unwrap();
+    new_fn_mod.before_at(Location::Module {
+        func_idx: FunctionID(0),
+        instr_idx: 1,
+    });
+    new_fn_mod.i32_const(77);
+    new_fn_mod.drop();
+
+    let printed = encoded_wat(&module);
+    assert!(
+        printed.contains("i32.const 77"),
+        "before_at(idx 1) instrumentation was dropped from the encoded module:\n{printed}"
+    );
+}
+
+#[test]
+fn alternate_at_on_added_local_fn() {
+    let mut module = parse_start_module();
+
+    let mut builder = FunctionBuilder::new(&[], &[]);
+    builder.i32_const(1);
+    builder.drop();
+    let new_fn_id = builder.finish_module(&mut module);
+
+    let mut new_fn_mod = module.functions.get_fn_modifier(new_fn_id).unwrap();
+    new_fn_mod.alternate_at(Location::Module {
+        func_idx: FunctionID(0),
+        instr_idx: 0,
+    });
+    new_fn_mod.i32_const(88);
+
+    let printed = encoded_wat(&module);
+    assert!(
+        printed.contains("i32.const 88"),
+        "alternate_at instrumentation was dropped from the encoded module:\n{printed}"
+    );
+}
+
+#[test]
+fn func_entry_on_local_fn_added_after_import() {
+    let mut module = parse_start_module();
+
+    // Add an imported function first so num_funcs_added > 0.
+    module.add_import_func("env".to_string(), "imp".to_string(), TypeID(0));
+
+    let new_fn_id = FunctionBuilder::new(&[], &[]).finish_module(&mut module);
+    let mut new_fn_mod = module.functions.get_fn_modifier(new_fn_id).unwrap();
+    new_fn_mod.func_entry();
+    new_fn_mod.i32_const(55);
+    new_fn_mod.drop();
+
+    let printed = encoded_wat(&module);
+    assert!(
+        printed.contains("i32.const 55"),
+        "func_entry on a local fn added after an imported fn was dropped:\n{printed}"
+    );
+}
+
+#[test]
+fn func_entry_on_two_added_local_fns() {
+    let mut module = parse_start_module();
+
+    let fid1 = FunctionBuilder::new(&[], &[]).finish_module(&mut module);
+    let fid2 = FunctionBuilder::new(&[], &[]).finish_module(&mut module);
+    {
+        let mut m1 = module.functions.get_fn_modifier(fid1).unwrap();
+        m1.func_entry();
+        m1.i32_const(11);
+        m1.drop();
+    }
+    {
+        let mut m2 = module.functions.get_fn_modifier(fid2).unwrap();
+        m2.func_entry();
+        m2.i32_const(22);
+        m2.drop();
+    }
+
+    let printed = encoded_wat(&module);
+    assert!(
+        printed.contains("i32.const 11") && printed.contains("i32.const 22"),
+        "func_entry was dropped from one of two newly added local fns:\n{printed}"
     );
 }
 
