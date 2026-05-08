@@ -1234,6 +1234,71 @@ fn nested_add_component_produces_unique_uids() {
     assert_eq!(uids.len(), 4);
 }
 
+// ============================================================
+// add_start_section
+// ============================================================
+
+/// `add_start_section` returns a `ValueID` per declared result; using it to
+/// inject a start that consumes an imported value and produces a result we
+/// then export must round-trip and validate.
+#[test]
+fn add_start_section_round_trips() {
+    use crate::ir::id::{ComponentFunctionId, ValueID};
+    use wasmparser::ComponentExportName;
+
+    // Start from a component that imports a u32 value and a lift func that
+    // takes a u32 and produces a u32. We graft on a start section that
+    // consumes the imported value, produces a result, and exports it.
+    let b = bytes(
+        r#"(component
+            (import "v" (value $v u32))
+            (core module $m
+                (func (export "f") (param i32) (result i32) local.get 0))
+            (core instance $mi (instantiate $m))
+            (type $ft (func (param "x" u32) (result u32)))
+            (func $f (type $ft) (canon lift (core func $mi "f")))
+        )"#,
+    );
+    let mut comp = parsed(&b);
+
+    // The lift func is at component-function index 0; the imported value is
+    // at value index 0. (One func and one value in the parsed component.)
+    let func = ComponentFunctionId(0);
+    let imported_val = ValueID(0);
+
+    let result_ids = comp.add_start_section(func, vec![imported_val], 1);
+    assert_eq!(result_ids.len(), 1, "one declared result → one ValueID");
+    // The imported value occupies CompVal[0]; the start-result must be next.
+    assert_eq!(*result_ids[0], 1);
+
+    // Now export the produced value so the round-trip carries a non-trivial
+    // ref into the start-result slot.
+    comp.add_export_component_value(ComponentExportName("greeting"), result_ids[0], None);
+
+    let bytes = comp.encode().expect("encode");
+    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&bytes)
+        .expect("re-encoded component should validate");
+
+    // Confirm the export landed on the start-result by re-parsing.
+    let mut export_idx = None;
+    for payload in wasmparser::Parser::new(0).parse_all(&bytes) {
+        if let wasmparser::Payload::ComponentExportSection(reader) = payload.unwrap() {
+            for export in reader {
+                let export = export.unwrap();
+                if export.name.0 == "greeting" {
+                    export_idx = Some(export.index);
+                }
+            }
+        }
+    }
+    assert_eq!(
+        export_idx,
+        Some(1),
+        "export 'greeting' should reference the start-result at CompVal[1]"
+    );
+}
+
 #[test]
 fn concretize_func_import_referencing_borrowed_imported_subresource() {
     let b = bytes(

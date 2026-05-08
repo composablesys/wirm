@@ -112,6 +112,34 @@ pub struct Component<'a> {
     pub(crate) value_names: Names,
 }
 
+/// Bump the component value index space for each declared start-function
+/// result and record the allocated assumed-ids under `vec_idx` in
+/// [`ComponentSection::ComponentStartSection`]. Used by both the parser and
+/// [`Component::add_start_section`] so the keying stays consistent — refs to
+/// start-result values resolve by looking up `main_assumed_ids[vec_idx]` in
+/// the [`Space::CompVal`] tracker. Returns the assumed-ids in declaration
+/// order; the parser drops the return value, the mutation API wraps each in
+/// a [`ValueID`].
+fn allocate_start_result_assumed_ids(
+    store: &mut IndexStore,
+    scope: &ScopeId,
+    vec_idx: usize,
+    count: u32,
+) -> Vec<u32> {
+    (0..count)
+        .map(|_| {
+            store
+                .assign_assumed_id(
+                    scope,
+                    &Space::CompVal,
+                    &ComponentSection::ComponentStartSection,
+                    vec_idx,
+                )
+                .expect("CompVal accepts assign_assumed_id") as u32
+        })
+        .collect()
+}
+
 impl<'a> Component<'a> {
     /// Emit the Component into a wasm binary file.
     pub fn emit_wasm(&self, file_name: &str) -> crate::ir::types::Result<()> {
@@ -620,33 +648,41 @@ impl<'a> Component<'a> {
         ComponentInstanceId(id as u32)
     }
 
-    // Deferred until the parser-side start-result tracking bug is fixed (see
-    // the TODO in `parse_comp`'s `Payload::ComponentStartSection` arm). Once
-    // that lands, this should return `Vec<ValueID>` so callers can reference
-    // the produced values; shipping it before the fix would either ignore
-    // results (breaking calls that need them) or require a breaking signature
-    // change later.
-    //
-    // /// Add a start section to this component. `results` declares the number
-    // /// of values the start function produces — each becomes a new entry in
-    // /// the component value index space.
-    // pub fn add_start_section(
-    //     &mut self,
-    //     func: ComponentFunctionId,
-    //     arguments: Vec<ValueID>,
-    //     results: u32,
-    // ) -> Vec<ValueID> {
-    //     let arguments = arguments.iter().map(|v| **v).collect::<Vec<u32>>();
-    //     self.start_section.push(ComponentStartFunction {
-    //         func_index: *func,
-    //         arguments: arguments.into_boxed_slice(),
-    //         results,
-    //     });
-    //     self.add_section(ComponentSection::ComponentStartSection);
-    //     // ... allocate `results` ValueIDs through the index store and return
-    //     // them.
-    //     todo!()
-    // }
+    /// Add a start section to this component. `results` declares the number
+    /// of values the start function produces — each becomes a new entry in
+    /// the component value index space. Returns the [`ValueID`]s for those
+    /// new values in declaration order, so callers can reference them from
+    /// subsequent imports/exports/aliases.
+    pub fn add_start_section(
+        &mut self,
+        func: ComponentFunctionId,
+        arguments: Vec<ValueID>,
+        results: u32,
+    ) -> Vec<ValueID> {
+        // Allocate the result value-space slots BEFORE pushing the start, so
+        // they get keyed under this start's vec position (matches the parser
+        // path in `parse_comp`'s `ComponentStartSection` arm).
+        let start_vec_idx = self.start_section.len();
+        let result_ids = allocate_start_result_assumed_ids(
+            &mut self.index_store.borrow_mut(),
+            &self.space_id,
+            start_vec_idx,
+            results,
+        )
+        .into_iter()
+        .map(ValueID)
+        .collect();
+
+        let arguments = arguments.iter().map(|v| **v).collect::<Vec<u32>>();
+        self.start_section.push(ComponentStartFunction {
+            func_index: *func,
+            arguments: arguments.into_boxed_slice(),
+            results,
+        });
+        self.add_section(ComponentSection::ComponentStartSection);
+
+        result_ids
+    }
 
     fn add_to_sections(
         sections: &mut Vec<(u32, ComponentSection)>,
@@ -1035,14 +1071,12 @@ impl<'a> Component<'a> {
                     // Each declared result adds a value to the component
                     // value index space.
                     let start_vec_idx = start_section.len();
-                    for _ in 0..start.results {
-                        store_handle.borrow_mut().assign_assumed_id(
-                            &space_id,
-                            &Space::CompVal,
-                            &ComponentSection::ComponentStartSection,
-                            start_vec_idx,
-                        );
-                    }
+                    let _ = allocate_start_result_assumed_ids(
+                        &mut store_handle.borrow_mut(),
+                        &space_id,
+                        start_vec_idx,
+                        start.results,
+                    );
                     start_section.push(start);
                     Self::add_to_sections(
                         &mut sections,
