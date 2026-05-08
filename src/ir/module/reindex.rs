@@ -1,8 +1,16 @@
-//! Wrapper functions
+//! Index remapping for operators after sections have been edited.
 //!
-//! `refers_to_*` and `update_*_instr` are generated from
-//! `wasmparser::for_each_operator!`. Each operator is classified by the field
-//! names of its argument struct:
+//! When functions, globals, or memories are deleted from a module, the
+//! surviving entries shift down and any operator that referenced one of them
+//! by index needs to be rewritten with its new index. [`fix_op_id_mapping`]
+//! is the entry point: given the three index-remap tables, it dispatches each
+//! operator to the right per-category updater.
+//!
+//! ## How the dispatch is generated
+//!
+//! The categorization (`refers_to_*`) and update (`update_*_instr`) helpers
+//! are generated from `wasmparser::for_each_operator!`. Each operator is
+//! classified by the field names of its argument struct:
 //!
 //!   * `function_index`                           → function category
 //!   * `global_index`                             → global category
@@ -11,57 +19,35 @@
 //! New opcodes added upstream are routed automatically; a field rename in
 //! wasmparser would surface as a compile-time mismatch elsewhere rather than
 //! silently miss classifications here.
+//!
+//! Each macro receives the full operator list from `for_each_operator!` and
+//! expands to the entire `fn`. The fn body is a sequence of independent
+//! `if let` / `if matches!()` statements with early returns (rather than a
+//! single `match`). Generating arms via recursive macro calls inside
+//! `match { ... }` runs into the parser's pattern-macro restriction —
+//! expansions there must be a single pattern, not a complete `pat => body,`.
+//!
+//! `op` (and `mapping` for the update generators) is threaded through the
+//! recursive `@stmt` / `@scan` rules as a metavariable rather than as a free
+//! identifier. Each recursive expansion sits in a fresh syntax context, so a
+//! bare reference to `op` inside an inner template doesn't see the outer fn
+//! parameter; passing it as `$op_expr:ident` carries the original token (and
+//! its hygiene context) through unchanged.
+//!
+//! For each operator, the `@scan` rules pattern-match the bracketed arg list:
+//! literal idents (`memarg`, `mem`, `function_index`, ...) match only that
+//! exact field name; the catch-all `$_first:ident` arm peels one ident and
+//! recurses; `[]` falls through emitting nothing. Operators whose arg struct
+//! contains none of the target field names contribute no statement.
 
 use crate::error::Error::InstrumentationError;
 use crate::ir::types;
 use std::collections::HashMap;
 use wasmparser::Operator;
 
-pub fn indirect_namemap_parser2encoder(
-    namemap: wasmparser::IndirectNameMap,
-) -> wasm_encoder::IndirectNameMap {
-    let mut names = wasm_encoder::IndirectNameMap::new();
-    for name in namemap {
-        let naming = name.unwrap();
-        names.append(naming.index, &namemap_parser2encoder(naming.names));
-    }
-    names
-}
-
-pub fn namemap_parser2encoder(namemap: wasmparser::NameMap) -> wasm_encoder::NameMap {
-    let mut names = wasm_encoder::NameMap::new();
-    for name in namemap {
-        let naming = name.unwrap();
-        names.append(naming.index, naming.name);
-    }
-    names
-}
-
-// ── refers_to_* / update_*_instr generators ──────────────────────────────────
-//
-// Each macro receives the full operator list from `for_each_operator!` and
-// expands to the entire `pub(crate) fn`. The fn body is a sequence of
-// independent `if let` / `if matches!()` statements with early returns
-// (rather than a single `match`). Generating arms via recursive macro calls
-// inside `match { ... }` runs into the parser's pattern-macro restriction —
-// expansions there must be a single pattern, not a complete `pat => body,`.
-//
-// `op` (and `mapping` for the update generators) is threaded through the
-// recursive `@stmt` / `@scan` rules as a metavariable rather than as a free
-// identifier. Each recursive expansion sits in a fresh syntax context, so a
-// bare reference to `op` inside an inner template doesn't see the outer fn
-// parameter; passing it as `$op_expr:ident` carries the original token (and
-// its hygiene context) through unchanged.
-//
-// For each operator, the `@scan` rules pattern-match the bracketed arg list:
-// literal idents (`memarg`, `mem`, `function_index`, ...) match only that
-// exact field name; the catch-all `$_first:ident` arm peels one ident and
-// recurses; `[]` falls through emitting nothing. Operators whose arg struct
-// contains none of the target field names contribute no statement.
-
 macro_rules! refers_to_func_match {
     ($( @$proposal:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident ($($ann:tt)*))*) => {
-        pub(crate) fn refers_to_func(op: &Operator) -> bool {
+        fn refers_to_func(op: &Operator) -> bool {
             $( refers_to_func_match!(@stmt op, $op $({ $($arg)* })?); )*
             false
         }
@@ -82,7 +68,7 @@ wasmparser::for_each_operator!(refers_to_func_match);
 
 macro_rules! refers_to_global_match {
     ($( @$proposal:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident ($($ann:tt)*))*) => {
-        pub(crate) fn refers_to_global(op: &Operator) -> bool {
+        fn refers_to_global(op: &Operator) -> bool {
             $( refers_to_global_match!(@stmt op, $op $({ $($arg)* })?); )*
             false
         }
@@ -103,7 +89,7 @@ wasmparser::for_each_operator!(refers_to_global_match);
 
 macro_rules! refers_to_memory_match {
     ($( @$proposal:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident ($($ann:tt)*))*) => {
-        pub(crate) fn refers_to_memory(op: &Operator) -> bool {
+        fn refers_to_memory(op: &Operator) -> bool {
             $( refers_to_memory_match!(@stmt op, $op $({ $($arg)* })?); )*
             false
         }
@@ -130,7 +116,7 @@ wasmparser::for_each_operator!(refers_to_memory_match);
 
 macro_rules! update_fn_match {
     ($( @$proposal:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident ($($ann:tt)*))*) => {
-        pub(crate) fn update_fn_instr(op: &mut Operator, mapping: &HashMap<u32, u32>) -> types::Result<()> {
+        fn update_fn_instr(op: &mut Operator, mapping: &HashMap<u32, u32>) -> types::Result<()> {
             $( update_fn_match!(@stmt op, mapping, $op $({ $($arg)* })?); )*
             panic!("Internal error: Operation doesn't need to be checked for function IDs!")
         }
@@ -157,7 +143,7 @@ wasmparser::for_each_operator!(update_fn_match);
 
 macro_rules! update_global_match {
     ($( @$proposal:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident ($($ann:tt)*))*) => {
-        pub(crate) fn update_global_instr(
+        fn update_global_instr(
             op: &mut Operator,
             mapping: &HashMap<u32, u32>,
         ) -> types::Result<()> {
@@ -187,7 +173,7 @@ wasmparser::for_each_operator!(update_global_match);
 
 macro_rules! update_memory_match {
     ($( @$proposal:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident ($($ann:tt)*))*) => {
-        pub(crate) fn update_memory_instr(
+        fn update_memory_instr(
             op: &mut Operator,
             mapping: &HashMap<u32, u32>,
         ) -> types::Result<()> {
@@ -247,3 +233,24 @@ macro_rules! update_memory_match {
     };
 }
 wasmparser::for_each_operator!(update_memory_match);
+
+/// Rewrite any function/global/memory index referenced by `op` according to
+/// the supplied per-category remap tables. Called after sections have been
+/// edited and entries have shifted indices.
+pub(crate) fn fix_op_id_mapping(
+    op: &mut Operator,
+    func_mapping: &HashMap<u32, u32>,
+    global_mapping: &HashMap<u32, u32>,
+    memory_mapping: &HashMap<u32, u32>,
+) -> types::Result<()> {
+    if refers_to_func(op) {
+        update_fn_instr(op, func_mapping)?;
+    }
+    if refers_to_global(op) {
+        update_global_instr(op, global_mapping)?;
+    }
+    if refers_to_memory(op) {
+        update_memory_instr(op, memory_mapping)?;
+    }
+    Ok(())
+}

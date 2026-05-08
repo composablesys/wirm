@@ -20,16 +20,14 @@ use crate::ir::module::module_imports::{expand_imports, Import, ModuleImports};
 use crate::ir::module::module_memories::{ImportedMemory, LocalMemory, MemKind, Memories, Memory};
 use crate::ir::module::module_tables::{Element, ModuleTables, Table};
 use crate::ir::module::module_types::{ModuleTypes, RecGroup, Types};
+use crate::ir::module::names::{indirect_namemap_parser2encoder, namemap_parser2encoder};
+use crate::ir::module::reindex::fix_op_id_mapping;
 use crate::ir::module::side_effects::{InjectType, Injection};
 use crate::ir::types;
 use crate::ir::types::InstrumentationMode::{BlockAlt, BlockEntry, BlockExit, SemanticAfter};
 use crate::ir::types::{
     BlockType, Body, CustomSections, DataSegment, DataSegmentKind, ElementItems, ElementKind,
     Instructions, InstrumentationFlag,
-};
-use crate::ir::wrappers::{
-    indirect_namemap_parser2encoder, namemap_parser2encoder, refers_to_func, refers_to_global,
-    refers_to_memory, update_fn_instr, update_global_instr, update_memory_instr,
 };
 use crate::opcode::{Inject, Instrumenter};
 use crate::{Location, Opcode};
@@ -50,6 +48,8 @@ pub mod module_imports;
 pub mod module_memories;
 pub mod module_tables;
 pub mod module_types;
+pub(crate) mod names;
+pub(crate) mod reindex;
 pub mod side_effects;
 #[cfg(test)]
 mod test;
@@ -2313,24 +2313,6 @@ struct InstrBodyFlagged<'a> {
 struct InstrToInject<'a> {
     flagged: Vec<InstrBodyFlagged<'a>>,
     not_flagged: Vec<InstrBody<'a>>,
-}
-
-pub(crate) fn fix_op_id_mapping(
-    op: &mut Operator,
-    func_mapping: &HashMap<u32, u32>,
-    global_mapping: &HashMap<u32, u32>,
-    memory_mapping: &HashMap<u32, u32>,
-) -> types::Result<()> {
-    if refers_to_func(op) {
-        update_fn_instr(op, func_mapping)?;
-    }
-    if refers_to_global(op) {
-        update_global_instr(op, global_mapping)?;
-    }
-    if refers_to_memory(op) {
-        update_memory_instr(op, memory_mapping)?;
-    }
-    Ok(())
 }
 
 fn resolve_function_entry<'a, 'b, 'c>(
