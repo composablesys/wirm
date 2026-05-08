@@ -166,8 +166,6 @@ fn test_resolve_on_two_independent_inner_components() {
 /// for a lifted canonical function.
 #[test]
 fn test_get_type_of_exported_lift_func() {
-    use crate::ir::id::ComponentExportId;
-
     let b = bytes(
         r#"(component
       (core module $m
@@ -185,7 +183,8 @@ fn test_get_type_of_exported_lift_func() {
     );
     let comp = parsed(&b);
 
-    let ty = comp.get_type_of_exported_lift_func(ComponentExportId(0));
+    let export = comp.exports.first().expect("expected one export");
+    let ty = comp.get_type_of_exported_lift_func(export);
     assert!(
         ty.is_some(),
         "should find the type of the exported lift func"

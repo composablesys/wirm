@@ -1,11 +1,10 @@
 //! Container types for component-level item lists.
 //!
 //! Each holds an `AppendOnlyVec` of one IR variant and a thin `add` method
-//! that pushes and returns the typed ID. They share the same shape today;
-//! kept as separate structs because they're conceptually distinct and may
-//! grow per-kind helpers as the mutation API rounds out.
+//! that pushes and returns the items-vec position. They share the same
+//! shape today; kept as separate structs because they're conceptually
+//! distinct and may grow per-kind helpers as the mutation API rounds out.
 
-use crate::ir::id::{AliasId, CanonicalFuncId, ComponentTypeId};
 use crate::ir::AppendOnlyVec;
 use wasmparser::{CanonicalFunction, ComponentAlias, ComponentType};
 
@@ -18,10 +17,13 @@ impl<'a> Aliases<'a> {
         Self { items }
     }
 
-    pub(crate) fn add(&mut self, alias: ComponentAlias<'a>) -> AliasId {
-        let id = AliasId(self.items.len() as u32);
+    /// Push an alias and return its position in `items`. The caller is
+    /// responsible for resolving the alias's index-space ID via
+    /// `Component::add_section_and_get_id`.
+    pub(crate) fn add(&mut self, alias: ComponentAlias<'a>) -> usize {
+        let idx = self.items.len();
         self.items.push(alias);
-        id
+        idx
     }
 }
 
@@ -34,11 +36,13 @@ impl Canons {
         Self { items }
     }
 
-    /// Add a new canonical function to the component.
-    pub(crate) fn add(&mut self, canon: CanonicalFunction) -> CanonicalFuncId {
-        let id = CanonicalFuncId(self.items.len() as u32);
+    /// Push a canonical function and return its position in `items`. The
+    /// caller is responsible for resolving the function index-space ID via
+    /// `Component::add_section_and_get_id`.
+    pub(crate) fn add(&mut self, canon: CanonicalFunction) -> usize {
+        let idx = self.items.len();
         self.items.push(canon);
-        id
+        idx
     }
 }
 
@@ -51,11 +55,13 @@ impl<'a> ComponentTypes<'a> {
         Self { items }
     }
 
-    /// Add a new component type to the component.
-    /// This assumes that scope registration is done by the caller!
-    pub(crate) fn add(&mut self, ty: ComponentType<'a>) -> ComponentTypeId {
-        let id = ComponentTypeId(self.items.len() as u32);
+    /// Push a component type and return its position in `items`. The
+    /// caller is responsible for resolving the index-space ID via
+    /// `Component::add_section_and_get_id`, and for performing scope
+    /// registration.
+    pub(crate) fn add(&mut self, ty: ComponentType<'a>) -> usize {
+        let idx = self.items.len();
         self.items.push(Box::new(ty));
-        id
+        idx
     }
 }

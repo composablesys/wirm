@@ -1,10 +1,9 @@
 use crate::instrumentation::test_module::{try_path, validate_wasm};
 use wasmparser::{
-    CanonicalFunction, ComponentAlias, ComponentExport, ComponentExternalKind, ComponentImport,
-    ComponentImportName, ComponentType, ComponentTypeRef, Export, ExternalKind, Instance,
-    InstanceTypeDeclaration, InstantiationArg, InstantiationArgKind,
+    CanonicalFunction, ComponentAlias, ComponentExport, ComponentImport, ComponentImportName,
+    ComponentType, ComponentTypeRef, Export, ExternalKind, Instance, InstanceTypeDeclaration,
+    InstantiationArg, InstantiationArgKind,
 };
-use wirm::ir::id::ComponentExportId;
 use wirm::Component;
 
 pub const WHAMM_CORE_LIB_NAME: &str = "whamm_core";
@@ -75,11 +74,8 @@ pub fn configure_component_libraries<'a>(
         let mut decls = vec![];
         // let mut num_exported_fns = 0;
         let mut curr_ty_id = 0;
-        for (i, export) in lib_wasm.exports.iter().enumerate() {
-            if !matches!(export.kind, ComponentExternalKind::Func) {
-                continue;
-            }
-            let comp_ty = lib_wasm.get_type_of_exported_lift_func(ComponentExportId(i as u32));
+        for export in lib_wasm.exports.iter() {
+            let comp_ty = lib_wasm.get_type_of_exported_lift_func(export);
             if let Some(ty) = comp_ty.as_ref() {
                 if matches!(ty, ComponentType::Func(_)) {
                     decls.push(InstanceTypeDeclaration::Type((*ty).clone()));
@@ -91,7 +87,7 @@ pub fn configure_component_libraries<'a>(
                 }
             }
         }
-        let (inst_ty_id, ..) = wasm.add_type_instance(decls);
+        let inst_ty_id = wasm.add_component_type_instance(decls);
 
         // Import the library from an external provider
         let inst_id = wasm.add_import(ComponentImport {
@@ -102,13 +98,13 @@ pub fn configure_component_libraries<'a>(
         // Lower the exported functions using aliases
         let mut exports = vec![];
         for ComponentExport { name, kind, .. } in lib_wasm.exports.iter() {
-            let (alias_func_id, ..) = wasm.add_alias_func(ComponentAlias::InstanceExport {
+            let func_id = wasm.add_alias_func(ComponentAlias::InstanceExport {
                 name: name.0,
                 kind: *kind,
                 instance_index: inst_id,
             });
             let canon_id = wasm.add_canon_func(CanonicalFunction::Lower {
-                func_index: *alias_func_id,
+                func_index: *func_id,
                 options: vec![].into_boxed_slice(),
             });
 

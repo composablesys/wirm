@@ -91,7 +91,7 @@
 //! - [`Component::add_import`]
 //! - [`Component::add_canon_func`]
 //! - [`Component::add_alias_func`] / [`Component::add_alias_core_memory`]
-//! - [`Component::add_type_instance`] / [`Component::add_type_func`]
+//! - [`Component::add_component_type_instance`] / [`Component::add_component_type_func`]
 //! - [`Component::add_core_instance`]
 //!
 //! Each returns a typed ID you can reference from subsequent instruction

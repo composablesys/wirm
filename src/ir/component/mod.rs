@@ -4,10 +4,10 @@
 use crate::encode::component::encode;
 use crate::error::Error;
 use crate::error::Error::IO;
-use crate::ir::component::nodes::{Aliases, Canons, ComponentTypes};
 use crate::ir::component::idx_spaces::{
     IndexSpaceOf, IndexStore, ScopeId, Space, SpaceSubtype, StoreHandle,
 };
+use crate::ir::component::nodes::{Aliases, Canons, ComponentTypes};
 use crate::ir::component::refs::{GetItemRef, GetTypeRefs, IndexedRef};
 use crate::ir::component::scopes::{IndexScopeRegistry, RegistryHandle};
 use crate::ir::component::section::{
@@ -20,9 +20,8 @@ use crate::ir::helpers::{
     print_core_type,
 };
 use crate::ir::id::{
-    AliasFuncId, AliasId, AliasMemId, CanonicalFuncId, ComponentExportId, ComponentId,
-    ComponentTypeFuncId, ComponentTypeId, ComponentTypeInstanceId, CoreInstanceId, CustomSectionID,
-    FunctionID, GlobalID, ModuleID,
+    ComponentId, ComponentTypeId, CoreInstanceId, CustomSectionID, FunctionID, GlobalID, MemoryID,
+    ModuleID,
 };
 use crate::ir::module::module_globals::Global;
 use crate::ir::module::Module;
@@ -177,42 +176,45 @@ impl<'a> Component<'a> {
         id as u32
     }
 
-    /// Add an Aliased function to this Component.
-    pub fn add_alias_func(&mut self, alias: ComponentAlias<'a>) -> (AliasFuncId, AliasId) {
+    /// Add an aliased function to this Component. The returned `FunctionID`
+    /// is the index assigned in the function index space.
+    pub fn add_alias_func(&mut self, alias: ComponentAlias<'a>) -> FunctionID {
         let space = alias.index_space_of();
-        let alias_id = self.alias.add(alias);
-        let id = self.add_section_and_get_id(space, ComponentSection::Alias, *alias_id as usize);
+        let idx = self.alias.add(alias);
+        let id = self.add_section_and_get_id(space, ComponentSection::Alias, idx);
 
-        (AliasFuncId(id as u32), alias_id)
+        FunctionID(id as u32)
     }
 
-    /// Add an Aliased core memory to this Component.
-    pub fn add_alias_core_memory(&mut self, alias: ComponentAlias<'a>) -> (AliasMemId, AliasId) {
+    /// Add an aliased core memory to this Component. The returned
+    /// `MemoryID` is the index assigned in the core memory index space.
+    pub fn add_alias_core_memory(&mut self, alias: ComponentAlias<'a>) -> MemoryID {
         let space = alias.index_space_of();
-        let alias_id = self.alias.add(alias);
-        let id = self.add_section_and_get_id(space, ComponentSection::Alias, *alias_id as usize);
+        let idx = self.alias.add(alias);
+        let id = self.add_section_and_get_id(space, ComponentSection::Alias, idx);
 
-        (AliasMemId(id as u32), alias_id)
+        MemoryID(id as u32)
     }
 
-    /// Add a Canonical Function to this Component.
-    pub fn add_canon_func(&mut self, canon: CanonicalFunction) -> CanonicalFuncId {
+    /// Add a Canonical Function to this Component. The returned
+    /// `FunctionID` is the index assigned in the function index space.
+    pub fn add_canon_func(&mut self, canon: CanonicalFunction) -> FunctionID {
         let space = canon.index_space_of();
         let idx = self.canons.add(canon);
-        let id = self.add_section_and_get_id(space, ComponentSection::Canon, *idx as usize);
+        let id = self.add_section_and_get_id(space, ComponentSection::Canon, idx);
 
-        CanonicalFuncId(id as u32)
+        FunctionID(id as u32)
     }
 
-    /// Add a Component Type to this Component.
+    /// Add a component type to this Component. Returns the index assigned in
+    /// the component-type index space.
     pub(crate) fn add_component_type(
         &mut self,
         component_ty: ComponentType<'a>,
-    ) -> (u32, ComponentTypeId) {
+    ) -> ComponentTypeId {
         let space = component_ty.index_space_of();
-        let ty_id = self.component_types.add(component_ty);
-        let id =
-            self.add_section_and_get_id(space, ComponentSection::ComponentType, *ty_id as usize);
+        let idx = self.component_types.add(component_ty);
+        let id = self.add_section_and_get_id(space, ComponentSection::ComponentType, idx);
 
         // Handle the index space of this node
         populate_space_for_comp_ty(
@@ -221,30 +223,20 @@ impl<'a> Component<'a> {
             self.index_store.clone(),
         );
 
-        (id as u32, ty_id)
+        ComponentTypeId(id as u32)
     }
 
     /// Add a Component Type that is an Instance to this component.
-    pub fn add_type_instance(
+    pub fn add_component_type_instance(
         &mut self,
         decls: Vec<InstanceTypeDeclaration<'a>>,
-    ) -> (ComponentTypeInstanceId, ComponentTypeId) {
-        let (ty_inst_id, ty_id) =
-            self.add_component_type(ComponentType::Instance(decls.into_boxed_slice()));
-
-        // almost account for aliased types!
-        (ComponentTypeInstanceId(ty_inst_id), ty_id)
+    ) -> ComponentTypeId {
+        self.add_component_type(ComponentType::Instance(decls.into_boxed_slice()))
     }
 
     /// Add a Component Type that is a Function to this component.
-    pub fn add_type_func(
-        &mut self,
-        ty: ComponentFuncType<'a>,
-    ) -> (ComponentTypeFuncId, ComponentTypeId) {
-        let (ty_inst_id, ty_id) = self.add_component_type(ComponentType::Func(ty));
-
-        // almost account for aliased types!
-        (ComponentTypeFuncId(ty_inst_id), ty_id)
+    pub fn add_component_type_func(&mut self, ty: ComponentFuncType<'a>) -> ComponentTypeId {
+        self.add_component_type(ComponentType::Func(ty))
     }
 
     /// Add a new core instance to this component.
@@ -922,17 +914,32 @@ impl<'a> Component<'a> {
         Some(self.resolve(&export.get_item_ref().ref_))
     }
 
-    /// Lookup the type for an exported `lift` canonical function.
+    /// Lookup the type for an exported `lift` canonical function. Returns
+    /// `None` if `export` does not resolve (possibly through an alias /
+    /// export chain) to a `CanonicalFunction::Lift`. Imports terminate the
+    /// walk with `None` since they are not canonical functions.
     pub fn get_type_of_exported_lift_func(
         &self,
-        export_id: ComponentExportId,
+        export: &ComponentExport<'a>,
     ) -> Option<&ComponentType<'a>> {
-        let export = self.exports.get(*export_id as usize)?;
-        let type_ref = match self.resolve(&export.get_item_ref().ref_) {
-            ResolvedItem::Func(_, canon) => *canon.get_type_refs().first().unwrap(),
-            ResolvedItem::Alias(_, alias) => alias.get_item_ref(),
-            _ => unreachable!("exported lift func should resolve to a Func or Alias"),
+        // Walk through aliases / nested exports to the underlying canonical
+        // function. Imports are terminal — an imported function is declared
+        // externally and isn't a lift.
+        let mut item_ref = export.get_item_ref();
+        let canon = loop {
+            match self.resolve(&item_ref.ref_) {
+                ResolvedItem::Func(_, canon) => break canon,
+                ResolvedItem::Alias(_, alias) => item_ref = alias.get_item_ref(),
+                ResolvedItem::Export(_, exp) => item_ref = exp.get_item_ref(),
+                _ => return None,
+            }
         };
+        // Only lift funcs carry a component-level type; lower / resource
+        // canons don't.
+        if !matches!(canon, CanonicalFunction::Lift { .. }) {
+            return None;
+        }
+        let type_ref = *canon.get_type_refs().first()?;
         match self.resolve(&type_ref.ref_) {
             ResolvedItem::CompType(_, ty) => Some(ty),
             _ => None,
