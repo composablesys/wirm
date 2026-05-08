@@ -11,7 +11,6 @@ pub mod id;
 pub mod instr_tests;
 pub mod module;
 pub mod types;
-pub(crate) mod wrappers;
 
 /// An append-only vector with stable element addresses.
 ///

@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "wirm"
-version = "4.0.3"
+version = "4.0.5"
 dependencies = [
  "log",
  "paste",

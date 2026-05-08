@@ -1,11 +1,20 @@
-//! wasm-smith → wirm parse → inject `nop` before every op → encode → validate.
+//! wasm-smith → wirm parse → force ID shifts → inject `nop` before every op
+//! → encode → validate → assert no operator still references the shifted-out
+//! index.
 //!
-//! Exercises the instrumentation pipeline (iterator + injection) on top of the
-//! parse/encode surface that `module_roundtrip` already covers. In addition to
-//! "re-encoded output validates", we count operators in the binary before and
-//! after instrumentation and assert the count grew by exactly the number of
-//! injections — catches silent drops where `.before().nop()` is accepted but
-//! not emitted.
+//! Two complementary checks beyond a plain re-encode-and-validate:
+//!
+//! - **Operator count**: post == pre + injected. Catches silent drops where
+//!   `.before().nop()` is accepted but not emitted.
+//! - **No-stale-reference**: before injecting we add an imported memory,
+//!   global, and function. Imports append, so each new import lands at
+//!   index = `original_imported_count_of_kind` and any local entries of
+//!   that kind shift up by one. Every operator referencing such a local
+//!   has to be rewritten by the reindex pass. After encode we walk the
+//!   operator stream and assert that no op still references the just-added
+//!   import — if reindex skipped an op (e.g., because its variant wasn't in
+//!   the categorization table), that op would still point at its original
+//!   local index, which is now the freshly-added import.
 //!
 //! Design per fuzz/DECISIONS.md:
 //!
@@ -19,10 +28,11 @@
 
 use libfuzzer_sys::fuzz_target;
 use wasm_smith::Module as SmithModule;
+use wasmparser::MemoryType;
 use wirm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
 use wirm::iterator::module_iterator::ModuleIterator;
-use wirm::Opcode;
-use wirm_fuzz::count_ops;
+use wirm::{DataType, Opcode};
+use wirm_fuzz::{assert_no_reference_to, count_ops};
 
 fuzz_target!(|smith: SmithModule| {
     let bytes = smith.to_bytes();
@@ -42,6 +52,35 @@ fuzz_target!(|smith: SmithModule| {
     };
 
     let pre_count = count_ops(&bytes);
+
+    // Force ID shifts in the func/global/memory index spaces. Each new
+    // import lands at index = original_imported_count_of_kind, and any
+    // local entries shift up by one. This makes every operator that
+    // references one of those locals go through the reindex path.
+    let (forbidden_mem, _) = module.add_import_memory(
+        "wirm_fuzz".to_string(),
+        "forced_mem".to_string(),
+        MemoryType {
+            memory64: false,
+            shared: false,
+            initial: 0,
+            maximum: None,
+            page_size_log2: None,
+        },
+    );
+    let (forbidden_global, _) = module.add_imported_global(
+        "wirm_fuzz".to_string(),
+        "forced_global".to_string(),
+        DataType::I32,
+        false,
+        false,
+    );
+    let new_func_type = module.types.add_func_type(&[], &[]);
+    let (forbidden_func, _) = module.add_import_func(
+        "wirm_fuzz".to_string(),
+        "forced_func".to_string(),
+        new_func_type,
+    );
 
     let mut injected = 0usize;
     {
@@ -71,5 +110,12 @@ fuzz_target!(|smith: SmithModule| {
         pre_count + injected,
         "injected nops not observable in re-encoded body: \
          pre={pre_count}, injected={injected}, post={post_count}",
+    );
+
+    assert_no_reference_to(
+        &encoded,
+        forbidden_func.0,
+        forbidden_global.0,
+        forbidden_mem.0,
     );
 });

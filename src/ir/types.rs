@@ -17,8 +17,9 @@ use wasmparser::{ConstExpr, HeapType, Operator, RefType, UnpackedIndex, ValType}
 use crate::error::Error;
 use crate::error::Error::{InstrumentationError, UnknownId};
 use crate::ir::id::{CustomSectionID, FunctionID, GlobalID, ModuleID, TypeID};
+use crate::ir::module::add_injection;
+use crate::ir::module::reindex::fix_op_id_mapping;
 use crate::ir::module::side_effects::{InjectType, Injection};
-use crate::ir::module::{add_injection, fix_op_id_mapping};
 use crate::ir::types;
 
 pub type Result<T> = std::result::Result<T, Error>;

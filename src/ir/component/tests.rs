@@ -1165,3 +1165,58 @@ fn parse_comp_handles_root_sections_after_subcomponent() {
         ]
     );
 }
+
+// Regression: `concretize_import` on a func whose params/result reference
+// an imported `(sub resource)` (the wit-component resource shim pattern)
+// must recover the resource's WIT name from a sibling type re-export rather
+// than panicking in `resolve_handle_resource_name`.
+#[test]
+fn concretize_func_import_referencing_imported_subresource() {
+    let b = bytes(
+        r#"(component
+      (import "import-type-counter" (type (sub resource)))
+      (type (own 0))
+      (type (func (param "start" s32) (result 1)))
+      (import "import-constructor-counter" (func (type 2)))
+      (export "counter" (type 0))
+    )"#,
+    );
+    let comp = parsed(&b);
+    let result = comp.concretize_import("import-constructor-counter");
+    let Some(ConcreteType::Func(ft)) = result else {
+        panic!("expected Some(Func), got {result:?}");
+    };
+    // The result is `own counter`; before the fix the panic site was reached
+    // before this point, so simply matching `Func` is enough — but assert the
+    // resource name is recovered as "counter" so a regression in the lookup
+    // path stays caught.
+    let result_ty = ft.result.expect("expected a result type");
+    assert!(
+        matches!(result_ty, ConcreteValType::NamedResource("counter")),
+        "expected NamedResource(\"counter\"), got {result_ty:?}"
+    );
+}
+
+#[test]
+fn concretize_func_import_referencing_borrowed_imported_subresource() {
+    let b = bytes(
+        r#"(component
+      (import "import-type-counter" (type (sub resource)))
+      (type (borrow 0))
+      (type (func (param "self" 1)))
+      (import "import-method-counter-increment" (func (type 2)))
+      (export "counter" (type 0))
+    )"#,
+    );
+    let comp = parsed(&b);
+    let result = comp.concretize_import("import-method-counter-increment");
+    let Some(ConcreteType::Func(ft)) = result else {
+        panic!("expected Some(Func), got {result:?}");
+    };
+    let (param_name, param_ty) = ft.params.into_iter().next().expect("expected one param");
+    assert_eq!(param_name, "self");
+    assert!(
+        matches!(param_ty, ConcreteValType::NamedResource("counter")),
+        "expected NamedResource(\"counter\"), got {param_ty:?}"
+    );
+}
