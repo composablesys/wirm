@@ -20,8 +20,8 @@ use crate::ir::helpers::{
     print_core_type,
 };
 use crate::ir::id::{
-    AliasId, CanonFuncId, ComponentFunctionId, ComponentId, ComponentInstanceId, ComponentTypeId,
-    CoreInstanceId, CoreTypeId, CustomSectionID, FunctionID, ModuleID, ValueID,
+    AliasId, CanonFuncId, CompUniqueId, ComponentFunctionId, ComponentId, ComponentInstanceId,
+    ComponentTypeId, CoreInstanceId, CoreTypeId, CustomSectionID, FunctionID, ModuleID, ValueID,
 };
 use crate::ir::module::Module;
 use crate::ir::types::{CustomSection, CustomSections};
@@ -49,9 +49,14 @@ pub mod visitor;
 #[derive(Debug)]
 /// Intermediate Representation of a wasm component.
 pub struct Component<'a> {
-    pub id: ComponentId,
+    /// Wirm-internal globally-unique identifier for this component, used as
+    /// the HashMap key into the scope registry. Distinct from the
+    /// component-index-space position (a `ComponentId`), which is
+    /// parent-relative and only meaningful as a ref into a parent's
+    /// `components` vector.
+    pub uid: CompUniqueId,
     /// Nested Components
-    // These have scopes, but the scopes are looked up by ComponentId
+    // These have scopes, but the scopes are looked up by CompUniqueId
     pub components: AppendOnlyVec<Component<'a>>,
     /// Modules
     // These have scopes, but they aren't handled by component encoding logic
@@ -134,10 +139,11 @@ impl<'a> Component<'a> {
 
     fn add_section(&mut self, sect: ComponentSection) {
         // add to section order list
-        if !self.sections.is_empty() && self.sections[self.num_sections - 1].1 == sect {
+        if self.num_sections > 0 && self.sections[self.num_sections - 1].1 == sect {
             self.sections[self.num_sections - 1].0 += 1;
         } else {
             self.sections.push((1, sect));
+            self.num_sections += 1;
         }
     }
 
@@ -149,6 +155,108 @@ impl<'a> Component<'a> {
         self.modules.push(module);
 
         ModuleID(id as u32)
+    }
+
+    /// Allocate a sub-component scope: a fresh `ScopeId` plus a fresh
+    /// `CompUniqueId`, both threaded into a returned tuple alongside cloned
+    /// `Rc` handles to `self`'s scope registry and index store. Used by
+    /// `add_component` and `add_component_from_bytes` to set up a sub-scope
+    /// the same way the parser does for nested component sections.
+    fn alloc_sub_scope(&mut self) -> (ScopeId, CompUniqueId, RegistryHandle, StoreHandle) {
+        let sub_space_id = self.index_store.borrow_mut().new_scope();
+        let sub_uid = self.scope_registry.borrow_mut().alloc_uid();
+        (
+            sub_space_id,
+            sub_uid,
+            Rc::clone(&self.scope_registry),
+            Rc::clone(&self.index_store),
+        )
+    }
+
+    /// Register a freshly-built sub-component: assigns its index in this
+    /// component's component-index space, pushes it, and adds the section
+    /// marker.
+    fn register_sub_component(&mut self, sub: Component<'a>) -> ComponentId {
+        let idx = self.components.len();
+        let id =
+            self.add_section_and_get_id(sub.index_space_of(), ComponentSection::Component, idx);
+        self.components.push(sub);
+
+        ComponentId(id as u32)
+    }
+
+    /// Parse `bytes` as a complete component binary and add the result as a
+    /// sub-component of `self`. The new sub-component shares `self`'s
+    /// scope registry and index store, so refs inside it (including
+    /// `Outer`-scope aliases pointing back into `self`) resolve correctly
+    /// against `self`'s items.
+    pub fn add_component_from_bytes(&mut self, bytes: &'a [u8]) -> Result<ComponentId, Error> {
+        let (sub_space_id, sub_uid, registry, store) = self.alloc_sub_scope();
+        let sub = Self::parse_comp(
+            bytes,
+            false,
+            false,
+            Parser::new(0),
+            0,
+            sub_space_id,
+            sub_uid,
+            registry,
+            store,
+        )?;
+        Ok(self.register_sub_component(sub))
+    }
+
+    /// Add an empty sub-component to `self`, populate it via the supplied
+    /// builder closure, and register it. The sub-component shares `self`'s
+    /// scope registry and index store, so the closure can use the full
+    /// mutation API to add items that reference outer-scope (parent)
+    /// items via `add_alias_outer` etc.
+    pub fn add_component<F>(&mut self, f: F) -> ComponentId
+    where
+        F: FnOnce(&mut Component<'a>),
+    {
+        let (sub_space_id, sub_uid, registry, store) = self.alloc_sub_scope();
+        let mut sub = Component {
+            uid: sub_uid,
+            components: AppendOnlyVec::default(),
+            modules: AppendOnlyVec::default(),
+            component_types: ComponentTypes::new(AppendOnlyVec::default()),
+            component_instance: AppendOnlyVec::default(),
+            canons: Canons::new(AppendOnlyVec::default()),
+            alias: Aliases::new(AppendOnlyVec::default()),
+            imports: AppendOnlyVec::default(),
+            exports: AppendOnlyVec::default(),
+            core_types: AppendOnlyVec::default(),
+            instances: AppendOnlyVec::default(),
+            space_id: sub_space_id,
+            scope_registry: registry,
+            index_store: store,
+            custom_sections: CustomSections::new(vec![]),
+            start_section: AppendOnlyVec::default(),
+            sections: vec![],
+            num_sections: 0,
+            component_name: None,
+            core_func_names: Names::default(),
+            global_names: Names::default(),
+            memory_names: Names::default(),
+            tag_names: Names::default(),
+            table_names: Names::default(),
+            module_names: Names::default(),
+            core_instances_names: Names::default(),
+            core_type_names: Names::default(),
+            type_names: Names::default(),
+            instance_names: Names::default(),
+            components_names: Names::default(),
+            func_names: Names::default(),
+            value_names: Names::default(),
+        };
+        sub.scope_registry
+            .borrow_mut()
+            .register_comp(sub_uid, sub_space_id);
+
+        f(&mut sub);
+
+        self.register_sub_component(sub)
     }
 
     pub fn add_custom_section(&mut self, section: CustomSection<'a>) -> CustomSectionID {
@@ -594,10 +702,10 @@ impl<'a> Component<'a> {
     ) -> Result<Component<'_>, Error> {
         let parser = Parser::new(0);
 
-        let registry = IndexScopeRegistry::default();
+        let mut registry = IndexScopeRegistry::default();
         let mut store = IndexStore::default();
         let space_id = store.new_scope();
-        let mut next_comp_id = 0;
+        let root_uid = registry.alloc_uid();
         let res = Component::parse_comp(
             wasm,
             enable_multi_memory,
@@ -605,9 +713,9 @@ impl<'a> Component<'a> {
             parser,
             0,
             space_id,
+            root_uid,
             Rc::new(RefCell::new(registry)),
             Rc::new(RefCell::new(store)),
-            &mut next_comp_id,
         );
         res
     }
@@ -619,13 +727,10 @@ impl<'a> Component<'a> {
         parser: Parser,
         start: usize,
         space_id: ScopeId,
+        my_uid: CompUniqueId,
         registry_handle: RegistryHandle,
         store_handle: StoreHandle,
-        next_comp_id: &mut u32,
     ) -> Result<Component<'a>, Error> {
-        let my_comp_id = ComponentId(*next_comp_id);
-        *next_comp_id += 1;
-
         let mut modules = AppendOnlyVec::default();
         let mut core_types = AppendOnlyVec::default();
         let mut component_types = AppendOnlyVec::default();
@@ -890,6 +995,7 @@ impl<'a> Component<'a> {
                     unchecked_range,
                 } => {
                     let sub_space_id = store_handle.borrow_mut().new_scope();
+                    let sub_uid = registry_handle.borrow_mut().alloc_uid();
                     let sect = ComponentSection::Component;
 
                     stack.push(Encoding::Component);
@@ -900,9 +1006,9 @@ impl<'a> Component<'a> {
                         parser,
                         unchecked_range.start,
                         sub_space_id,
+                        sub_uid,
                         Rc::clone(&registry_handle),
                         Rc::clone(&store_handle),
-                        next_comp_id,
                     )?;
                     store_handle.borrow_mut().assign_assumed_id(
                         &space_id,
@@ -1004,11 +1110,11 @@ impl<'a> Component<'a> {
 
         // Scope discovery
         for comp in components.iter() {
-            let comp_id = comp.id;
+            let sub_uid = comp.uid;
             let sub_space_id = comp.space_id;
             registry_handle
                 .borrow_mut()
-                .register_comp(comp_id, sub_space_id);
+                .register_comp(sub_uid, sub_space_id);
         }
         for ty in core_types.iter() {
             populate_space_for_core_ty(ty, registry_handle.clone(), store_handle.clone());
@@ -1018,7 +1124,7 @@ impl<'a> Component<'a> {
         }
 
         let comp = Component {
-            id: my_comp_id,
+            uid: my_uid,
             modules,
             alias: Aliases::new(alias),
             core_types,
@@ -1054,7 +1160,7 @@ impl<'a> Component<'a> {
 
         comp.scope_registry
             .borrow_mut()
-            .register_comp(my_comp_id, space_id);
+            .register_comp(my_uid, space_id);
 
         Ok(comp)
     }

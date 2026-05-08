@@ -30,7 +30,7 @@ use crate::ir::component::scopes::{
 use crate::ir::component::section::ComponentSection;
 use crate::ir::component::visitor::driver::VisitEvent;
 use crate::ir::component::visitor::{ItemKind, ResolvedItem};
-use crate::ir::id::ComponentId;
+use crate::ir::id::CompUniqueId;
 use crate::Component;
 use wasmparser::{ComponentTypeDeclaration, InstanceTypeDeclaration, ModuleTypeDeclaration};
 
@@ -51,7 +51,7 @@ pub(crate) enum TypeBodyDecls<'a> {
 #[derive(Clone)]
 pub struct VisitCtxInner<'a> {
     pub(crate) registry: RegistryHandle,
-    pub(crate) component_stack: Vec<ComponentId>, // may not need
+    pub(crate) component_stack: Vec<CompUniqueId>, // may not need
     pub(crate) scope_stack: ScopeStack,
     pub(crate) node_has_nested_scope: Vec<bool>,
     /// Counts non-component (type/instance-type) scope levels currently on `scope_stack`.
@@ -110,16 +110,16 @@ impl<'a> VisitCtxInner<'a> {
     }
 
     pub fn push_component(&mut self, component: &Component) {
-        let id = component.id;
-        self.component_stack.push(id);
+        let uid = component.uid;
+        self.component_stack.push(uid);
         self.push_comp_section_tracker();
-        self.enter_comp_scope(id);
+        self.enter_comp_scope(uid);
     }
 
     pub fn pop_component(&mut self) {
-        let id = self.component_stack.pop().unwrap();
+        let uid = self.component_stack.pop().unwrap();
         self.pop_comp_section_tracker();
-        self.exit_comp_scope(id);
+        self.exit_comp_scope(uid);
     }
     pub fn curr_component(&self) -> &Component<'_> {
         let id = self.comp_at(Depth::default());
@@ -167,28 +167,28 @@ impl<'a> VisitCtxInner<'a> {
         }
     }
 
-    pub(crate) fn enter_comp_scope(&mut self, comp_id: ComponentId) {
+    pub(crate) fn enter_comp_scope(&mut self, uid: CompUniqueId) {
         let scope_id = self
             .registry
             .borrow()
-            .scope_of_comp(comp_id)
+            .scope_of_comp(uid)
             .expect("Internal error: no scope found for component");
         self.node_has_nested_scope
             .push(!self.scope_stack.stack.is_empty());
         self.scope_stack.enter_scope(scope_id);
     }
 
-    pub(crate) fn exit_comp_scope(&mut self, comp_id: ComponentId) {
+    pub(crate) fn exit_comp_scope(&mut self, uid: CompUniqueId) {
         let scope_id = self
             .registry
             .borrow()
-            .scope_of_comp(comp_id)
-            .unwrap_or_else(|| panic!("Internal error: no scope found for component {comp_id:?}"));
+            .scope_of_comp(uid)
+            .unwrap_or_else(|| panic!("Internal error: no scope found for component {uid:?}"));
         let exited_from = self.scope_stack.exit_scope();
         debug_assert_eq!(scope_id, exited_from);
     }
 
-    pub(crate) fn comp_at(&self, depth: Depth) -> &ComponentId {
+    pub(crate) fn comp_at(&self, depth: Depth) -> &CompUniqueId {
         // `depth` is relative to the scope_stack (which includes both component scopes and
         // type scopes), but component_stack only tracks component scopes.  Subtract the number
         // of type-scope levels that sit above the current component on scope_stack so that the

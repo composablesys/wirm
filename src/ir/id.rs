@@ -467,6 +467,27 @@ impl std::ops::Deref for ComponentId {
     }
 }
 
+/// A wirm-internal unique identifier for a `Component` within an IR tree.
+/// Distinct from [`ComponentId`], which is the wasm-spec component-index-space
+/// position and only meaningful relative to a parent. `CompUniqueId` is
+/// globally unique across the entire tree and used as the HashMap key for
+/// scope-registry lookups (see `IndexScopeRegistry::comp_scopes`). Allocated
+/// monotonically by the parser as it walks; not exposed in any public
+/// component-model index reference.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct CompUniqueId(pub u32);
+impl std::ops::Deref for CompUniqueId {
+    type Target = u32;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for CompUniqueId {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 /// The id of a component type
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ComponentTypeId(pub u32);

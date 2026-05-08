@@ -224,7 +224,7 @@ fn check_equality(evts0: &Vec<VisitEvent>, evts1: &Vec<VisitEvent>) {
                 VisitEvent::EnterRootComp { component: a_comp },
                 VisitEvent::EnterRootComp { component: b_comp },
             ) => {
-                assert_eq!(a_comp.id, b_comp.id);
+                assert_eq!(a_comp.uid, b_comp.uid);
                 // check pointing to same memory region
                 assert_eq!(*a_comp as *const Component, *b_comp as *const Component);
             }
@@ -232,7 +232,7 @@ fn check_equality(evts0: &Vec<VisitEvent>, evts1: &Vec<VisitEvent>) {
                 VisitEvent::ExitRootComp { component: a_comp },
                 VisitEvent::ExitRootComp { component: b_comp },
             ) => {
-                assert_eq!(a_comp.id, b_comp.id);
+                assert_eq!(a_comp.uid, b_comp.uid);
             }
             (
                 VisitEvent::EnterComp {
@@ -248,7 +248,7 @@ fn check_equality(evts0: &Vec<VisitEvent>, evts1: &Vec<VisitEvent>) {
             ) => {
                 assert_eq!(a_sec, b_sec);
                 assert_eq!(a_idx, b_idx);
-                assert_eq!(a_comp.id, b_comp.id);
+                assert_eq!(a_comp.uid, b_comp.uid);
             }
             (
                 VisitEvent::ExitComp {
@@ -264,7 +264,7 @@ fn check_equality(evts0: &Vec<VisitEvent>, evts1: &Vec<VisitEvent>) {
             ) => {
                 assert_eq!(a_sec, b_sec);
                 assert_eq!(a_idx, b_idx);
-                assert_eq!(a_comp.id, b_comp.id);
+                assert_eq!(a_comp.uid, b_comp.uid);
             }
             (
                 VisitEvent::Module {

@@ -1196,6 +1196,44 @@ fn concretize_func_import_referencing_imported_subresource() {
     );
 }
 
+// ============================================================
+// add_component / add_component_from_bytes — uid uniqueness
+// ============================================================
+
+/// Adding a sub-component to a sub-component must produce a globally-unique
+/// `CompUniqueId` — i.e. the deeply-nested sub must not collide with a
+/// sibling under a common outer parent. Regression test for the bug where
+/// uid allocation walked only `self`'s subtree, missing siblings reachable
+/// only via the outer parent.
+#[test]
+fn nested_add_component_produces_unique_uids() {
+    use std::collections::HashSet;
+    let b = bytes(r#"(component)"#);
+    let mut root = parsed(&b);
+
+    // Build:  root -> outer { inner_a } ; root -> sibling
+    // After add_component_to(outer, "inner_a"), if uid allocation walks only
+    // the outer's subtree it returns max(outer.uid)+1 — colliding with the
+    // already-allocated `sibling` under root.
+    let outer_idx = root.add_component(|_| {});
+    let _sibling_idx = root.add_component(|_| {});
+    // Push a sub-component into outer, post-hoc.
+    let outer = &mut root.components[*outer_idx as usize];
+    let _inner_idx = outer.add_component(|_| {});
+
+    // Walk the entire tree and confirm every uid is distinct.
+    let mut uids: HashSet<u32> = HashSet::new();
+    fn walk(c: &Component, uids: &mut HashSet<u32>) {
+        assert!(uids.insert(c.uid.0), "duplicate uid {}", c.uid.0);
+        for sub in c.components.iter() {
+            walk(sub, uids);
+        }
+    }
+    walk(&root, &mut uids);
+    // Root + 3 subs added.
+    assert_eq!(uids.len(), 4);
+}
+
 #[test]
 fn concretize_func_import_referencing_borrowed_imported_subresource() {
     let b = bytes(
