@@ -362,3 +362,33 @@ impl std::ops::DerefMut for CoreInstanceId {
         &mut self.0
     }
 }
+
+/// The ID of a component instance in a Component
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct ComponentInstanceId(pub u32);
+impl std::ops::Deref for ComponentInstanceId {
+    type Target = u32;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for ComponentInstanceId {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+/// The ID of a core type in a Component
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct CoreTypeId(pub u32);
+impl std::ops::Deref for CoreTypeId {
+    type Target = u32;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for CoreTypeId {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}

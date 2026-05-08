@@ -4,8 +4,7 @@
 use crate::encode::component::encode;
 use crate::error::Error;
 use crate::error::Error::IO;
-use crate::ir::component::alias::Aliases;
-use crate::ir::component::canons::Canons;
+use crate::ir::component::nodes::{Aliases, Canons, ComponentTypes};
 use crate::ir::component::idx_spaces::{
     IndexSpaceOf, IndexStore, ScopeId, Space, SpaceSubtype, StoreHandle,
 };
@@ -15,7 +14,6 @@ use crate::ir::component::section::{
     get_sections_for_comp_ty, get_sections_for_core_ty_and_assign_top_level_ids,
     populate_space_for_comp_ty, populate_space_for_core_ty, ComponentSection,
 };
-use crate::ir::component::types::ComponentTypes;
 use crate::ir::component::visitor::ResolvedItem;
 use crate::ir::helpers::{
     print_alias, print_component_export, print_component_import, print_component_type,
@@ -39,16 +37,14 @@ use wasmparser::{
     InstanceTypeDeclaration, NameMap, Parser, Payload,
 };
 
-mod alias;
-mod canons;
 pub mod concrete;
 pub mod idx_spaces;
+mod nodes;
 pub mod refs;
 pub(crate) mod scopes;
 pub(crate) mod section;
 #[cfg(test)]
 mod tests;
-mod types;
 pub mod visitor;
 
 #[derive(Debug)]
@@ -184,7 +180,7 @@ impl<'a> Component<'a> {
     /// Add an Aliased function to this Component.
     pub fn add_alias_func(&mut self, alias: ComponentAlias<'a>) -> (AliasFuncId, AliasId) {
         let space = alias.index_space_of();
-        let (_item_id, alias_id) = self.alias.add(alias);
+        let alias_id = self.alias.add(alias);
         let id = self.add_section_and_get_id(space, ComponentSection::Alias, *alias_id as usize);
 
         (AliasFuncId(id as u32), alias_id)
@@ -193,7 +189,7 @@ impl<'a> Component<'a> {
     /// Add an Aliased core memory to this Component.
     pub fn add_alias_core_memory(&mut self, alias: ComponentAlias<'a>) -> (AliasMemId, AliasId) {
         let space = alias.index_space_of();
-        let (_item_id, alias_id) = self.alias.add(alias);
+        let alias_id = self.alias.add(alias);
         let id = self.add_section_and_get_id(space, ComponentSection::Alias, *alias_id as usize);
 
         (AliasMemId(id as u32), alias_id)
@@ -202,7 +198,7 @@ impl<'a> Component<'a> {
     /// Add a Canonical Function to this Component.
     pub fn add_canon_func(&mut self, canon: CanonicalFunction) -> CanonicalFuncId {
         let space = canon.index_space_of();
-        let idx = self.canons.add(canon).1;
+        let idx = self.canons.add(canon);
         let id = self.add_section_and_get_id(space, ComponentSection::Canon, *idx as usize);
 
         CanonicalFuncId(id as u32)
@@ -214,9 +210,9 @@ impl<'a> Component<'a> {
         component_ty: ComponentType<'a>,
     ) -> (u32, ComponentTypeId) {
         let space = component_ty.index_space_of();
-        let ids = self.component_types.add(component_ty);
+        let ty_id = self.component_types.add(component_ty);
         let id =
-            self.add_section_and_get_id(space, ComponentSection::ComponentType, *ids.1 as usize);
+            self.add_section_and_get_id(space, ComponentSection::ComponentType, *ty_id as usize);
 
         // Handle the index space of this node
         populate_space_for_comp_ty(
@@ -225,7 +221,7 @@ impl<'a> Component<'a> {
             self.index_store.clone(),
         );
 
-        (id as u32, ids.1)
+        (id as u32, ty_id)
     }
 
     /// Add a Component Type that is an Instance to this component.
