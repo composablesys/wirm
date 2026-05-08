@@ -1,4 +1,16 @@
 //! Wrapper functions
+//!
+//! `refers_to_*` and `update_*_instr` are generated from
+//! `wasmparser::for_each_operator!`. Each operator is classified by the field
+//! names of its argument struct:
+//!
+//!   * `function_index`                           → function category
+//!   * `global_index`                             → global category
+//!   * `memarg` / `mem` / `src_mem` (+ `dst_mem`) → memory category
+//!
+//! New opcodes added upstream are routed automatically; a field rename in
+//! wasmparser would surface as a compile-time mismatch elsewhere rather than
+//! silently miss classifications here.
 
 use crate::error::Error::InstrumentationError;
 use crate::ir::types;
@@ -25,263 +37,213 @@ pub fn namemap_parser2encoder(namemap: wasmparser::NameMap) -> wasm_encoder::Nam
     names
 }
 
-pub(crate) fn refers_to_func(op: &Operator) -> bool {
-    matches!(
-        op,
-        Operator::Call { .. } | Operator::RefFunc { .. } | Operator::ReturnCall { .. }
-    )
-}
+// ── refers_to_* / update_*_instr generators ──────────────────────────────────
+//
+// Each macro receives the full operator list from `for_each_operator!` and
+// expands to the entire `pub(crate) fn`. The fn body is a sequence of
+// independent `if let` / `if matches!()` statements with early returns
+// (rather than a single `match`). Generating arms via recursive macro calls
+// inside `match { ... }` runs into the parser's pattern-macro restriction —
+// expansions there must be a single pattern, not a complete `pat => body,`.
+//
+// `op` (and `mapping` for the update generators) is threaded through the
+// recursive `@stmt` / `@scan` rules as a metavariable rather than as a free
+// identifier. Each recursive expansion sits in a fresh syntax context, so a
+// bare reference to `op` inside an inner template doesn't see the outer fn
+// parameter; passing it as `$op_expr:ident` carries the original token (and
+// its hygiene context) through unchanged.
+//
+// For each operator, the `@scan` rules pattern-match the bracketed arg list:
+// literal idents (`memarg`, `mem`, `function_index`, ...) match only that
+// exact field name; the catch-all `$_first:ident` arm peels one ident and
+// recurses; `[]` falls through emitting nothing. Operators whose arg struct
+// contains none of the target field names contribute no statement.
 
-pub(crate) fn refers_to_global(op: &Operator) -> bool {
-    matches!(
-        op,
-        Operator::GlobalGet { .. }
-            | Operator::GlobalSet { .. }
-            | Operator::GlobalAtomicGet { .. }
-            | Operator::GlobalAtomicSet { .. }
-            | Operator::GlobalAtomicRmwAdd { .. }
-            | Operator::GlobalAtomicRmwAnd { .. }
-            | Operator::GlobalAtomicRmwCmpxchg { .. }
-            | Operator::GlobalAtomicRmwOr { .. }
-            | Operator::GlobalAtomicRmwSub { .. }
-            | Operator::GlobalAtomicRmwXchg { .. }
-            | Operator::GlobalAtomicRmwXor { .. }
-    )
-}
-
-pub(crate) fn refers_to_memory(op: &Operator) -> bool {
-    matches!(
-        op,
-        Operator::I32Load { .. } |
-        Operator::I32Load8S { .. } |
-        Operator::I32Load8U { .. } |
-        Operator::I32Load16S { .. } |
-        Operator::I32Load16U { .. } |
-        Operator::I64Load { .. } |
-        Operator::I64Load8U { .. } |
-        Operator::I64Load8S { .. } |
-        Operator::I64Load16U { .. } |
-        Operator::I64Load16S { .. } |
-        Operator::I64Load32U { .. } |
-        Operator::I64Load32S { .. } |
-        Operator::F32Load { .. } |
-        Operator::F64Load { .. } |
-        Operator::V128Load { .. } |
-        Operator::I32AtomicLoad { .. } |
-        Operator::I32AtomicLoad8U { .. } |
-        Operator::I32AtomicLoad16U { .. } |
-        Operator::I64AtomicLoad8U { .. } |
-        Operator::I64AtomicLoad16U { .. } |
-        Operator::I64AtomicLoad32U { .. } |
-        Operator::V128Load8Lane { .. } |
-        Operator::V128Load16Lane { .. } |
-        Operator::V128Load32Lane { .. } |
-        Operator::V128Load64Lane { .. } |
-        Operator::V128Load8Splat { .. } |
-        Operator::V128Load16Splat { .. } |
-        Operator::V128Load32Splat { .. } |
-        Operator::V128Load64Splat { .. } |
-        Operator::V128Load8x8S { .. } |
-        Operator::V128Load8x8U { .. } |
-        Operator::V128Load16x4U { .. } |
-        Operator::V128Load16x4S { .. } |
-        Operator::V128Load32Zero { .. } |
-        Operator::V128Load32x2S { .. } |
-        Operator::V128Load32x2U { .. } |
-        Operator::V128Load64Zero { .. } |
-
-        // stores
-        Operator::I32Store { .. } |
-        Operator::I32Store8 { .. } |
-        Operator::I32Store16 { .. } |
-        Operator::I64Store { .. } |
-        Operator::I64Store8 { .. } |
-        Operator::I64Store16 { .. } |
-        Operator::I64Store32 { .. } |
-        Operator::F32Store { .. } |
-        Operator::F64Store { .. } |
-        Operator::I32AtomicStore { .. } |
-        Operator::I32AtomicStore8 { .. } |
-        Operator::I32AtomicStore16 { .. } |
-        Operator::I64AtomicStore { .. } |
-        Operator::I64AtomicStore8 { .. } |
-        Operator::I64AtomicStore16 { .. } |
-        Operator::I64AtomicStore32 { .. } |
-        Operator::V128Store { .. } |
-        Operator::V128Store8Lane { .. } |
-        Operator::V128Store16Lane { .. } |
-        Operator::V128Store32Lane { .. } |
-        Operator::V128Store64Lane { .. } |
-
-        // memory operations
-        Operator::MemoryAtomicNotify { .. } |
-        Operator::MemoryAtomicWait32 { .. } |
-        Operator::MemoryAtomicWait64 { .. } |
-        Operator::MemoryGrow { .. } |
-        Operator::MemoryFill { .. } |
-        Operator::MemoryInit { .. } |
-        Operator::MemorySize { .. } |
-        Operator::MemoryDiscard { .. } |
-        Operator::MemoryCopy { .. }
-    )
-}
-
-pub(crate) fn update_fn_instr(op: &mut Operator, mapping: &HashMap<u32, u32>) -> types::Result<()> {
-    match op {
-        Operator::Call { function_index }
-        | Operator::RefFunc { function_index }
-        | Operator::ReturnCall { function_index } => match mapping.get(&(*function_index)) {
-            Some(new_index) => {
-                *function_index = *new_index;
-            }
-            None => {
-                return Err(InstrumentationError(
-                    "Called a deleted function!".to_string(),
-                ))
-            }
-        },
-        _ => panic!("Internal error: Operation doesn't need to be checked for function IDs!"),
-    }
-    Ok(())
-}
-
-pub(crate) fn update_global_instr(
-    op: &mut Operator,
-    mapping: &HashMap<u32, u32>,
-) -> types::Result<()> {
-    match op {
-        Operator::GlobalGet { global_index }
-        | Operator::GlobalSet { global_index }
-        | Operator::GlobalAtomicGet { global_index, .. }
-        | Operator::GlobalAtomicSet { global_index, .. }
-        | Operator::GlobalAtomicRmwAdd { global_index, .. }
-        | Operator::GlobalAtomicRmwAnd { global_index, .. }
-        | Operator::GlobalAtomicRmwCmpxchg { global_index, .. }
-        | Operator::GlobalAtomicRmwOr { global_index, .. }
-        | Operator::GlobalAtomicRmwSub { global_index, .. }
-        | Operator::GlobalAtomicRmwXchg { global_index, .. }
-        | Operator::GlobalAtomicRmwXor { global_index, .. } => {
-            match mapping.get(&(*global_index)) {
-                Some(new_index) => {
-                    *global_index = *new_index;
-                }
-                None => {
-                    return Err(InstrumentationError(
-                        "Operation on a deleted global!".to_string(),
-                    ))
-                }
-            }
+macro_rules! refers_to_func_match {
+    ($( @$proposal:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident ($($ann:tt)*))*) => {
+        pub(crate) fn refers_to_func(op: &Operator) -> bool {
+            $( refers_to_func_match!(@stmt op, $op $({ $($arg)* })?); )*
+            false
         }
-        _ => panic!("Internal error: Operation doesn't need to be checked for global IDs!"),
-    }
-    Ok(())
+    };
+    (@stmt $op_expr:ident, $op_name:ident) => {};
+    (@stmt $op_expr:ident, $op_name:ident { $($args:ident)* }) => {
+        refers_to_func_match!(@scan $op_expr, $op_name [$($args)*])
+    };
+    (@scan $op_expr:ident, $op_name:ident []) => {};
+    (@scan $op_expr:ident, $op_name:ident [function_index $($_rest:ident)*]) => {
+        if matches!($op_expr, Operator::$op_name { .. }) { return true; }
+    };
+    (@scan $op_expr:ident, $op_name:ident [$_first:ident $($rest:ident)*]) => {
+        refers_to_func_match!(@scan $op_expr, $op_name [$($rest)*])
+    };
 }
+wasmparser::for_each_operator!(refers_to_func_match);
 
-pub(crate) fn update_memory_instr(
-    op: &mut Operator,
-    mapping: &HashMap<u32, u32>,
-) -> types::Result<()> {
-    match op {
-        // loads
-        Operator::I32Load { memarg } |
-        Operator::I32Load8S { memarg } |
-        Operator::I32Load8U { memarg } |
-        Operator::I32Load16S { memarg } |
-        Operator::I32Load16U { memarg } |
-        Operator::I64Load { memarg } |
-        Operator::I64Load8U { memarg } |
-        Operator::I64Load8S { memarg } |
-        Operator::I64Load16U { memarg } |
-        Operator::I64Load16S { memarg } |
-        Operator::I64Load32U { memarg } |
-        Operator::I64Load32S { memarg } |
-        Operator::F32Load { memarg } |
-        Operator::F64Load { memarg } |
-        Operator::V128Load { memarg } |
-        Operator::I32AtomicLoad { memarg } |
-        Operator::I32AtomicLoad8U { memarg } |
-        Operator::I32AtomicLoad16U { memarg } |
-        Operator::I64AtomicLoad8U { memarg } |
-        Operator::I64AtomicLoad16U { memarg } |
-        Operator::I64AtomicLoad32U { memarg } |
-        Operator::V128Load8Lane { memarg, .. } |
-        Operator::V128Load16Lane { memarg, .. } |
-        Operator::V128Load32Lane { memarg, .. } |
-        Operator::V128Load64Lane { memarg, .. } |
-        Operator::V128Load8Splat { memarg } |
-        Operator::V128Load16Splat { memarg } |
-        Operator::V128Load32Splat { memarg } |
-        Operator::V128Load64Splat { memarg } |
-        Operator::V128Load8x8S { memarg } |
-        Operator::V128Load8x8U { memarg } |
-        Operator::V128Load16x4U { memarg } |
-        Operator::V128Load16x4S { memarg } |
-        Operator::V128Load32Zero { memarg } |
-        Operator::V128Load32x2S { memarg } |
-        Operator::V128Load32x2U { memarg } |
-        Operator::V128Load64Zero { memarg } |
-
-        // stores
-        Operator::I32Store {memarg} |
-        Operator::I32Store8 {memarg} |
-        Operator::I32Store16 {memarg} |
-        Operator::I64Store {memarg} |
-        Operator::I64Store8 {memarg} |
-        Operator::I64Store16 {memarg} |
-        Operator::I64Store32 {memarg} |
-        Operator::F32Store {memarg} |
-        Operator::F64Store {memarg} |
-        Operator::I32AtomicStore {memarg} |
-        Operator::I32AtomicStore8 {memarg} |
-        Operator::I32AtomicStore16 {memarg} |
-        Operator::I64AtomicStore {memarg} |
-        Operator::I64AtomicStore8 {memarg} |
-        Operator::I64AtomicStore16 {memarg} |
-        Operator::I64AtomicStore32 {memarg} |
-        Operator::V128Store {memarg} |
-        Operator::V128Store8Lane {memarg, ..} |
-        Operator::V128Store16Lane {memarg, ..} |
-        Operator::V128Store32Lane {memarg, ..} |
-        Operator::V128Store64Lane {memarg, ..} |
-
-        // memory operations
-        Operator::MemoryAtomicNotify {memarg} |
-        Operator::MemoryAtomicWait32 {memarg} |
-        Operator::MemoryAtomicWait64 {memarg} => {
-            match mapping.get(&(memarg.memory)) {
-                Some(new_index) => {
-                    memarg.memory = *new_index;
-                }
-                None => return Err(InstrumentationError(format!("Attempting to reference a deleted memory, ID: {}", memarg.memory))),
-            }
+macro_rules! refers_to_global_match {
+    ($( @$proposal:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident ($($ann:tt)*))*) => {
+        pub(crate) fn refers_to_global(op: &Operator) -> bool {
+            $( refers_to_global_match!(@stmt op, $op $({ $($arg)* })?); )*
+            false
         }
-        Operator::MemoryGrow {mem} |
-        Operator::MemoryFill {mem} |
-        Operator::MemoryInit {mem, ..} |
-        Operator::MemorySize {mem} |
-        Operator::MemoryDiscard {mem} => {
-            match mapping.get(mem) {
-                Some(new_index) => {
-                    *mem = *new_index;
-                }
-                None => return Err(InstrumentationError(format!("Attempting to reference a deleted memory, ID: {}", mem))),
-            }
-        }
-        Operator::MemoryCopy {src_mem, dst_mem} => {
-            match mapping.get(src_mem) {
-                Some(new_index) => {
-                    *src_mem = *new_index;
-                }
-                None => return Err(InstrumentationError(format!("Attempting to reference a deleted memory, ID: {}", src_mem))),
-            }
-            match mapping.get(dst_mem) {
-                Some(new_index) => {
-                    *dst_mem = *new_index;
-                }
-                None => return Err(InstrumentationError(format!("Attempting to reference a deleted memory, ID: {}", dst_mem))),
-            }
-        }
-        _ => panic!("Internal error: Operation doesn't need to be checked for memory IDs!"),
-    }
-    Ok(())
+    };
+    (@stmt $op_expr:ident, $op_name:ident) => {};
+    (@stmt $op_expr:ident, $op_name:ident { $($args:ident)* }) => {
+        refers_to_global_match!(@scan $op_expr, $op_name [$($args)*])
+    };
+    (@scan $op_expr:ident, $op_name:ident []) => {};
+    (@scan $op_expr:ident, $op_name:ident [global_index $($_rest:ident)*]) => {
+        if matches!($op_expr, Operator::$op_name { .. }) { return true; }
+    };
+    (@scan $op_expr:ident, $op_name:ident [$_first:ident $($rest:ident)*]) => {
+        refers_to_global_match!(@scan $op_expr, $op_name [$($rest)*])
+    };
 }
+wasmparser::for_each_operator!(refers_to_global_match);
+
+macro_rules! refers_to_memory_match {
+    ($( @$proposal:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident ($($ann:tt)*))*) => {
+        pub(crate) fn refers_to_memory(op: &Operator) -> bool {
+            $( refers_to_memory_match!(@stmt op, $op $({ $($arg)* })?); )*
+            false
+        }
+    };
+    (@stmt $op_expr:ident, $op_name:ident) => {};
+    (@stmt $op_expr:ident, $op_name:ident { $($args:ident)* }) => {
+        refers_to_memory_match!(@scan $op_expr, $op_name [$($args)*])
+    };
+    (@scan $op_expr:ident, $op_name:ident []) => {};
+    (@scan $op_expr:ident, $op_name:ident [memarg  $($_rest:ident)*]) => {
+        if matches!($op_expr, Operator::$op_name { .. }) { return true; }
+    };
+    (@scan $op_expr:ident, $op_name:ident [mem     $($_rest:ident)*]) => {
+        if matches!($op_expr, Operator::$op_name { .. }) { return true; }
+    };
+    (@scan $op_expr:ident, $op_name:ident [src_mem $($_rest:ident)*]) => {
+        if matches!($op_expr, Operator::$op_name { .. }) { return true; }
+    };
+    (@scan $op_expr:ident, $op_name:ident [$_first:ident $($rest:ident)*]) => {
+        refers_to_memory_match!(@scan $op_expr, $op_name [$($rest)*])
+    };
+}
+wasmparser::for_each_operator!(refers_to_memory_match);
+
+macro_rules! update_fn_match {
+    ($( @$proposal:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident ($($ann:tt)*))*) => {
+        pub(crate) fn update_fn_instr(op: &mut Operator, mapping: &HashMap<u32, u32>) -> types::Result<()> {
+            $( update_fn_match!(@stmt op, mapping, $op $({ $($arg)* })?); )*
+            panic!("Internal error: Operation doesn't need to be checked for function IDs!")
+        }
+    };
+    (@stmt $op_expr:ident, $mapping:ident, $op_name:ident) => {};
+    (@stmt $op_expr:ident, $mapping:ident, $op_name:ident { $($args:ident)* }) => {
+        update_fn_match!(@scan $op_expr, $mapping, $op_name [$($args)*])
+    };
+    (@scan $op_expr:ident, $mapping:ident, $op_name:ident []) => {};
+    (@scan $op_expr:ident, $mapping:ident, $op_name:ident [function_index $($_rest:ident)*]) => {
+        if let Operator::$op_name { function_index, .. } = $op_expr {
+            match $mapping.get(&*function_index) {
+                Some(new_index) => *function_index = *new_index,
+                None => return Err(InstrumentationError("Called a deleted function!".to_string())),
+            }
+            return Ok(());
+        }
+    };
+    (@scan $op_expr:ident, $mapping:ident, $op_name:ident [$_first:ident $($rest:ident)*]) => {
+        update_fn_match!(@scan $op_expr, $mapping, $op_name [$($rest)*])
+    };
+}
+wasmparser::for_each_operator!(update_fn_match);
+
+macro_rules! update_global_match {
+    ($( @$proposal:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident ($($ann:tt)*))*) => {
+        pub(crate) fn update_global_instr(
+            op: &mut Operator,
+            mapping: &HashMap<u32, u32>,
+        ) -> types::Result<()> {
+            $( update_global_match!(@stmt op, mapping, $op $({ $($arg)* })?); )*
+            panic!("Internal error: Operation doesn't need to be checked for global IDs!")
+        }
+    };
+    (@stmt $op_expr:ident, $mapping:ident, $op_name:ident) => {};
+    (@stmt $op_expr:ident, $mapping:ident, $op_name:ident { $($args:ident)* }) => {
+        update_global_match!(@scan $op_expr, $mapping, $op_name [$($args)*])
+    };
+    (@scan $op_expr:ident, $mapping:ident, $op_name:ident []) => {};
+    (@scan $op_expr:ident, $mapping:ident, $op_name:ident [global_index $($_rest:ident)*]) => {
+        if let Operator::$op_name { global_index, .. } = $op_expr {
+            match $mapping.get(&*global_index) {
+                Some(new_index) => *global_index = *new_index,
+                None => return Err(InstrumentationError("Operation on a deleted global!".to_string())),
+            }
+            return Ok(());
+        }
+    };
+    (@scan $op_expr:ident, $mapping:ident, $op_name:ident [$_first:ident $($rest:ident)*]) => {
+        update_global_match!(@scan $op_expr, $mapping, $op_name [$($rest)*])
+    };
+}
+wasmparser::for_each_operator!(update_global_match);
+
+macro_rules! update_memory_match {
+    ($( @$proposal:ident $op:ident $({ $($arg:ident: $argty:ty),* })? => $visit:ident ($($ann:tt)*))*) => {
+        pub(crate) fn update_memory_instr(
+            op: &mut Operator,
+            mapping: &HashMap<u32, u32>,
+        ) -> types::Result<()> {
+            $( update_memory_match!(@stmt op, mapping, $op $({ $($arg)* })?); )*
+            panic!("Internal error: Operation doesn't need to be checked for memory IDs!")
+        }
+    };
+    (@stmt $op_expr:ident, $mapping:ident, $op_name:ident) => {};
+    (@stmt $op_expr:ident, $mapping:ident, $op_name:ident { $($args:ident)* }) => {
+        update_memory_match!(@scan $op_expr, $mapping, $op_name [$($args)*])
+    };
+    (@scan $op_expr:ident, $mapping:ident, $op_name:ident []) => {};
+    // memarg-bearing ops (loads, stores, atomic rmw, etc.) — remap memarg.memory.
+    (@scan $op_expr:ident, $mapping:ident, $op_name:ident [memarg $($_rest:ident)*]) => {
+        if let Operator::$op_name { memarg, .. } = $op_expr {
+            match $mapping.get(&memarg.memory) {
+                Some(new_index) => memarg.memory = *new_index,
+                None => return Err(InstrumentationError(format!(
+                    "Attempting to reference a deleted memory, ID: {}", memarg.memory
+                ))),
+            }
+            return Ok(());
+        }
+    };
+    // Bulk-memory ops with a single `mem` field (size, grow, fill, init, discard).
+    (@scan $op_expr:ident, $mapping:ident, $op_name:ident [mem $($_rest:ident)*]) => {
+        if let Operator::$op_name { mem, .. } = $op_expr {
+            match $mapping.get(&*mem) {
+                Some(new_index) => *mem = *new_index,
+                None => return Err(InstrumentationError(format!(
+                    "Attempting to reference a deleted memory, ID: {}", mem
+                ))),
+            }
+            return Ok(());
+        }
+    };
+    // MemoryCopy: both src_mem and dst_mem must be remapped.
+    (@scan $op_expr:ident, $mapping:ident, $op_name:ident [src_mem $($_rest:ident)*]) => {
+        if let Operator::$op_name { src_mem, dst_mem, .. } = $op_expr {
+            match $mapping.get(&*src_mem) {
+                Some(new_index) => *src_mem = *new_index,
+                None => return Err(InstrumentationError(format!(
+                    "Attempting to reference a deleted memory, ID: {}", src_mem
+                ))),
+            }
+            match $mapping.get(&*dst_mem) {
+                Some(new_index) => *dst_mem = *new_index,
+                None => return Err(InstrumentationError(format!(
+                    "Attempting to reference a deleted memory, ID: {}", dst_mem
+                ))),
+            }
+            return Ok(());
+        }
+    };
+    (@scan $op_expr:ident, $mapping:ident, $op_name:ident [$_first:ident $($rest:ident)*]) => {
+        update_memory_match!(@scan $op_expr, $mapping, $op_name [$($rest)*])
+    };
+}
+wasmparser::for_each_operator!(update_memory_match);
