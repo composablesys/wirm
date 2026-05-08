@@ -133,7 +133,7 @@
 //! double-counting or incorrect index resolution during encoding.
 
 use crate::ir::component::idx_spaces::ScopeId;
-use crate::ir::id::ComponentId;
+use crate::ir::id::CompUniqueId;
 use crate::ir::types::CustomSection;
 use crate::{Component, Module};
 use std::cell::RefCell;
@@ -240,7 +240,12 @@ use wasmparser::{
 #[derive(Default, Debug)]
 pub(crate) struct IndexScopeRegistry {
     pub(crate) node_scopes: HashMap<NonNull<()>, ScopeEntry>,
-    pub(crate) comp_scopes: HashMap<ComponentId, ScopeId>,
+    pub(crate) comp_scopes: HashMap<CompUniqueId, ScopeId>,
+    /// Monotonic counter for `CompUniqueId` allocation. Shared across the
+    /// entire IR tree (the registry is wrapped in `Rc<RefCell<>>`), so both
+    /// the parser and `Component::add_component*` allocate fresh, globally
+    /// unique component identities through `alloc_uid`.
+    pub(crate) next_uid: u32,
 }
 impl IndexScopeRegistry {
     pub fn register<T: GetScopeKind>(&mut self, node: &T, space: ScopeId) {
@@ -267,11 +272,19 @@ impl IndexScopeRegistry {
         }
         None
     }
-    pub fn register_comp(&mut self, comp_id: ComponentId, space: ScopeId) {
+    pub fn register_comp(&mut self, comp_id: CompUniqueId, space: ScopeId) {
         self.comp_scopes.insert(comp_id, space);
     }
-    pub fn scope_of_comp(&self, comp_id: ComponentId) -> Option<ScopeId> {
+    pub fn scope_of_comp(&self, comp_id: CompUniqueId) -> Option<ScopeId> {
         self.comp_scopes.get(&comp_id).copied()
+    }
+    /// Allocate the next globally-unique `CompUniqueId` and advance the
+    /// counter. Both the parser and `add_component*` go through this so
+    /// IDs never collide regardless of how the tree was built.
+    pub fn alloc_uid(&mut self) -> CompUniqueId {
+        let uid = CompUniqueId(self.next_uid);
+        self.next_uid += 1;
+        uid
     }
 }
 
@@ -403,10 +416,10 @@ macro_rules! assert_registered_with_id {
 
 #[derive(Clone, Debug)]
 pub struct ComponentStore<'a> {
-    components: HashMap<ComponentId, &'a Component<'a>>,
+    components: HashMap<CompUniqueId, &'a Component<'a>>,
 }
 impl<'a> ComponentStore<'a> {
-    pub fn get(&self, id: &ComponentId) -> &'a Component<'a> {
+    pub fn get(&self, id: &CompUniqueId) -> &'a Component<'a> {
         self.components.get(id).unwrap()
     }
 }
@@ -414,8 +427,8 @@ impl<'a> ComponentStore<'a> {
 pub fn build_component_store<'a>(root: &'a Component<'a>) -> ComponentStore<'a> {
     let mut map = HashMap::new();
 
-    fn walk<'a>(comp: &'a Component<'a>, map: &mut HashMap<ComponentId, &'a Component<'a>>) {
-        map.insert(comp.id, comp);
+    fn walk<'a>(comp: &'a Component<'a>, map: &mut HashMap<CompUniqueId, &'a Component<'a>>) {
+        map.insert(comp.uid, comp);
         for child in comp.components.iter() {
             walk(child, map);
         }

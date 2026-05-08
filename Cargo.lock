@@ -1644,7 +1644,7 @@ checksum = "5a5364e9d77fcdeeaa6062ced926ee3381faa2ee02d3eb83a5c27a8825540829"
 
 [[package]]
 name = "wirm"
-version = "4.0.6"
+version = "5.0.0"
 dependencies = [
  "log",
  "paste",

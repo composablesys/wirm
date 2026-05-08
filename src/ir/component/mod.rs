@@ -4,29 +4,25 @@
 use crate::encode::component::encode;
 use crate::error::Error;
 use crate::error::Error::IO;
-use crate::ir::component::alias::Aliases;
-use crate::ir::component::canons::Canons;
 use crate::ir::component::idx_spaces::{
     IndexSpaceOf, IndexStore, ScopeId, Space, SpaceSubtype, StoreHandle,
 };
+use crate::ir::component::nodes::{Aliases, Canons, ComponentTypes};
 use crate::ir::component::refs::{GetItemRef, GetTypeRefs, IndexedRef};
 use crate::ir::component::scopes::{IndexScopeRegistry, RegistryHandle};
 use crate::ir::component::section::{
     get_sections_for_comp_ty, get_sections_for_core_ty_and_assign_top_level_ids,
     populate_space_for_comp_ty, populate_space_for_core_ty, ComponentSection,
 };
-use crate::ir::component::types::ComponentTypes;
 use crate::ir::component::visitor::ResolvedItem;
 use crate::ir::helpers::{
     print_alias, print_component_export, print_component_import, print_component_type,
     print_core_type,
 };
 use crate::ir::id::{
-    AliasFuncId, AliasId, AliasMemId, CanonicalFuncId, ComponentExportId, ComponentId,
-    ComponentTypeFuncId, ComponentTypeId, ComponentTypeInstanceId, CoreInstanceId, CustomSectionID,
-    FunctionID, GlobalID, ModuleID,
+    AliasId, CanonFuncId, CompUniqueId, ComponentFunctionId, ComponentId, ComponentInstanceId,
+    ComponentTypeId, CoreInstanceId, CoreTypeId, CustomSectionID, FunctionID, ModuleID, ValueID,
 };
-use crate::ir::module::module_globals::Global;
 use crate::ir::module::Module;
 use crate::ir::types::{CustomSection, CustomSections};
 use crate::ir::AppendOnlyVec;
@@ -34,29 +30,33 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use wasmparser::{
-    CanonicalFunction, ComponentAlias, ComponentExport, ComponentFuncType, ComponentImport,
-    ComponentInstance, ComponentStartFunction, ComponentType, CoreType, Encoding, Instance,
-    InstanceTypeDeclaration, NameMap, Parser, Payload,
+    CanonicalFunction, ComponentAlias, ComponentExport, ComponentExportName, ComponentExternalKind,
+    ComponentImport, ComponentImportName, ComponentInstance, ComponentOuterAliasKind,
+    ComponentStartFunction, ComponentType, ComponentTypeRef, ComponentValType, CoreType, Encoding,
+    ExternalKind, Instance, NameMap, Parser, Payload, TypeBounds,
 };
 
-mod alias;
-mod canons;
 pub mod concrete;
 pub mod idx_spaces;
+mod nodes;
 pub mod refs;
 pub(crate) mod scopes;
 pub(crate) mod section;
 #[cfg(test)]
 mod tests;
-mod types;
 pub mod visitor;
 
 #[derive(Debug)]
 /// Intermediate Representation of a wasm component.
 pub struct Component<'a> {
-    pub id: ComponentId,
+    /// Wirm-internal globally-unique identifier for this component, used as
+    /// the HashMap key into the scope registry. Distinct from the
+    /// component-index-space position (a `ComponentId`), which is
+    /// parent-relative and only meaningful as a ref into a parent's
+    /// `components` vector.
+    pub(crate) uid: CompUniqueId,
     /// Nested Components
-    // These have scopes, but the scopes are looked up by ComponentId
+    // These have scopes, but the scopes are looked up by CompUniqueId
     pub components: AppendOnlyVec<Component<'a>>,
     /// Modules
     // These have scopes, but they aren't handled by component encoding logic
@@ -139,10 +139,11 @@ impl<'a> Component<'a> {
 
     fn add_section(&mut self, sect: ComponentSection) {
         // add to section order list
-        if !self.sections.is_empty() && self.sections[self.num_sections - 1].1 == sect {
+        if self.num_sections > 0 && self.sections[self.num_sections - 1].1 == sect {
             self.sections[self.num_sections - 1].0 += 1;
         } else {
             self.sections.push((1, sect));
+            self.num_sections += 1;
         }
     }
 
@@ -156,9 +157,106 @@ impl<'a> Component<'a> {
         ModuleID(id as u32)
     }
 
-    /// Add a Global to this Component.
-    pub fn add_globals(&mut self, global: Global, module_idx: ModuleID) -> GlobalID {
-        self.modules[*module_idx as usize].globals.add(global)
+    /// Allocate a sub-component scope: a fresh `ScopeId` plus a fresh
+    /// `CompUniqueId`, both threaded into a returned tuple alongside cloned
+    /// `Rc` handles to `self`'s scope registry and index store. Used by
+    /// `add_component` and `add_component_from_bytes` to set up a sub-scope
+    /// the same way the parser does for nested component sections.
+    fn alloc_sub_scope(&mut self) -> (ScopeId, CompUniqueId, RegistryHandle, StoreHandle) {
+        let sub_space_id = self.index_store.borrow_mut().new_scope();
+        let sub_uid = self.scope_registry.borrow_mut().alloc_uid();
+        (
+            sub_space_id,
+            sub_uid,
+            Rc::clone(&self.scope_registry),
+            Rc::clone(&self.index_store),
+        )
+    }
+
+    /// Register a freshly-built sub-component: assigns its index in this
+    /// component's component-index space, pushes it, and adds the section
+    /// marker.
+    fn register_sub_component(&mut self, sub: Component<'a>) -> ComponentId {
+        let idx = self.components.len();
+        let id =
+            self.add_section_and_get_id(sub.index_space_of(), ComponentSection::Component, idx);
+        self.components.push(sub);
+
+        ComponentId(id as u32)
+    }
+
+    /// Parse `bytes` as a complete component binary and add the result as a
+    /// sub-component of `self`. The new sub-component shares `self`'s
+    /// scope registry and index store, so refs inside it (including
+    /// `Outer`-scope aliases pointing back into `self`) resolve correctly
+    /// against `self`'s items.
+    pub fn add_component_from_bytes(&mut self, bytes: &'a [u8]) -> Result<ComponentId, Error> {
+        let (sub_space_id, sub_uid, registry, store) = self.alloc_sub_scope();
+        let sub = Self::parse_comp(
+            bytes,
+            false,
+            false,
+            Parser::new(0),
+            0,
+            sub_space_id,
+            sub_uid,
+            registry,
+            store,
+        )?;
+        Ok(self.register_sub_component(sub))
+    }
+
+    /// Add an empty sub-component to `self`, populate it via the supplied
+    /// builder closure, and register it. The sub-component shares `self`'s
+    /// scope registry and index store, so the closure can use the full
+    /// mutation API to add items that reference outer-scope (parent)
+    /// items via `add_alias_outer` etc.
+    pub fn add_component<F>(&mut self, f: F) -> ComponentId
+    where
+        F: FnOnce(&mut Component<'a>),
+    {
+        let (sub_space_id, sub_uid, registry, store) = self.alloc_sub_scope();
+        let mut sub = Component {
+            uid: sub_uid,
+            components: AppendOnlyVec::default(),
+            modules: AppendOnlyVec::default(),
+            component_types: ComponentTypes::new(AppendOnlyVec::default()),
+            component_instance: AppendOnlyVec::default(),
+            canons: Canons::new(AppendOnlyVec::default()),
+            alias: Aliases::new(AppendOnlyVec::default()),
+            imports: AppendOnlyVec::default(),
+            exports: AppendOnlyVec::default(),
+            core_types: AppendOnlyVec::default(),
+            instances: AppendOnlyVec::default(),
+            space_id: sub_space_id,
+            scope_registry: registry,
+            index_store: store,
+            custom_sections: CustomSections::new(vec![]),
+            start_section: AppendOnlyVec::default(),
+            sections: vec![],
+            num_sections: 0,
+            component_name: None,
+            core_func_names: Names::default(),
+            global_names: Names::default(),
+            memory_names: Names::default(),
+            tag_names: Names::default(),
+            table_names: Names::default(),
+            module_names: Names::default(),
+            core_instances_names: Names::default(),
+            core_type_names: Names::default(),
+            type_names: Names::default(),
+            instance_names: Names::default(),
+            components_names: Names::default(),
+            func_names: Names::default(),
+            value_names: Names::default(),
+        };
+        sub.scope_registry
+            .borrow_mut()
+            .register_comp(sub_uid, sub_space_id);
+
+        f(&mut sub);
+
+        self.register_sub_component(sub)
     }
 
     pub fn add_custom_section(&mut self, section: CustomSection<'a>) -> CustomSectionID {
@@ -168,8 +266,16 @@ impl<'a> Component<'a> {
         id
     }
 
-    /// Add an Import to this Component.
-    pub fn add_import(&mut self, import: ComponentImport<'a>) -> u32 {
+    // ── Imports ───────────────────────────────────────────────────────────
+    //
+    // Each per-kind helper constructs the right `ComponentTypeRef` variant
+    // and returns the typed ID for whichever index space the imported item
+    // lands in. The caller doesn't have to remember the kind/typed-ID
+    // pairing — the method name encodes it.
+
+    /// Internal: push a fully-constructed `ComponentImport` and return the
+    /// raw index assigned in its target index space.
+    fn add_import_internal(&mut self, import: ComponentImport<'a>) -> u32 {
         let idx = self.imports.len();
         let id = self.add_section_and_get_id(
             import.index_space_of(),
@@ -181,42 +287,281 @@ impl<'a> Component<'a> {
         id as u32
     }
 
-    /// Add an Aliased function to this Component.
-    pub fn add_alias_func(&mut self, alias: ComponentAlias<'a>) -> (AliasFuncId, AliasId) {
-        let space = alias.index_space_of();
-        let (_item_id, alias_id) = self.alias.add(alias);
-        let id = self.add_section_and_get_id(space, ComponentSection::Alias, *alias_id as usize);
-
-        (AliasFuncId(id as u32), alias_id)
-    }
-
-    /// Add an Aliased core memory to this Component.
-    pub fn add_alias_core_memory(&mut self, alias: ComponentAlias<'a>) -> (AliasMemId, AliasId) {
-        let space = alias.index_space_of();
-        let (_item_id, alias_id) = self.alias.add(alias);
-        let id = self.add_section_and_get_id(space, ComponentSection::Alias, *alias_id as usize);
-
-        (AliasMemId(id as u32), alias_id)
-    }
-
-    /// Add a Canonical Function to this Component.
-    pub fn add_canon_func(&mut self, canon: CanonicalFunction) -> CanonicalFuncId {
-        let space = canon.index_space_of();
-        let idx = self.canons.add(canon).1;
-        let id = self.add_section_and_get_id(space, ComponentSection::Canon, *idx as usize);
-
-        CanonicalFuncId(id as u32)
-    }
-
-    /// Add a Component Type to this Component.
-    pub(crate) fn add_component_type(
+    /// Import a core module typed by the component type at `type_idx`.
+    pub fn add_import_core_module(
         &mut self,
-        component_ty: ComponentType<'a>,
-    ) -> (u32, ComponentTypeId) {
+        name: ComponentImportName<'a>,
+        type_idx: u32,
+    ) -> ModuleID {
+        let id = self.add_import_internal(ComponentImport {
+            name,
+            ty: ComponentTypeRef::Module(type_idx),
+        });
+        ModuleID(id)
+    }
+
+    /// Import a sub-component typed by the component type at `type_idx`.
+    pub fn add_import_component(
+        &mut self,
+        name: ComponentImportName<'a>,
+        type_idx: u32,
+    ) -> ComponentId {
+        let id = self.add_import_internal(ComponentImport {
+            name,
+            ty: ComponentTypeRef::Component(type_idx),
+        });
+        ComponentId(id)
+    }
+
+    /// Import a component instance typed by the component type at `type_idx`.
+    pub fn add_import_component_instance(
+        &mut self,
+        name: ComponentImportName<'a>,
+        type_idx: u32,
+    ) -> ComponentInstanceId {
+        let id = self.add_import_internal(ComponentImport {
+            name,
+            ty: ComponentTypeRef::Instance(type_idx),
+        });
+        ComponentInstanceId(id)
+    }
+
+    /// Import a component-level function typed by the component type at
+    /// `type_idx`.
+    pub fn add_import_component_func(
+        &mut self,
+        name: ComponentImportName<'a>,
+        type_idx: u32,
+    ) -> ComponentFunctionId {
+        let id = self.add_import_internal(ComponentImport {
+            name,
+            ty: ComponentTypeRef::Func(type_idx),
+        });
+        ComponentFunctionId(id)
+    }
+
+    /// Import a component value of type `val_ty`.
+    pub fn add_import_component_value(
+        &mut self,
+        name: ComponentImportName<'a>,
+        val_ty: ComponentValType,
+    ) -> ValueID {
+        let id = self.add_import_internal(ComponentImport {
+            name,
+            ty: ComponentTypeRef::Value(val_ty),
+        });
+        ValueID(id)
+    }
+
+    /// Import a component type subject to `bounds`.
+    pub fn add_import_component_type(
+        &mut self,
+        name: ComponentImportName<'a>,
+        bounds: TypeBounds,
+    ) -> ComponentTypeId {
+        let id = self.add_import_internal(ComponentImport {
+            name,
+            ty: ComponentTypeRef::Type(bounds),
+        });
+        ComponentTypeId(id)
+    }
+
+    // ── Exports ───────────────────────────────────────────────────────────
+    //
+    // Each per-kind helper exports an item from its respective index space.
+    // The returned typed ID is the *new* index assigned in that same space —
+    // exporting re-binds the item under a public name and produces a fresh
+    // entry in the index space.
+
+    /// Internal: push a fully-constructed `ComponentExport` and return the
+    /// raw index assigned in its target index space.
+    fn add_export_internal(&mut self, export: ComponentExport<'a>) -> u32 {
+        let idx = self.exports.len();
+        let id = self.add_section_and_get_id(
+            export.index_space_of(),
+            ComponentSection::ComponentExport,
+            idx,
+        );
+        self.exports.push(export);
+
+        id as u32
+    }
+
+    /// Export the core module at `idx` under `name`.
+    pub fn add_export_core_module(
+        &mut self,
+        name: ComponentExportName<'a>,
+        idx: ModuleID,
+        ty: Option<ComponentTypeRef>,
+    ) -> ModuleID {
+        let id = self.add_export_internal(ComponentExport {
+            name,
+            kind: ComponentExternalKind::Module,
+            index: *idx,
+            ty,
+        });
+        ModuleID(id)
+    }
+
+    /// Export the sub-component at `idx` under `name`.
+    pub fn add_export_component(
+        &mut self,
+        name: ComponentExportName<'a>,
+        idx: ComponentId,
+        ty: Option<ComponentTypeRef>,
+    ) -> ComponentId {
+        let id = self.add_export_internal(ComponentExport {
+            name,
+            kind: ComponentExternalKind::Component,
+            index: *idx,
+            ty,
+        });
+        ComponentId(id)
+    }
+
+    /// Export the component instance at `idx` under `name`.
+    pub fn add_export_component_instance(
+        &mut self,
+        name: ComponentExportName<'a>,
+        idx: ComponentInstanceId,
+        ty: Option<ComponentTypeRef>,
+    ) -> ComponentInstanceId {
+        let id = self.add_export_internal(ComponentExport {
+            name,
+            kind: ComponentExternalKind::Instance,
+            index: *idx,
+            ty,
+        });
+        ComponentInstanceId(id)
+    }
+
+    /// Export the component-level function at `idx` under `name`.
+    pub fn add_export_component_func(
+        &mut self,
+        name: ComponentExportName<'a>,
+        idx: ComponentFunctionId,
+        ty: Option<ComponentTypeRef>,
+    ) -> ComponentFunctionId {
+        let id = self.add_export_internal(ComponentExport {
+            name,
+            kind: ComponentExternalKind::Func,
+            index: *idx,
+            ty,
+        });
+        ComponentFunctionId(id)
+    }
+
+    /// Export the component value at `idx` under `name`.
+    pub fn add_export_component_value(
+        &mut self,
+        name: ComponentExportName<'a>,
+        idx: ValueID,
+        ty: Option<ComponentTypeRef>,
+    ) -> ValueID {
+        let id = self.add_export_internal(ComponentExport {
+            name,
+            kind: ComponentExternalKind::Value,
+            index: *idx,
+            ty,
+        });
+        ValueID(id)
+    }
+
+    /// Export the component type at `idx` under `name`.
+    pub fn add_export_component_type(
+        &mut self,
+        name: ComponentExportName<'a>,
+        idx: ComponentTypeId,
+        ty: Option<ComponentTypeRef>,
+    ) -> ComponentTypeId {
+        let id = self.add_export_internal(ComponentExport {
+            name,
+            kind: ComponentExternalKind::Type,
+            index: *idx,
+            ty,
+        });
+        ComponentTypeId(id)
+    }
+
+    // ── Aliases ───────────────────────────────────────────────────────────
+    //
+    // One method per `ComponentAlias` variant. Each takes the kind plus the
+    // identifying fields and returns an [`AliasId`] sum — the typed ID lands
+    // in whichever index space the (variant, kind) pair targets, so the
+    // return is genuinely polymorphic; callers use the matching `unwrap_*`
+    // helper when they know the kind they passed. The space → variant
+    // mapping lives in `AliasId::new`; here we just thread through.
+
+    /// Internal: push a fully-constructed `ComponentAlias` and return the
+    /// matching [`AliasId`].
+    fn add_alias_internal(&mut self, alias: ComponentAlias<'a>) -> AliasId {
+        let space = alias.index_space_of();
+        let idx = self.alias.add(alias);
+        let id = self.add_section_and_get_id(space, ComponentSection::Alias, idx);
+
+        AliasId::new(space, id as u32)
+    }
+
+    /// Add an alias to an export of a component instance.
+    pub fn add_alias_instance_export(
+        &mut self,
+        kind: ComponentExternalKind,
+        instance_index: u32,
+        name: &'a str,
+    ) -> AliasId {
+        self.add_alias_internal(ComponentAlias::InstanceExport {
+            kind,
+            instance_index,
+            name,
+        })
+    }
+
+    /// Add an alias to an export of a core instance.
+    pub fn add_alias_core_instance_export(
+        &mut self,
+        kind: ExternalKind,
+        instance_index: u32,
+        name: &'a str,
+    ) -> AliasId {
+        self.add_alias_internal(ComponentAlias::CoreInstanceExport {
+            kind,
+            instance_index,
+            name,
+        })
+    }
+
+    /// Add an alias to an outer-scope item.
+    pub fn add_alias_outer(
+        &mut self,
+        kind: ComponentOuterAliasKind,
+        count: u32,
+        index: u32,
+    ) -> AliasId {
+        self.add_alias_internal(ComponentAlias::Outer { kind, count, index })
+    }
+
+    /// Add a Canonical Function to this Component. Returns a [`CanonFuncId`]
+    /// because the index space depends on the canon variant — `Lift` and
+    /// thread-spawn variants land in the component function index space;
+    /// `Lower`, resource ops, and most async/streams variants land in the
+    /// core function index space. Use [`CanonFuncId::unwrap_component`] /
+    /// [`CanonFuncId::unwrap_core`] when you know which variant you passed.
+    pub fn add_canon_func(&mut self, canon: CanonicalFunction) -> CanonFuncId {
+        let space = canon.index_space_of();
+        let idx = self.canons.add(canon);
+        let id = self.add_section_and_get_id(space, ComponentSection::Canon, idx);
+
+        CanonFuncId::new(space, id as u32)
+    }
+
+    /// Add a component type to this Component. Returns the index assigned in
+    /// the component-type index space. Caller chooses the variant
+    /// (`Instance`, `Func`, `Defined`, `Component`, `Resource`) — the index
+    /// space and return type are the same regardless.
+    pub fn add_component_type(&mut self, component_ty: ComponentType<'a>) -> ComponentTypeId {
         let space = component_ty.index_space_of();
-        let ids = self.component_types.add(component_ty);
-        let id =
-            self.add_section_and_get_id(space, ComponentSection::ComponentType, *ids.1 as usize);
+        let idx = self.component_types.add(component_ty);
+        let id = self.add_section_and_get_id(space, ComponentSection::ComponentType, idx);
 
         // Handle the index space of this node
         populate_space_for_comp_ty(
@@ -225,30 +570,25 @@ impl<'a> Component<'a> {
             self.index_store.clone(),
         );
 
-        (id as u32, ids.1)
+        ComponentTypeId(id as u32)
     }
 
-    /// Add a Component Type that is an Instance to this component.
-    pub fn add_type_instance(
-        &mut self,
-        decls: Vec<InstanceTypeDeclaration<'a>>,
-    ) -> (ComponentTypeInstanceId, ComponentTypeId) {
-        let (ty_inst_id, ty_id) =
-            self.add_component_type(ComponentType::Instance(decls.into_boxed_slice()));
+    /// Add a core type to this Component. Returns the index assigned in the
+    /// core-type index space. Caller chooses the variant (`Rec`, `Module`).
+    pub fn add_core_type(&mut self, ty: CoreType<'a>) -> CoreTypeId {
+        let space = ty.index_space_of();
+        let idx = self.core_types.len();
+        self.core_types.push(Box::new(ty));
+        let id = self.add_section_and_get_id(space, ComponentSection::CoreType, idx);
 
-        // almost account for aliased types!
-        (ComponentTypeInstanceId(ty_inst_id), ty_id)
-    }
+        // Handle the index space of this node (e.g. ModuleType decls).
+        populate_space_for_core_ty(
+            self.core_types.last().unwrap(),
+            self.scope_registry.clone(),
+            self.index_store.clone(),
+        );
 
-    /// Add a Component Type that is a Function to this component.
-    pub fn add_type_func(
-        &mut self,
-        ty: ComponentFuncType<'a>,
-    ) -> (ComponentTypeFuncId, ComponentTypeId) {
-        let (ty_inst_id, ty_id) = self.add_component_type(ComponentType::Func(ty));
-
-        // almost account for aliased types!
-        (ComponentTypeFuncId(ty_inst_id), ty_id)
+        CoreTypeId(id as u32)
     }
 
     /// Add a new core instance to this component.
@@ -263,6 +603,50 @@ impl<'a> Component<'a> {
 
         CoreInstanceId(id as u32)
     }
+
+    /// Add a new component instance to this component.
+    pub fn add_component_instance(
+        &mut self,
+        instance: ComponentInstance<'a>,
+    ) -> ComponentInstanceId {
+        let idx = self.component_instance.len();
+        let id = self.add_section_and_get_id(
+            instance.index_space_of(),
+            ComponentSection::ComponentInstance,
+            idx,
+        );
+        self.component_instance.push(instance);
+
+        ComponentInstanceId(id as u32)
+    }
+
+    // Deferred until the parser-side start-result tracking bug is fixed (see
+    // the TODO in `parse_comp`'s `Payload::ComponentStartSection` arm). Once
+    // that lands, this should return `Vec<ValueID>` so callers can reference
+    // the produced values; shipping it before the fix would either ignore
+    // results (breaking calls that need them) or require a breaking signature
+    // change later.
+    //
+    // /// Add a start section to this component. `results` declares the number
+    // /// of values the start function produces — each becomes a new entry in
+    // /// the component value index space.
+    // pub fn add_start_section(
+    //     &mut self,
+    //     func: ComponentFunctionId,
+    //     arguments: Vec<ValueID>,
+    //     results: u32,
+    // ) -> Vec<ValueID> {
+    //     let arguments = arguments.iter().map(|v| **v).collect::<Vec<u32>>();
+    //     self.start_section.push(ComponentStartFunction {
+    //         func_index: *func,
+    //         arguments: arguments.into_boxed_slice(),
+    //         results,
+    //     });
+    //     self.add_section(ComponentSection::ComponentStartSection);
+    //     // ... allocate `results` ValueIDs through the index store and return
+    //     // them.
+    //     todo!()
+    // }
 
     fn add_to_sections(
         sections: &mut Vec<(u32, ComponentSection)>,
@@ -324,10 +708,10 @@ impl<'a> Component<'a> {
     ) -> Result<Component<'_>, Error> {
         let parser = Parser::new(0);
 
-        let registry = IndexScopeRegistry::default();
+        let mut registry = IndexScopeRegistry::default();
         let mut store = IndexStore::default();
         let space_id = store.new_scope();
-        let mut next_comp_id = 0;
+        let root_uid = registry.alloc_uid();
         let res = Component::parse_comp(
             wasm,
             enable_multi_memory,
@@ -335,9 +719,9 @@ impl<'a> Component<'a> {
             parser,
             0,
             space_id,
+            root_uid,
             Rc::new(RefCell::new(registry)),
             Rc::new(RefCell::new(store)),
-            &mut next_comp_id,
         );
         res
     }
@@ -349,13 +733,10 @@ impl<'a> Component<'a> {
         parser: Parser,
         start: usize,
         space_id: ScopeId,
+        my_uid: CompUniqueId,
         registry_handle: RegistryHandle,
         store_handle: StoreHandle,
-        next_comp_id: &mut u32,
     ) -> Result<Component<'a>, Error> {
-        let my_comp_id = ComponentId(*next_comp_id);
-        *next_comp_id += 1;
-
         let mut modules = AppendOnlyVec::default();
         let mut core_types = AppendOnlyVec::default();
         let mut component_types = AppendOnlyVec::default();
@@ -620,6 +1001,7 @@ impl<'a> Component<'a> {
                     unchecked_range,
                 } => {
                     let sub_space_id = store_handle.borrow_mut().new_scope();
+                    let sub_uid = registry_handle.borrow_mut().alloc_uid();
                     let sect = ComponentSection::Component;
 
                     stack.push(Encoding::Component);
@@ -630,9 +1012,9 @@ impl<'a> Component<'a> {
                         parser,
                         unchecked_range.start,
                         sub_space_id,
+                        sub_uid,
                         Rc::clone(&registry_handle),
                         Rc::clone(&store_handle),
-                        next_comp_id,
                     )?;
                     store_handle.borrow_mut().assign_assumed_id(
                         &space_id,
@@ -650,6 +1032,24 @@ impl<'a> Component<'a> {
                     );
                 }
                 Payload::ComponentStartSection { start, range: _ } => {
+                    // TODO: bug — each declared result adds a value to the
+                    // component value index space. The counter-bump fix below
+                    // is correct in isolation but exposes a downstream gap:
+                    // refs to start-result values have no resolution path
+                    // through the topological collector / `assign.rs` /
+                    // `ResolvedItem`. Re-enabling requires a dedicated
+                    // `SpaceSubtype::StartResult` (or analogous) and matching
+                    // plumbing in those visitors.
+                    //
+                    // let start_vec_idx = start_section.len();
+                    // for _ in 0..start.results {
+                    //     store_handle.borrow_mut().assign_assumed_id(
+                    //         &space_id,
+                    //         &Space::CompVal,
+                    //         &ComponentSection::ComponentStartSection,
+                    //         start_vec_idx,
+                    //     );
+                    // }
                     start_section.push(start);
                     Self::add_to_sections(
                         &mut sections,
@@ -734,11 +1134,11 @@ impl<'a> Component<'a> {
 
         // Scope discovery
         for comp in components.iter() {
-            let comp_id = comp.id;
+            let sub_uid = comp.uid;
             let sub_space_id = comp.space_id;
             registry_handle
                 .borrow_mut()
-                .register_comp(comp_id, sub_space_id);
+                .register_comp(sub_uid, sub_space_id);
         }
         for ty in core_types.iter() {
             populate_space_for_core_ty(ty, registry_handle.clone(), store_handle.clone());
@@ -748,7 +1148,7 @@ impl<'a> Component<'a> {
         }
 
         let comp = Component {
-            id: my_comp_id,
+            uid: my_uid,
             modules,
             alias: Aliases::new(alias),
             core_types,
@@ -784,7 +1184,7 @@ impl<'a> Component<'a> {
 
         comp.scope_registry
             .borrow_mut()
-            .register_comp(my_comp_id, space_id);
+            .register_comp(my_uid, space_id);
 
         Ok(comp)
     }
@@ -926,17 +1326,32 @@ impl<'a> Component<'a> {
         Some(self.resolve(&export.get_item_ref().ref_))
     }
 
-    /// Lookup the type for an exported `lift` canonical function.
+    /// Lookup the type for an exported `lift` canonical function. Returns
+    /// `None` if `export` does not resolve (possibly through an alias /
+    /// export chain) to a `CanonicalFunction::Lift`. Imports terminate the
+    /// walk with `None` since they are not canonical functions.
     pub fn get_type_of_exported_lift_func(
         &self,
-        export_id: ComponentExportId,
+        export: &ComponentExport<'a>,
     ) -> Option<&ComponentType<'a>> {
-        let export = self.exports.get(*export_id as usize)?;
-        let type_ref = match self.resolve(&export.get_item_ref().ref_) {
-            ResolvedItem::Func(_, canon) => *canon.get_type_refs().first().unwrap(),
-            ResolvedItem::Alias(_, alias) => alias.get_item_ref(),
-            _ => unreachable!("exported lift func should resolve to a Func or Alias"),
+        // Walk through aliases / nested exports to the underlying canonical
+        // function. Imports are terminal — an imported function is declared
+        // externally and isn't a lift.
+        let mut item_ref = export.get_item_ref();
+        let canon = loop {
+            match self.resolve(&item_ref.ref_) {
+                ResolvedItem::Func(_, canon) => break canon,
+                ResolvedItem::Alias(_, alias) => item_ref = alias.get_item_ref(),
+                ResolvedItem::Export(_, exp) => item_ref = exp.get_item_ref(),
+                _ => return None,
+            }
         };
+        // Only lift funcs carry a component-level type; lower / resource
+        // canons don't.
+        if !matches!(canon, CanonicalFunction::Lift { .. }) {
+            return None;
+        }
+        let type_ref = *canon.get_type_refs().first()?;
         match self.resolve(&type_ref.ref_) {
             ResolvedItem::CompType(_, ty) => Some(ty),
             _ => None,
