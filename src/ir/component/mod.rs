@@ -112,34 +112,6 @@ pub struct Component<'a> {
     pub(crate) value_names: Names,
 }
 
-/// Bump the component value index space for each declared start-function
-/// result and record the allocated assumed-ids under `vec_idx` in
-/// [`ComponentSection::ComponentStartSection`]. Used by both the parser and
-/// [`Component::add_start_section`] so the keying stays consistent — refs to
-/// start-result values resolve by looking up `main_assumed_ids[vec_idx]` in
-/// the [`Space::CompVal`] tracker. Returns the assumed-ids in declaration
-/// order; the parser drops the return value, the mutation API wraps each in
-/// a [`ValueID`].
-fn allocate_start_result_assumed_ids(
-    store: &mut IndexStore,
-    scope: &ScopeId,
-    vec_idx: usize,
-    count: u32,
-) -> Vec<u32> {
-    (0..count)
-        .map(|_| {
-            store
-                .assign_assumed_id(
-                    scope,
-                    &Space::CompVal,
-                    &ComponentSection::ComponentStartSection,
-                    vec_idx,
-                )
-                .expect("CompVal accepts assign_assumed_id") as u32
-        })
-        .collect()
-}
-
 impl<'a> Component<'a> {
     /// Emit the Component into a wasm binary file.
     pub fn emit_wasm(&self, file_name: &str) -> crate::ir::types::Result<()> {
@@ -1492,4 +1464,32 @@ impl Names {
     fn add(&mut self, id: u32, name: &str) {
         self.names.insert(id, name.to_string());
     }
+}
+
+/// Bump the component value index space for each declared start-function
+/// result and record the allocated assumed-ids under `vec_idx` in
+/// [`ComponentSection::ComponentStartSection`]. Used by both the parser and
+/// [`Component::add_start_section`] so the keying stays consistent — refs to
+/// start-result values resolve by looking up `main_assumed_ids[vec_idx]` in
+/// the [`Space::CompVal`] tracker. Returns the assumed-ids in declaration
+/// order; the parser drops the return value, the mutation API wraps each in
+/// a [`ValueID`].
+fn allocate_start_result_assumed_ids(
+    store: &mut IndexStore,
+    scope: &ScopeId,
+    vec_idx: usize,
+    count: u32,
+) -> Vec<u32> {
+    (0..count)
+        .map(|_| {
+            store
+                .assign_assumed_id(
+                    scope,
+                    &Space::CompVal,
+                    &ComponentSection::ComponentStartSection,
+                    vec_idx,
+                )
+                .expect("CompVal accepts assign_assumed_id") as u32
+        })
+        .collect()
 }
