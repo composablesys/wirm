@@ -7,6 +7,72 @@ use wirm::opcode::Instrumenter;
 use wirm::{DataType, Opcode};
 use wirm::{Location, Module};
 
+/// Regression test for https://github.com/composablesys/wirm/issues/158
+///
+/// Building a function with `FunctionBuilder::set_name` should retain the
+/// name across encoding/parsing — the user should not be required to call
+/// `module.set_fn_name(id, name)` after `finish_module` to keep the name.
+#[test]
+fn func_builder_set_name_is_retained_after_round_trip() {
+    let mut module = Module::default();
+
+    // Build a function with a name set only via `FunctionBuilder::set_name`.
+    let expected = "via_builder_set_name";
+    let mut builder = FunctionBuilder::new(&[], &[]);
+    builder.i32_const(1);
+    builder.drop();
+    builder.set_name(expected.to_string());
+    let fid = builder.finish_module(&mut module);
+
+    // Pre-encode: the IR itself should reflect the name set via the builder.
+    assert_eq!(
+        module.functions.get_name(fid).as_ref().map(String::as_str),
+        Some(expected),
+        "expected the name set via FunctionBuilder::set_name to be present in the IR before encoding"
+    );
+
+    // Round-trip the module and confirm the name section preserves the name.
+    let bytes = module.encode().expect("encode failed");
+    let reparsed = Module::parse(&bytes, false, false).expect("reparse failed");
+    assert_eq!(
+        reparsed
+            .functions
+            .get_name(fid)
+            .as_ref()
+            .map(String::as_str),
+        Some(expected),
+        "expected FunctionBuilder::set_name to be retained through the wasm name section"
+    );
+}
+
+/// Same as above but on top of a parsed module that already has functions
+/// and a populated name section.
+#[test]
+fn func_builder_set_name_is_retained_when_appended_to_parsed_module() {
+    let file_name = "tests/test_inputs/handwritten/modules/_start.wat";
+    let wasm = wat::parse_file(file_name).expect("couldn't convert the input wat to Wasm");
+    let mut module = Module::parse(&wasm, false, false).expect("Unable to parse");
+
+    let expected = "appended_via_builder";
+    let mut builder = FunctionBuilder::new(&[], &[]);
+    builder.i32_const(1);
+    builder.drop();
+    builder.set_name(expected.to_string());
+    let fid = builder.finish_module(&mut module);
+
+    let bytes = module.encode().expect("encode failed");
+    let reparsed = Module::parse(&bytes, false, false).expect("reparse failed");
+    assert_eq!(
+        reparsed
+            .functions
+            .get_name(fid)
+            .as_ref()
+            .map(String::as_str),
+        Some(expected),
+        "expected the appended function's name to survive the round-trip"
+    );
+}
+
 #[test]
 // build factorial from scratch
 fn run_fac_wirm() {
