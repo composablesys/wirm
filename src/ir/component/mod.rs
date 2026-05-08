@@ -1032,24 +1032,17 @@ impl<'a> Component<'a> {
                     );
                 }
                 Payload::ComponentStartSection { start, range: _ } => {
-                    // TODO: bug — each declared result adds a value to the
-                    // component value index space. The counter-bump fix below
-                    // is correct in isolation but exposes a downstream gap:
-                    // refs to start-result values have no resolution path
-                    // through the topological collector / `assign.rs` /
-                    // `ResolvedItem`. Re-enabling requires a dedicated
-                    // `SpaceSubtype::StartResult` (or analogous) and matching
-                    // plumbing in those visitors.
-                    //
-                    // let start_vec_idx = start_section.len();
-                    // for _ in 0..start.results {
-                    //     store_handle.borrow_mut().assign_assumed_id(
-                    //         &space_id,
-                    //         &Space::CompVal,
-                    //         &ComponentSection::ComponentStartSection,
-                    //         start_vec_idx,
-                    //     );
-                    // }
+                    // Each declared result adds a value to the component
+                    // value index space.
+                    let start_vec_idx = start_section.len();
+                    for _ in 0..start.results {
+                        store_handle.borrow_mut().assign_assumed_id(
+                            &space_id,
+                            &Space::CompVal,
+                            &ComponentSection::ComponentStartSection,
+                            start_vec_idx,
+                        );
+                    }
                     start_section.push(start);
                     Self::add_to_sections(
                         &mut sections,
@@ -1270,8 +1263,13 @@ impl<'a> Component<'a> {
                 Space::CompFunc | Space::CoreFunc => {
                     ResolvedItem::Func(ref_.index, &self.canons.items[idx])
                 }
-                Space::CompVal
-                | Space::CoreMemory
+                Space::CompVal => {
+                    // CompVal lands in main only when the value was
+                    // produced by a start section's result; imports/
+                    // exports/aliases route through their own subtypes.
+                    ResolvedItem::StartResult(ref_.index, &self.start_section[idx])
+                }
+                Space::CoreMemory
                 | Space::CoreTable
                 | Space::CoreGlobal
                 | Space::CoreTag
@@ -1412,6 +1410,33 @@ impl<'a> Component<'a> {
         self.modules[*module_idx as usize]
             .functions
             .get_local_fid_by_name(name)
+    }
+
+    /// Return the [`ValueID`]s of the values produced by `start` in this
+    /// component's value index space, in declaration order. `start` must be a
+    /// member of `self.start_section` (matched by pointer equality).
+    ///
+    /// Each result a start declares (`ComponentStartFunction::results`)
+    /// occupies one new slot in [`Space::CompVal`]; this returns those slots.
+    pub fn get_start_func_result_ids(&self, start: &ComponentStartFunction) -> Vec<ValueID> {
+        let vec_idx = self
+            .start_section
+            .iter()
+            .position(|s| std::ptr::eq(s, start))
+            .expect("start does not belong to this component's start_section");
+        let store = self.index_store.borrow();
+        (0..start.results as usize)
+            .map(|subvec_idx| {
+                let assumed_id = store.lookup_assumed_id_with_subvec(
+                    &self.space_id,
+                    &Space::CompVal,
+                    &ComponentSection::ComponentStartSection,
+                    vec_idx,
+                    subvec_idx,
+                );
+                ValueID(assumed_id as u32)
+            })
+            .collect()
     }
 }
 

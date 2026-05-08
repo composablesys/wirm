@@ -104,6 +104,21 @@ impl IndexStore {
         self.get_mut(id).assign_assumed_id(space, section, curr_idx)
     }
 
+    /// Look up an assumed ID by its subvec position (for sections like core
+    /// rec groups and component start results that produce multiple items
+    /// from a single section entry).
+    pub fn lookup_assumed_id_with_subvec(
+        &self,
+        id: &ScopeId,
+        space: &Space,
+        section: &ComponentSection,
+        vec_idx: usize,
+        subvec_idx: usize,
+    ) -> usize {
+        self.get(id)
+            .lookup_assumed_id_with_subvec(space, section, vec_idx, subvec_idx)
+    }
+
     /// Iterate over a list of items to assign an assumed ID for.
     pub fn assign_assumed_id_for<I: Debug + IndexSpaceOf>(
         &mut self,
