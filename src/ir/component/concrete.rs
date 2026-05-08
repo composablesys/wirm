@@ -34,6 +34,7 @@ use crate::ir::component::refs::{Depth, GetCompRefs, GetItemRef, GetTypeRefs, In
 use crate::ir::component::visitor::utils::{TypeBodyDecls, VisitCtxInner};
 use crate::ir::component::visitor::{ResolvedItem, VisitCtx};
 use crate::Component;
+use log::warn;
 use std::collections::{HashMap, HashSet};
 use wasmparser::{
     ComponentAlias, ComponentDefinedType, ComponentExport, ComponentExternalKind,
@@ -948,7 +949,7 @@ fn resolve_handle_resource_name<'a>(
             },
         ) => Some(name.0),
         other => {
-            eprintln!("[wirm] handle resolve unhandled variant for idx={res_idx}: {other:?}");
+            warn!("handle resolve unhandled variant for idx={res_idx}: {other:?}");
             None
         }
     }

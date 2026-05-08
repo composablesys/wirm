@@ -15,6 +15,7 @@ use crate::ir::component::section::{
     populate_space_for_comp_ty, populate_space_for_core_ty, ComponentSection,
 };
 use crate::ir::component::visitor::ResolvedItem;
+#[allow(deprecated)]
 use crate::ir::helpers::{
     print_alias, print_component_export, print_component_import, print_component_type,
     print_core_type,
@@ -1363,6 +1364,8 @@ impl<'a> Component<'a> {
     }
 
     /// Print a rudimentary textual representation of a `Component`
+    #[deprecated(note = "use `wasmprinter::print(&component.encode()?)` for a proper WAT dump")]
+    #[allow(deprecated)]
     pub fn print(&self) {
         // Print Alias
         if !self.alias.items.is_empty() {

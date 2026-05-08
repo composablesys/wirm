@@ -1,9 +1,12 @@
+#![allow(deprecated)]
+
 use wasmparser::{
     ComponentAlias, ComponentDefinedType, ComponentExport, ComponentImport, ComponentType,
     ComponentTypeDeclaration, CompositeInnerType, CoreType, InstanceTypeDeclaration,
     ModuleTypeDeclaration, SubType,
 };
 
+#[deprecated(note = "use `wasmprinter::print(&component.encode()?)` for a proper WAT dump")]
 pub fn print_alias(alias: &ComponentAlias) {
     match alias {
         ComponentAlias::InstanceExport {
@@ -24,6 +27,7 @@ pub fn print_alias(alias: &ComponentAlias) {
     }
 }
 
+#[deprecated(note = "use `wasmprinter::print(&component.encode()?)` for a proper WAT dump")]
 pub fn print_subtype(ty: &SubType) {
     match ty.composite_type.inner {
         CompositeInnerType::Array(_) => eprintln!("SubType Array"),
@@ -33,6 +37,7 @@ pub fn print_subtype(ty: &SubType) {
     }
 }
 
+#[deprecated(note = "use `wasmprinter::print(&component.encode()?)` for a proper WAT dump")]
 pub fn print_module_ty_declaration(ty: &ModuleTypeDeclaration) {
     eprint!("Module: ");
     match ty {
@@ -55,6 +60,7 @@ pub fn print_module_ty_declaration(ty: &ModuleTypeDeclaration) {
     }
 }
 
+#[deprecated(note = "use `wasmprinter::print(&component.encode()?)` for a proper WAT dump")]
 pub fn print_core_type(ty: &CoreType) {
     eprint!("CoreType: ");
     match ty {
@@ -71,6 +77,7 @@ pub fn print_core_type(ty: &CoreType) {
     }
 }
 
+#[deprecated(note = "use `wasmprinter::print(&component.encode()?)` for a proper WAT dump")]
 pub fn print_component_defined_type(ty: &ComponentDefinedType) {
     eprint!("Component Defined Type: ");
     match ty {
@@ -92,6 +99,7 @@ pub fn print_component_defined_type(ty: &ComponentDefinedType) {
     }
 }
 
+#[deprecated(note = "use `wasmprinter::print(&component.encode()?)` for a proper WAT dump")]
 pub fn print_component_type_declaration(ty: &ComponentTypeDeclaration) {
     eprint!("Component Type Declaration: ");
     match ty {
@@ -103,6 +111,7 @@ pub fn print_component_type_declaration(ty: &ComponentTypeDeclaration) {
     }
 }
 
+#[deprecated(note = "use `wasmprinter::print(&component.encode()?)` for a proper WAT dump")]
 pub fn print_instance_type_declaration(ty: &InstanceTypeDeclaration) {
     eprint!("Instance Type Declaration: ");
     match ty {
@@ -113,6 +122,7 @@ pub fn print_instance_type_declaration(ty: &InstanceTypeDeclaration) {
     }
 }
 
+#[deprecated(note = "use `wasmprinter::print(&component.encode()?)` for a proper WAT dump")]
 pub fn print_component_type(ty: &ComponentType) {
     eprint!("Component Type: ");
     match ty {
@@ -135,10 +145,12 @@ pub fn print_component_type(ty: &ComponentType) {
     }
 }
 
+#[deprecated(note = "use `wasmprinter::print(&component.encode()?)` for a proper WAT dump")]
 pub fn print_component_import(imp: &ComponentImport) {
     eprintln!("Component Import: {:?}", imp.name.0);
 }
 
+#[deprecated(note = "use `wasmprinter::print(&component.encode()?)` for a proper WAT dump")]
 pub fn print_component_export(exp: &ComponentExport) {
     eprintln!("Component Export: {:?}", exp.name.0);
 }
