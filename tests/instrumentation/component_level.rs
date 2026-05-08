@@ -1,8 +1,8 @@
 use crate::instrumentation::test_module::{try_path, validate_wasm};
 use wasmparser::{
-    CanonicalFunction, ComponentAlias, ComponentExport, ComponentImport, ComponentImportName,
-    ComponentType, ComponentTypeRef, Export, ExternalKind, Instance, InstanceTypeDeclaration,
-    InstantiationArg, InstantiationArgKind,
+    CanonicalFunction, ComponentExport, ComponentImportName, ComponentType, ComponentTypeRef,
+    Export, ExternalKind, Instance, InstanceTypeDeclaration, InstantiationArg,
+    InstantiationArgKind,
 };
 use wirm::Component;
 
@@ -87,26 +87,24 @@ pub fn configure_component_libraries<'a>(
                 }
             }
         }
-        let inst_ty_id = wasm.add_component_type_instance(decls);
+        let inst_ty_id = wasm.add_component_type(ComponentType::Instance(decls.into_boxed_slice()));
 
         // Import the library from an external provider
-        let inst_id = wasm.add_import(ComponentImport {
-            name: ComponentImportName("whamm-core"),
-            ty: ComponentTypeRef::Instance(*inst_ty_id),
-        });
+        let inst_id =
+            wasm.add_import_component_instance(ComponentImportName("whamm-core"), *inst_ty_id);
 
         // Lower the exported functions using aliases
         let mut exports = vec![];
         for ComponentExport { name, kind, .. } in lib_wasm.exports.iter() {
-            let func_id = wasm.add_alias_func(ComponentAlias::InstanceExport {
-                name: name.0,
-                kind: *kind,
-                instance_index: inst_id,
-            });
-            let canon_id = wasm.add_canon_func(CanonicalFunction::Lower {
-                func_index: *func_id,
-                options: vec![].into_boxed_slice(),
-            });
+            let func_id = wasm
+                .add_alias_instance_export(*kind, *inst_id, name.0)
+                .unwrap_component_func();
+            let canon_id = wasm
+                .add_canon_func(CanonicalFunction::Lower {
+                    func_index: *func_id,
+                    options: vec![].into_boxed_slice(),
+                })
+                .unwrap_core();
 
             exports.push(Export {
                 name: name.0,
