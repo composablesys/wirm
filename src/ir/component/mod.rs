@@ -54,7 +54,7 @@ pub struct Component<'a> {
     /// component-index-space position (a `ComponentId`), which is
     /// parent-relative and only meaningful as a ref into a parent's
     /// `components` vector.
-    pub uid: CompUniqueId,
+    pub(crate) uid: CompUniqueId,
     /// Nested Components
     // These have scopes, but the scopes are looked up by CompUniqueId
     pub components: AppendOnlyVec<Component<'a>>,
@@ -620,27 +620,33 @@ impl<'a> Component<'a> {
         ComponentInstanceId(id as u32)
     }
 
-    /// Add a start section to this component. The start function itself
-    /// doesn't land in any index space (`IndexSpaceOf` returns `Space::NA`),
-    /// so nothing typed comes back. `results` declares the number of values
-    /// the start function produces — those are spec-level additions to the
-    /// component value index space, but wirm doesn't currently track them as
-    /// such (matching the parser), so callers can't reference them by
-    /// `ValueID` after adding.
-    pub fn add_start_section(
-        &mut self,
-        func: ComponentFunctionId,
-        arguments: Vec<ValueID>,
-        results: u32,
-    ) {
-        let arguments = arguments.iter().map(|v| **v).collect::<Vec<u32>>();
-        self.start_section.push(ComponentStartFunction {
-            func_index: *func,
-            arguments: arguments.into_boxed_slice(),
-            results,
-        });
-        self.add_section(ComponentSection::ComponentStartSection);
-    }
+    // Deferred until the parser-side start-result tracking bug is fixed (see
+    // the TODO in `parse_comp`'s `Payload::ComponentStartSection` arm). Once
+    // that lands, this should return `Vec<ValueID>` so callers can reference
+    // the produced values; shipping it before the fix would either ignore
+    // results (breaking calls that need them) or require a breaking signature
+    // change later.
+    //
+    // /// Add a start section to this component. `results` declares the number
+    // /// of values the start function produces — each becomes a new entry in
+    // /// the component value index space.
+    // pub fn add_start_section(
+    //     &mut self,
+    //     func: ComponentFunctionId,
+    //     arguments: Vec<ValueID>,
+    //     results: u32,
+    // ) -> Vec<ValueID> {
+    //     let arguments = arguments.iter().map(|v| **v).collect::<Vec<u32>>();
+    //     self.start_section.push(ComponentStartFunction {
+    //         func_index: *func,
+    //         arguments: arguments.into_boxed_slice(),
+    //         results,
+    //     });
+    //     self.add_section(ComponentSection::ComponentStartSection);
+    //     // ... allocate `results` ValueIDs through the index store and return
+    //     // them.
+    //     todo!()
+    // }
 
     fn add_to_sections(
         sections: &mut Vec<(u32, ComponentSection)>,

@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use crate::ir::component::idx_spaces::Space;
 use std::fmt::Display;
 
@@ -475,7 +474,7 @@ impl std::ops::Deref for ComponentId {
 /// monotonically by the parser as it walks; not exposed in any public
 /// component-model index reference.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct CompUniqueId(pub u32);
+pub(crate) struct CompUniqueId(pub(crate) u32);
 impl std::ops::Deref for CompUniqueId {
     type Target = u32;
     fn deref(&self) -> &Self::Target {
