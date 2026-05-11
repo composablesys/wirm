@@ -106,41 +106,15 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8)| {
         Err(_) => return,
     };
 
-    // Collect *all* Instantiate positions on each side, not just the
-    // first — multiple consumers in a single iteration stress the
-    // encoder's reorder pass with interleaved fwd-ref chains. We
-    // collect into vecs before mutating `comp` so the indices we
-    // iterate over aren't invalidated by recipe-added items (the
-    // sub-component instance recipe at depth > 1 itself produces a
-    // new top-level `ComponentInstance::Instantiate`, which we don't
-    // want to recurse into mid-pass).
-    let core_inst_positions: Vec<usize> = comp
-        .instances
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, i)| matches!(i, Instance::Instantiate { .. }).then_some(idx))
-        .collect();
-    let comp_inst_positions: Vec<usize> = comp
-        .component_instance
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, i)| matches!(i, ComponentInstance::Instantiate { .. }).then_some(idx))
-        .collect();
+    // Recurse the whole component tree and inject at every level.
+    // Returns the total count of (core + component) consumers found,
+    // so we can short-circuit when the input has no Instantiate
+    // anywhere — that path is already covered by `component_roundtrip`.
+    let consumers_found =
+        inject_recursively(&mut comp, mod_main, mod_sub, comp_main, comp_sub, &aux_names);
 
-    // Skip when neither side has an Instantiate to graft onto — the
-    // unmodified parse → encode → validate path is already covered
-    // by `component_roundtrip`, so re-running it here just smears
-    // coverage across two targets and slows libfuzzer's convergence
-    // on Instantiate-rich shapes.
-    if core_inst_positions.is_empty() && comp_inst_positions.is_empty() {
+    if consumers_found == 0 {
         return;
-    }
-
-    for pos in core_inst_positions {
-        try_inject_core_arg(&mut comp, pos, mod_main, mod_sub);
-    }
-    for pos in comp_inst_positions {
-        try_inject_component_arg(&mut comp, pos, comp_main, comp_sub, &aux_names);
     }
 
     // Always exercise add_custom_section — orthogonal to the
@@ -155,6 +129,51 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8)| {
         .validate_all(&encoded)
         .expect("instrumented component failed wasmparser validation");
 });
+
+/// Walk the component tree depth-first, injecting at every level.
+/// At each component we (1) snapshot the count of pre-existing
+/// sub-components so we don't recurse into ones our own recipes
+/// happen to add (e.g. `recipe_component_nested`), (2) inject into
+/// every `Instantiate` consumer at this level, then (3) recurse into
+/// each of the snapshot's sub-components. Returns the total number
+/// of (core + component) consumers found across the tree so the
+/// caller can short-circuit when there are none.
+fn inject_recursively<'a>(
+    comp: &mut Component<'a>,
+    mod_main: u8,
+    mod_sub: u8,
+    comp_main: u8,
+    comp_sub: u8,
+    aux_names: &[&'a str],
+) -> usize {
+    let preexisting_subcomponents = comp.components.len();
+    let core_inst_positions: Vec<usize> = comp
+        .instances
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, i)| matches!(i, Instance::Instantiate { .. }).then_some(idx))
+        .collect();
+    let comp_inst_positions: Vec<usize> = comp
+        .component_instance
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, i)| matches!(i, ComponentInstance::Instantiate { .. }).then_some(idx))
+        .collect();
+    let mut count = core_inst_positions.len() + comp_inst_positions.len();
+
+    for pos in core_inst_positions {
+        try_inject_core_arg(comp, pos, mod_main, mod_sub);
+    }
+    for pos in comp_inst_positions {
+        try_inject_component_arg(comp, pos, comp_main, comp_sub, aux_names);
+    }
+
+    for i in 0..preexisting_subcomponents {
+        let sub = &mut comp.components[i];
+        count += inject_recursively(sub, mod_main, mod_sub, comp_main, comp_sub, aux_names);
+    }
+    count
+}
 
 // ── module-side ─────────────────────────────────────────────────────
 
