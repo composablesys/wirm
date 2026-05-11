@@ -178,6 +178,16 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8, u8, u8, u8, u8)| {
         let _ = comp.add_start_section(start_func_consumer, vec![vid], 0);
     }
 
+    // Duplicate-and-redirect mutation: for each existing
+    // `FromExports` instance in the tree (both core and
+    // component-side), build an alias-wrapped duplicate and
+    // redirect any consumer args from the original to the
+    // duplicate. The wrapper is validation-equivalent because each
+    // export aliases the original under the same name + kind, so
+    // consumers see the same shape. Smith-generated input shapes
+    // drive most of the variety here.
+    duplicate_and_redirect_per_scope(&mut comp);
+
     // Always exercise add_custom_section at every scope (top-level
     // and all nested sub-components, including those freshly added
     // by recipes). Exercises the per-component custom-section
@@ -253,6 +263,131 @@ fn inject_recursively<'a>(
         );
     }
     count
+}
+
+/// Walk the component tree and, at every scope, for each existing
+/// `FromExports` instance (core and component-side both), build an
+/// alias-wrapped duplicate and redirect any consumer's args
+/// referring to the original toward the duplicate. The wrapper
+/// preserves validity because each new export aliases the original
+/// under the same name + kind. Acts on smith-generated `FromExports`
+/// shapes, so the mutations vary with the input rather than being
+/// driven by a static recipe.
+fn duplicate_and_redirect_per_scope<'a>(comp: &mut Component<'a>) {
+    duplicate_and_redirect_core(comp);
+    duplicate_and_redirect_component(comp);
+    let n = comp.components.len();
+    for i in 0..n {
+        duplicate_and_redirect_per_scope(&mut comp.components[i]);
+    }
+}
+
+fn duplicate_and_redirect_core<'a>(comp: &mut Component<'a>) {
+    let original_count = comp.instances.len();
+    let depth = injection_depth();
+    let mut redirects: Vec<(u32, u32)> = Vec::new();
+    for src_idx in 0..original_count {
+        let exports = match &comp.instances[src_idx] {
+            Instance::FromExports(es) if !es.is_empty() => es.to_vec(),
+            _ => continue,
+        };
+        // Build a depth-N chain of FromExports duplicates, each
+        // aliasing the previous level (chain[0] aliases the
+        // original). The encoder must walk every level via the
+        // new aliases — turning smith's single-level FromExports
+        // into a multi-hop chain.
+        let mut current_idx = src_idx as u32;
+        for _ in 0..depth.max(1) {
+            let mut new_exports = Vec::with_capacity(exports.len());
+            for e in &exports {
+                let alias =
+                    comp.add_alias_core_instance_export(e.kind, current_idx, e.name);
+                let raw_idx = match e.kind {
+                    ExternalKind::Func | ExternalKind::FuncExact => *alias.unwrap_core_func(),
+                    ExternalKind::Table => *alias.unwrap_core_table(),
+                    ExternalKind::Memory => *alias.unwrap_core_memory(),
+                    ExternalKind::Global => *alias.unwrap_core_global(),
+                    ExternalKind::Tag => *alias.unwrap_core_tag(),
+                };
+                new_exports.push(Export {
+                    name: e.name,
+                    kind: e.kind,
+                    index: raw_idx,
+                });
+            }
+            let dup = comp
+                .add_core_instance(Instance::FromExports(new_exports.into_boxed_slice()));
+            current_idx = *dup;
+        }
+        redirects.push((src_idx as u32, current_idx));
+    }
+    for c in 0..comp.instances.len() {
+        if let Instance::Instantiate { args, .. } = &mut comp.instances[c] {
+            let mut next = args.to_vec();
+            for arg in next.iter_mut() {
+                if let Some(&(_, dup)) =
+                    redirects.iter().find(|(orig, _)| *orig == arg.index)
+                {
+                    arg.index = dup;
+                }
+            }
+            *args = next.into_boxed_slice();
+        }
+    }
+}
+
+fn duplicate_and_redirect_component<'a>(comp: &mut Component<'a>) {
+    let original_count = comp.component_instance.len();
+    let depth = injection_depth();
+    let mut redirects: Vec<(u32, u32)> = Vec::new();
+    for src_idx in 0..original_count {
+        let exports = match &comp.component_instance[src_idx] {
+            ComponentInstance::FromExports(es) if !es.is_empty() => es.to_vec(),
+            _ => continue,
+        };
+        let mut current_idx = src_idx as u32;
+        for _ in 0..depth.max(1) {
+            let mut new_exports = Vec::with_capacity(exports.len());
+            for e in &exports {
+                let alias = comp.add_alias_instance_export(e.kind, current_idx, e.name.0);
+                let raw_idx = match e.kind {
+                    ComponentExternalKind::Module => *alias.unwrap_core_module(),
+                    ComponentExternalKind::Component => *alias.unwrap_component(),
+                    ComponentExternalKind::Func => *alias.unwrap_component_func(),
+                    ComponentExternalKind::Type => *alias.unwrap_component_type(),
+                    ComponentExternalKind::Value => *alias.unwrap_component_value(),
+                    ComponentExternalKind::Instance => *alias.unwrap_component_instance(),
+                };
+                new_exports.push(wasmparser::ComponentExport {
+                    name: e.name,
+                    kind: e.kind,
+                    index: raw_idx,
+                    ty: None,
+                });
+            }
+            let dup = comp.add_component_instance(ComponentInstance::FromExports(
+                new_exports.into_boxed_slice(),
+            ));
+            current_idx = *dup;
+        }
+        redirects.push((src_idx as u32, current_idx));
+    }
+    for c in 0..comp.component_instance.len() {
+        if let ComponentInstance::Instantiate { args, .. } = &mut comp.component_instance[c]
+        {
+            let mut next = args.to_vec();
+            for arg in next.iter_mut() {
+                if arg.kind == ComponentExternalKind::Instance {
+                    if let Some(&(_, dup)) =
+                        redirects.iter().find(|(orig, _)| *orig == arg.index)
+                    {
+                        arg.index = dup;
+                    }
+                }
+            }
+            *args = next.into_boxed_slice();
+        }
+    }
 }
 
 /// Add a custom section to this component and every nested sub-
