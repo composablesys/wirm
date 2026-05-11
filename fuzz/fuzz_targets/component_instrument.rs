@@ -896,22 +896,40 @@ fn recipe_func_import<'a>(comp: &mut Component<'a>) -> ComponentFunctionId {
     comp.add_import_component_func(ComponentImportName("wirm_f"), *func_ty)
 }
 
-/// Sub 1: build a fresh comp-instance with a single Func export, then
-/// `alias_instance_export(Func, ...)` it back out. Four-hop chain
-/// (func type → import → FromExports instance → alias).
+/// Sub 1: build a fresh comp-instance with three Func exports
+/// (three separate imported funcs), then
+/// `alias_instance_export(Func, ...)` one of them back out. Tests
+/// the encoder's iteration over a multi-entry component
+/// `FromExports` export list rather than just single-entry.
 fn recipe_func_alias_instance_export<'a>(comp: &mut Component<'a>) -> ComponentFunctionId {
     let func_ty = comp.add_component_type(ComponentType::Func(empty_func_type()));
-    let imported_func = comp.add_import_component_func(ComponentImportName("wirm_f"), *func_ty);
+    let imported_a = comp.add_import_component_func(ComponentImportName("wirm_f_a"), *func_ty);
+    let imported_b = comp.add_import_component_func(ComponentImportName("wirm_f_b"), *func_ty);
+    let imported_c = comp.add_import_component_func(ComponentImportName("wirm_f_c"), *func_ty);
     let inst = comp.add_component_instance(ComponentInstance::FromExports(
-        vec![wasmparser::ComponentExport {
-            name: ComponentExportName("f"),
-            kind: ComponentExternalKind::Func,
-            index: *imported_func,
-            ty: None,
-        }]
+        vec![
+            wasmparser::ComponentExport {
+                name: ComponentExportName("fa"),
+                kind: ComponentExternalKind::Func,
+                index: *imported_a,
+                ty: None,
+            },
+            wasmparser::ComponentExport {
+                name: ComponentExportName("fb"),
+                kind: ComponentExternalKind::Func,
+                index: *imported_b,
+                ty: None,
+            },
+            wasmparser::ComponentExport {
+                name: ComponentExportName("fc"),
+                kind: ComponentExternalKind::Func,
+                index: *imported_c,
+                ty: None,
+            },
+        ]
         .into_boxed_slice(),
     ));
-    let alias = comp.add_alias_instance_export(ComponentExternalKind::Func, *inst, "f");
+    let alias = comp.add_alias_instance_export(ComponentExternalKind::Func, *inst, "fb");
     alias.unwrap_component_func()
 }
 
@@ -1077,24 +1095,36 @@ fn recipe_type_defined_variants<'a>(comp: &mut Component<'a>, sub: u8) -> Compon
     let val = ComponentValType::Type(*prim);
     let key_str = ComponentValType::Primitive(PrimitiveValType::String);
     let defined = match sub % 11 {
-        0 => ComponentDefinedType::Record(vec![("x", val)].into_boxed_slice()),
-        1 => ComponentDefinedType::Tuple(vec![val].into_boxed_slice()),
+        0 => ComponentDefinedType::Record(
+            vec![("x", val), ("y", val), ("z", val)].into_boxed_slice(),
+        ),
+        1 => ComponentDefinedType::Tuple(vec![val, val, val].into_boxed_slice()),
         2 => ComponentDefinedType::Option(val),
         3 => ComponentDefinedType::Result {
             ok: Some(val),
             err: None,
         },
         4 => ComponentDefinedType::Variant(
-            vec![VariantCase {
-                name: "v",
-                ty: Some(val),
-            }]
+            vec![
+                VariantCase {
+                    name: "u",
+                    ty: Some(val),
+                },
+                VariantCase {
+                    name: "v",
+                    ty: None,
+                },
+                VariantCase {
+                    name: "w",
+                    ty: Some(val),
+                },
+            ]
             .into_boxed_slice(),
         ),
-        5 => ComponentDefinedType::Flags(vec!["a", "b"].into_boxed_slice()),
-        6 => ComponentDefinedType::Enum(vec!["x", "y"].into_boxed_slice()),
+        5 => ComponentDefinedType::Flags(vec!["a", "b", "c", "d"].into_boxed_slice()),
+        6 => ComponentDefinedType::Enum(vec!["x", "y", "z", "w"].into_boxed_slice()),
         7 => ComponentDefinedType::Map(key_str, val),
-        8 => ComponentDefinedType::FixedLengthList(val, 2),
+        8 => ComponentDefinedType::FixedLengthList(val, 4),
         9 => ComponentDefinedType::Future(Some(val)),
         10 => ComponentDefinedType::Stream(Some(val)),
         _ => unreachable!(),
