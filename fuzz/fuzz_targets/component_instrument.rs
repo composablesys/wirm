@@ -628,7 +628,7 @@ fn empty_func_type<'a>() -> ComponentFuncType<'a> {
 
 // ── kind 3: Type ────────────────────────────────────────────────────
 
-const NUM_KIND_TYPE_SUBS: u8 = 4;
+const NUM_KIND_TYPE_SUBS: u8 = 5;
 
 fn recipe_kind_type<'a>(
     comp: &mut Component<'a>,
@@ -640,6 +640,7 @@ fn recipe_kind_type<'a>(
         1 => Some(recipe_type_import_bounds(comp)),
         2 => Some(recipe_type_list_chain(comp, depth)),
         3 => Some(recipe_type_record_tuple(comp, sub)),
+        4 => Some(recipe_type_diamond(comp, depth)),
         _ => unreachable!(),
     }
 }
@@ -669,6 +670,45 @@ fn recipe_type_list_chain<'a>(comp: &mut Component<'a>, depth: usize) -> Compone
         )));
     }
     current
+}
+
+/// Sub 4: diamond. Build a shared primitive deep dep, then two
+/// independent `Defined::List` chains of length `depth` that both
+/// terminate at the shared primitive, then wrap both chain heads in
+/// a `Defined::Tuple`. The tuple's two field types both reach the
+/// shared primitive via disjoint paths, so the encoder's
+/// `seen`-tracked topological walk must dedupe the shared node when
+/// it's visited from the second chain. A bug in the dedup logic
+/// would either re-emit the shared item or skip it entirely.
+fn recipe_type_diamond<'a>(comp: &mut Component<'a>, depth: usize) -> ComponentTypeId {
+    let shared = comp.add_component_type(ComponentType::Defined(
+        ComponentDefinedType::Primitive(PrimitiveValType::U32),
+    ));
+    let left = list_chain_to(comp, *shared, depth);
+    let right = list_chain_to(comp, *shared, depth);
+    comp.add_component_type(ComponentType::Defined(ComponentDefinedType::Tuple(
+        vec![
+            ComponentValType::Type(*left),
+            ComponentValType::Type(*right),
+        ]
+        .into_boxed_slice(),
+    )))
+}
+
+/// Helper for `recipe_type_diamond`: append `depth` `Defined::List`
+/// types, each wrapping `Type(prev)`, starting from `start_idx`.
+/// Returns the head of the chain (the last list added).
+fn list_chain_to<'a>(comp: &mut Component<'a>, start_idx: u32, depth: usize) -> ComponentTypeId {
+    let mut current_idx = start_idx;
+    let mut last = None;
+    for _ in 0..depth.max(1) {
+        let next = comp.add_component_type(ComponentType::Defined(ComponentDefinedType::List(
+            ComponentValType::Type(current_idx),
+        )));
+        current_idx = *next;
+        last = Some(next);
+    }
+    last.expect("depth >= 1")
 }
 
 /// Sub 3: rotate among Record / Tuple / Option / Result, each
