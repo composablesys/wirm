@@ -340,6 +340,14 @@ fn mutate_from_exports_per_scope<'a>(comp: &mut Component<'a>) {
     }
 }
 
+// TODO: layer a visitor-traced duplication step underneath the
+//   synthetic depth-N chain. Use `VisitCtx::resolve` to follow
+//   each export's source through the alias graph and rebuild a
+//   parallel chain whose shape matches smith's input. The
+//   synthetic depth-N extension still runs on top of that
+//   reconstructed chain — visitor-traced gives per-input shape
+//   variety, synthetic-N gives configurable extra depth.
+
 /// Walk the component tree and, at every scope, for each existing
 /// `FromExports` instance (core and component-side both), build an
 /// alias-wrapped duplicate and redirect any consumer's args
