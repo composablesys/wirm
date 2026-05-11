@@ -87,7 +87,7 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8)| {
         .is_err()
     {
         return;
-    }se
+    }
 
     // Per-iteration arena of aux arg names for branching recipes —
     // declared before `comp` so its references satisfy `comp`'s `'a`
@@ -106,28 +106,40 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8)| {
         Err(_) => return,
     };
 
-    let core_inst_pos = comp
+    // Collect *all* Instantiate positions on each side, not just the
+    // first — multiple consumers in a single iteration stress the
+    // encoder's reorder pass with interleaved fwd-ref chains. We
+    // collect into vecs before mutating `comp` so the indices we
+    // iterate over aren't invalidated by recipe-added items (the
+    // sub-component instance recipe at depth > 1 itself produces a
+    // new top-level `ComponentInstance::Instantiate`, which we don't
+    // want to recurse into mid-pass).
+    let core_inst_positions: Vec<usize> = comp
         .instances
         .iter()
-        .position(|i| matches!(i, Instance::Instantiate { .. }));
-    let comp_inst_pos = comp
+        .enumerate()
+        .filter_map(|(idx, i)| matches!(i, Instance::Instantiate { .. }).then_some(idx))
+        .collect();
+    let comp_inst_positions: Vec<usize> = comp
         .component_instance
         .iter()
-        .position(|i| matches!(i, ComponentInstance::Instantiate { .. }));
+        .enumerate()
+        .filter_map(|(idx, i)| matches!(i, ComponentInstance::Instantiate { .. }).then_some(idx))
+        .collect();
 
     // Skip when neither side has an Instantiate to graft onto — the
     // unmodified parse → encode → validate path is already covered
     // by `component_roundtrip`, so re-running it here just smears
     // coverage across two targets and slows libfuzzer's convergence
     // on Instantiate-rich shapes.
-    if core_inst_pos.is_none() && comp_inst_pos.is_none() {
+    if core_inst_positions.is_empty() && comp_inst_positions.is_empty() {
         return;
     }
 
-    if let Some(pos) = core_inst_pos {
+    for pos in core_inst_positions {
         try_inject_core_arg(&mut comp, pos, mod_main, mod_sub);
     }
-    if let Some(pos) = comp_inst_pos {
+    for pos in comp_inst_positions {
         try_inject_component_arg(&mut comp, pos, comp_main, comp_sub, &aux_names);
     }
 
