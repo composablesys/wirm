@@ -55,7 +55,7 @@ use wirm::ir::id::{
     ModuleID, ValueID,
 };
 use wirm::ir::types::CustomSection;
-use wirm::Component;
+use wirm::{Component, Module};
 
 /// Forward-reference dep-chain depth used by every chained recipe.
 /// Distinct from wasm-smith's own size/depth knob — that one bounds
@@ -111,6 +111,12 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8, u8, u8, u8, u8)| {
     let aux_names_a: Vec<&str> = aux_names_owned_a.iter().map(|s| s.as_str()).collect();
     let aux_names_b: Vec<&str> = aux_names_owned_b.iter().map(|s| s.as_str()).collect();
 
+    // Precomputed minimal-valid empty-component bytes, used by the
+    // `recipe_component_from_bytes` sub-recipe. Built once per
+    // iteration and declared before `comp` so its `&[u8]` reference
+    // outlives `comp`'s `'a` lifetime.
+    let empty_component_bytes = wasm_encoder::Component::new().finish();
+
     let mut comp = match Component::parse(&bytes, false, false) {
         Ok(c) => c,
         Err(_) => return,
@@ -130,6 +136,7 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8, u8, u8, u8, u8)| {
         &aux_names_a,
         "wirm_inj_a",
         "a",
+        &empty_component_bytes,
     );
     let _ = inject_recursively(
         &mut comp,
@@ -140,6 +147,7 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8, u8, u8, u8, u8)| {
         &aux_names_b,
         "wirm_inj_b",
         "b",
+        &empty_component_bytes,
     );
 
     if consumers_found == 0 {
@@ -227,6 +235,7 @@ fn inject_recursively<'a>(
     aux_names: &[&'a str],
     primary_name: &'a str,
     round_tag: &'a str,
+    empty_component_bytes: &'a [u8],
 ) -> usize {
     let preexisting_subcomponents = comp.components.len();
     let core_inst_positions: Vec<usize> = comp
@@ -255,6 +264,7 @@ fn inject_recursively<'a>(
             aux_names,
             primary_name,
             round_tag,
+            empty_component_bytes,
         );
     }
 
@@ -269,6 +279,7 @@ fn inject_recursively<'a>(
             aux_names,
             primary_name,
             round_tag,
+            empty_component_bytes,
         );
     }
     count
@@ -666,11 +677,12 @@ fn try_inject_component_arg<'a>(
     aux_names: &[&'a str],
     primary_name: &'a str,
     round_tag: &'a str,
+    empty_component_bytes: &'a [u8],
 ) {
     let depth = injection_depth();
     let item = match recipe % NUM_COMPONENT_KINDS {
         0 => dispatch_kind_module(comp, target_idx, sub, depth, aux_names),
-        1 => recipe_kind_component(comp, sub, depth).map(|id| {
+        1 => recipe_kind_component(comp, sub, depth, empty_component_bytes).map(|id| {
             (
                 ComponentExternalKind::Component,
                 *id,
@@ -772,7 +784,7 @@ fn export_injected<'a>(comp: &mut Component<'a>, injected: Injected, round_tag: 
 
 // ── kind 0: Module ──────────────────────────────────────────────────
 
-const NUM_KIND_MODULE_SUBS: u8 = 2;
+const NUM_KIND_MODULE_SUBS: u8 = 3;
 
 /// Module-kind dispatch: takes `target_idx` and `aux_names` so the
 /// branching sub-recipe can append extra args directly. Returns the
@@ -788,9 +800,18 @@ fn dispatch_kind_module<'a>(
     let id = match sub % NUM_KIND_MODULE_SUBS {
         0 => recipe_module_import(comp),
         1 => recipe_module_branching(comp, target_idx, depth, aux_names),
+        2 => recipe_module_local(comp),
         _ => unreachable!(),
     };
     Some((ComponentExternalKind::Module, *id, Injected::Module(id)))
+}
+
+/// Sub 2: build a fresh empty wirm `Module` directly via
+/// `add_module`. Referenced by both the consumer's `wirm_inj_*`
+/// arg (via dispatch) and the orthogonal export phase
+/// (`add_export_core_module`) — so two refs, no dangling.
+fn recipe_module_local<'a>(comp: &mut Component<'a>) -> ModuleID {
+    comp.add_module(Module::default())
 }
 
 /// Sub 0: empty `CoreType::Module` then an `import` of that type.
@@ -833,18 +854,32 @@ fn recipe_module_branching<'a>(
 
 // ── kind 1: Component ───────────────────────────────────────────────
 
-const NUM_KIND_COMPONENT_SUBS: u8 = 2;
+const NUM_KIND_COMPONENT_SUBS: u8 = 3;
 
 fn recipe_kind_component<'a>(
     comp: &mut Component<'a>,
     sub: u8,
     depth: usize,
+    empty_component_bytes: &'a [u8],
 ) -> Option<ComponentId> {
     match sub % NUM_KIND_COMPONENT_SUBS {
         0 => Some(recipe_component_nested(comp, depth)),
         1 => Some(recipe_component_import(comp)),
+        2 => recipe_component_from_bytes(comp, empty_component_bytes),
         _ => unreachable!(),
     }
+}
+
+/// Sub 2: add a sub-component parsed from raw bytes via
+/// `add_component_from_bytes`. The bytes are a precomputed minimal
+/// valid empty component. Referenced by both the consumer's
+/// `wirm_inj_*` arg and the orthogonal export phase
+/// (`add_export_component`).
+fn recipe_component_from_bytes<'a>(
+    comp: &mut Component<'a>,
+    bytes: &'a [u8],
+) -> Option<ComponentId> {
+    comp.add_component_from_bytes(bytes).ok()
 }
 
 /// Sub 0: nest empty sub-components to `depth`. At depth 1 just an
