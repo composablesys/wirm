@@ -1102,52 +1102,70 @@ fn recipe_type_defined_variants<'a>(comp: &mut Component<'a>, sub: u8) -> Compon
     comp.add_component_type(ComponentType::Defined(defined))
 }
 
-/// Sub 6: define a fresh `Resource` type and reference it via either
-/// `Defined::Own` or `Defined::Borrow` (selected by the sub byte).
-/// Resource representation is core `i32`, no destructor. Also adds
-/// canon `ResourceNew/Drop/Rep` funcs and wraps them in a fresh
-/// `FromExports` core instance so the encoder reaches them via
-/// dep traversal (`Instance::get_item_refs` → `Space::CoreFunc` →
-/// `collect_canon`) rather than only via section iteration. This is
-/// our sole exercise of `add_canon_func`.
+/// Sub 6: define two `Resource` types. The first has no
+/// destructor; canon `ResourceNew/Drop/Rep` are created for it and
+/// wrapped in a `FromExports` core instance so the encoder reaches
+/// them via dep traversal. The second resource uses the first's
+/// canon `ResourceDrop` core func as its destructor — both have
+/// `[i32] -> []` signature, so validation accepts it. This adds a
+/// `Resource → CoreFunc(canon) → Resource` ref edge the encoder
+/// must resolve, and exercises the resource-with-dtor code path
+/// that an `dtor: None` resource doesn't.
 fn recipe_type_resource<'a>(comp: &mut Component<'a>, sub: u8) -> ComponentTypeId {
-    let resource_ty = comp.add_component_type(ComponentType::Resource {
+    let resource_a = comp.add_component_type(ComponentType::Resource {
         rep: ValType::I32,
         dtor: None,
     });
     let canon_new = comp.add_canon_func(CanonicalFunction::ResourceNew {
-        resource: *resource_ty,
+        resource: *resource_a,
     });
     let canon_drop = comp.add_canon_func(CanonicalFunction::ResourceDrop {
-        resource: *resource_ty,
+        resource: *resource_a,
     });
     let canon_rep = comp.add_canon_func(CanonicalFunction::ResourceRep {
-        resource: *resource_ty,
+        resource: *resource_a,
     });
+    let canon_new_idx = *canon_new.unwrap_core();
+    let canon_drop_idx = *canon_drop.unwrap_core();
+    let canon_rep_idx = *canon_rep.unwrap_core();
     let _wrapper = comp.add_core_instance(Instance::FromExports(
         vec![
             Export {
                 name: "new",
                 kind: ExternalKind::Func,
-                index: *canon_new.unwrap_core(),
+                index: canon_new_idx,
             },
             Export {
                 name: "drop",
                 kind: ExternalKind::Func,
-                index: *canon_drop.unwrap_core(),
+                index: canon_drop_idx,
             },
             Export {
                 name: "rep",
                 kind: ExternalKind::Func,
-                index: *canon_rep.unwrap_core(),
+                index: canon_rep_idx,
             },
         ]
         .into_boxed_slice(),
     ));
-    let defined = if sub % 2 == 0 {
-        ComponentDefinedType::Own(*resource_ty)
+    // Resource B: uses A's canon ResourceDrop as its dtor. Signature
+    // matches (`[i32] -> []`); the encoder must resolve the dtor
+    // ref through CoreFunc space back to the canon.
+    let resource_b = comp.add_component_type(ComponentType::Resource {
+        rep: ValType::I32,
+        dtor: Some(canon_drop_idx),
+    });
+    // Pick A or B based on the sub byte so both resources see Own
+    // and Borrow paths across iterations.
+    let target = if (sub / 2) % 2 == 0 {
+        resource_a
     } else {
-        ComponentDefinedType::Borrow(*resource_ty)
+        resource_b
+    };
+    let defined = if sub % 2 == 0 {
+        ComponentDefinedType::Own(*target)
+    } else {
+        ComponentDefinedType::Borrow(*target)
     };
     comp.add_component_type(ComponentType::Defined(defined))
 }
