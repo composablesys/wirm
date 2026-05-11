@@ -45,9 +45,10 @@ use libfuzzer_sys::fuzz_target;
 use wasm_smith::Component as SmithComponent;
 use wasmparser::{
     ComponentDefinedType, ComponentExportName, ComponentExternalKind, ComponentFuncType,
-    ComponentImportName, ComponentInstance, ComponentInstantiationArg, ComponentType,
-    ComponentValType, CoreType, Export, ExternalKind, Import, Instance, InstantiationArg,
-    InstantiationArgKind, MemoryType, ModuleTypeDeclaration, PrimitiveValType, TypeBounds, TypeRef,
+    ComponentImportName, ComponentInstance, ComponentInstantiationArg, ComponentOuterAliasKind,
+    ComponentType, ComponentValType, CoreType, Export, ExternalKind, Import, Instance,
+    InstantiationArg, InstantiationArgKind, MemoryType, ModuleTypeDeclaration, PrimitiveValType,
+    TypeBounds, TypeRef,
 };
 use wirm::ir::id::{
     ComponentFunctionId, ComponentId, ComponentInstanceId, ComponentTypeId, CoreInstanceId,
@@ -647,7 +648,7 @@ fn empty_func_type<'a>() -> ComponentFuncType<'a> {
 
 // ── kind 3: Type ────────────────────────────────────────────────────
 
-const NUM_KIND_TYPE_SUBS: u8 = 5;
+const NUM_KIND_TYPE_SUBS: u8 = 6;
 
 fn recipe_kind_type<'a>(
     comp: &mut Component<'a>,
@@ -660,8 +661,37 @@ fn recipe_kind_type<'a>(
         2 => Some(recipe_type_list_chain(comp, depth)),
         3 => Some(recipe_type_record_tuple(comp, sub)),
         4 => Some(recipe_type_diamond(comp, depth)),
+        5 => Some(recipe_type_via_outer_alias(comp)),
         _ => unreachable!(),
     }
+}
+
+/// Sub 5: exercise `add_alias_outer`. Add a primitive type at parent
+/// scope; build a sub-component that outer-aliases it (depth = 1) and
+/// re-exports it as a type; instantiate the sub-component from parent;
+/// alias the new instance's type export back into the parent's
+/// CompType space. The consumer's arg points at that final alias.
+///
+/// This is the only path the fuzz target exercises that produces a
+/// `RefKind` with `depth > 0` (the outer alias's reference back into
+/// the parent scope). Bugs in `comp_at(depth)` resolution or the
+/// scope stack management would surface here.
+fn recipe_type_via_outer_alias<'a>(comp: &mut Component<'a>) -> ComponentTypeId {
+    let parent_ty = comp.add_component_type(ComponentType::Defined(
+        ComponentDefinedType::Primitive(PrimitiveValType::U32),
+    ));
+    let parent_ty_idx = *parent_ty;
+    let sub_comp = comp.add_component(|inner| {
+        let alias = inner.add_alias_outer(ComponentOuterAliasKind::Type, 1, parent_ty_idx);
+        let aliased_ty = alias.unwrap_component_type();
+        inner.add_export_component_type(ComponentExportName("t"), aliased_ty, None);
+    });
+    let inst = comp.add_component_instance(ComponentInstance::Instantiate {
+        component_index: *sub_comp,
+        args: Vec::new().into_boxed_slice(),
+    });
+    let exported = comp.add_alias_instance_export(ComponentExternalKind::Type, *inst, "t");
+    exported.unwrap_component_type()
 }
 
 /// Sub 0: a fresh primitive defined type. Single hop; doesn't chain.
