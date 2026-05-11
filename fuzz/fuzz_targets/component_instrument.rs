@@ -150,9 +150,12 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8)| {
         let _ = comp.add_start_section(start_func_consumer, vec![vid], 0);
     }
 
-    // Always exercise add_custom_section — orthogonal to the
-    // injection logic, single API call.
-    comp.add_custom_section(CustomSection::new("wirm_inj_cs", b"wirm".to_vec()));
+    // Always exercise add_custom_section at every scope (top-level
+    // and all nested sub-components, including those freshly added
+    // by recipes). Exercises the per-component custom-section
+    // emission path in the encoder rather than just the top-level
+    // one.
+    add_custom_section_per_scope(&mut comp);
 
     let encoded = comp
         .encode()
@@ -206,6 +209,19 @@ fn inject_recursively<'a>(
         count += inject_recursively(sub, mod_main, mod_sub, comp_main, comp_sub, aux_names);
     }
     count
+}
+
+/// Add a custom section to this component and every nested sub-
+/// component, including any sub-components freshly added by the
+/// injection phase. The encoder emits custom sections per-component,
+/// so seeding one at every scope exercises the per-component
+/// emission path rather than only the top-level one.
+fn add_custom_section_per_scope<'a>(comp: &mut Component<'a>) {
+    comp.add_custom_section(CustomSection::new("wirm_inj_cs", b"wirm".to_vec()));
+    let n = comp.components.len();
+    for i in 0..n {
+        add_custom_section_per_scope(&mut comp.components[i]);
+    }
 }
 
 // ── module-side ─────────────────────────────────────────────────────
