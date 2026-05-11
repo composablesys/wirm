@@ -825,7 +825,7 @@ fn recipe_value_via_list_chain<'a>(comp: &mut Component<'a>, depth: usize) -> Va
 
 // ── kind 5: Instance ────────────────────────────────────────────────
 
-const NUM_KIND_INSTANCE_SUBS: u8 = 4;
+const NUM_KIND_INSTANCE_SUBS: u8 = 5;
 
 fn recipe_kind_instance<'a>(
     comp: &mut Component<'a>,
@@ -837,8 +837,45 @@ fn recipe_kind_instance<'a>(
         1 => Some(recipe_instance_via_subcomponent(comp, depth)),
         2 => Some(recipe_instance_import(comp)),
         3 => Some(recipe_instance_alias_chain(comp, depth)),
+        4 => Some(recipe_instance_cross_kind_chain(comp, depth)),
         _ => unreachable!(),
     }
+}
+
+/// Sub 4: cross-kind glue chain. Build a deep `Defined::List` chain
+/// on the type side, wrap its tail in a `Func` type's result, import
+/// a func of that type, and expose it via a `FromExports` instance.
+/// Consumer's arg points at the instance, so the encoder's walk
+/// crosses `CompInst → CompFunc → CompType → CompType...` in a
+/// single chain. Hits more arms of `collect_deps`' space dispatch
+/// per single forward-ref edge than any same-kind chain.
+fn recipe_instance_cross_kind_chain<'a>(
+    comp: &mut Component<'a>,
+    depth: usize,
+) -> ComponentInstanceId {
+    let mut latest_defined = comp.add_component_type(ComponentType::Defined(
+        ComponentDefinedType::Primitive(PrimitiveValType::U32),
+    ));
+    for _ in 0..depth.max(1) {
+        latest_defined = comp.add_component_type(ComponentType::Defined(
+            ComponentDefinedType::List(ComponentValType::Type(*latest_defined)),
+        ));
+    }
+    let func_ty = comp.add_component_type(ComponentType::Func(ComponentFuncType {
+        async_: false,
+        params: Vec::new().into_boxed_slice(),
+        result: Some(ComponentValType::Type(*latest_defined)),
+    }));
+    let imported_func = comp.add_import_component_func(ComponentImportName("wirm_f"), *func_ty);
+    comp.add_component_instance(ComponentInstance::FromExports(
+        vec![wasmparser::ComponentExport {
+            name: ComponentExportName("f"),
+            kind: ComponentExternalKind::Func,
+            index: *imported_func,
+            ty: None,
+        }]
+        .into_boxed_slice(),
+    ))
 }
 
 /// Sub 0: empty `FromExports` component instance.
