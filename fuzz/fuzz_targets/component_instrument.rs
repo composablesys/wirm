@@ -79,8 +79,18 @@ fn injection_depth() -> usize {
 const NUM_CORE_RECIPES: u8 = 4;
 const NUM_COMPONENT_KINDS: u8 = 6;
 
-fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8)| {
-    let (smith, mod_main, mod_sub, comp_main, comp_sub) = input;
+fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8, u8, u8, u8, u8)| {
+    let (
+        smith,
+        mod_main_a,
+        mod_sub_a,
+        comp_main_a,
+        comp_sub_a,
+        mod_main_b,
+        mod_sub_b,
+        comp_main_b,
+        comp_sub_b,
+    ) = input;
     let bytes = smith.to_bytes();
 
     if wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
@@ -90,17 +100,16 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8)| {
         return;
     }
 
-    // Per-iteration arena of aux arg names for branching recipes —
-    // declared before `comp` so its references satisfy `comp`'s `'a`
-    // lifetime, and dropped together with `comp` at end of iteration.
-    // Sized one shorter than depth: a branching recipe at depth N
-    // appends `N-1` extras under aux names plus 1 primary as
-    // `wirm_inj`, so we never need more than `N-1` aux slots.
+    // Per-iteration arena of aux arg names for branching recipes,
+    // one set per recipe round. Two rounds (A and B) so each
+    // consumer gets two unrelated chains. Names are round-prefixed
+    // so the two rounds can't collide within a single args list.
     let depth = injection_depth();
-    let aux_names_owned: Vec<String> = (0..depth.saturating_sub(1).max(1))
-        .map(|i| format!("wirm_aux_{i}"))
-        .collect();
-    let aux_names: Vec<&str> = aux_names_owned.iter().map(|s| s.as_str()).collect();
+    let n_aux = depth.saturating_sub(1).max(1);
+    let aux_names_owned_a: Vec<String> = (0..n_aux).map(|i| format!("wirm_a_aux_{i}")).collect();
+    let aux_names_owned_b: Vec<String> = (0..n_aux).map(|i| format!("wirm_b_aux_{i}")).collect();
+    let aux_names_a: Vec<&str> = aux_names_owned_a.iter().map(|s| s.as_str()).collect();
+    let aux_names_b: Vec<&str> = aux_names_owned_b.iter().map(|s| s.as_str()).collect();
 
     let mut comp = match Component::parse(&bytes, false, false) {
         Ok(c) => c,
@@ -108,11 +117,30 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8)| {
     };
 
     // Recurse the whole component tree and inject at every level.
-    // Returns the total count of (core + component) consumers found,
-    // so we can short-circuit when the input has no Instantiate
-    // anywhere — that path is already covered by `component_roundtrip`.
-    let consumers_found =
-        inject_recursively(&mut comp, mod_main, mod_sub, comp_main, comp_sub, &aux_names);
+    // Two recipe rounds (A and B) per consumer — each consumer
+    // gets two unrelated chains feeding it. Returns the total
+    // count of (core + component) consumers found, so we can
+    // short-circuit when the input has no Instantiate anywhere.
+    let consumers_found = inject_recursively(
+        &mut comp,
+        mod_main_a,
+        mod_sub_a,
+        comp_main_a,
+        comp_sub_a,
+        &aux_names_a,
+        "wirm_inj_a",
+        "a",
+    );
+    let _ = inject_recursively(
+        &mut comp,
+        mod_main_b,
+        mod_sub_b,
+        comp_main_b,
+        comp_sub_b,
+        &aux_names_b,
+        "wirm_inj_b",
+        "b",
+    );
 
     if consumers_found == 0 {
         return;
@@ -167,13 +195,10 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8)| {
 });
 
 /// Walk the component tree depth-first, injecting at every level.
-/// At each component we (1) snapshot the count of pre-existing
-/// sub-components so we don't recurse into ones our own recipes
-/// happen to add (e.g. `recipe_component_nested`), (2) inject into
-/// every `Instantiate` consumer at this level, then (3) recurse into
-/// each of the snapshot's sub-components. Returns the total number
-/// of (core + component) consumers found across the tree so the
-/// caller can short-circuit when there are none.
+/// `primary_name` is the arg name for this round's injection (e.g.
+/// "wirm_inj_a") and `round_tag` is a short label embedded in
+/// kind-specific export names so two rounds against the same
+/// consumer can't collide on either arg names or export names.
 fn inject_recursively<'a>(
     comp: &mut Component<'a>,
     mod_main: u8,
@@ -181,6 +206,8 @@ fn inject_recursively<'a>(
     comp_main: u8,
     comp_sub: u8,
     aux_names: &[&'a str],
+    primary_name: &'a str,
+    round_tag: &'a str,
 ) -> usize {
     let preexisting_subcomponents = comp.components.len();
     let core_inst_positions: Vec<usize> = comp
@@ -198,15 +225,32 @@ fn inject_recursively<'a>(
     let mut count = core_inst_positions.len() + comp_inst_positions.len();
 
     for pos in core_inst_positions {
-        try_inject_core_arg(comp, pos, mod_main, mod_sub);
+        try_inject_core_arg(comp, pos, mod_main, mod_sub, primary_name);
     }
     for pos in comp_inst_positions {
-        try_inject_component_arg(comp, pos, comp_main, comp_sub, aux_names);
+        try_inject_component_arg(
+            comp,
+            pos,
+            comp_main,
+            comp_sub,
+            aux_names,
+            primary_name,
+            round_tag,
+        );
     }
 
     for i in 0..preexisting_subcomponents {
         let sub = &mut comp.components[i];
-        count += inject_recursively(sub, mod_main, mod_sub, comp_main, comp_sub, aux_names);
+        count += inject_recursively(
+            sub,
+            mod_main,
+            mod_sub,
+            comp_main,
+            comp_sub,
+            aux_names,
+            primary_name,
+            round_tag,
+        );
     }
     count
 }
@@ -230,7 +274,13 @@ fn add_custom_section_per_scope<'a>(comp: &mut Component<'a>) {
 /// new `InstantiationArg` to the target core `Instance::Instantiate`
 /// pointing at it. Core-instantiation arg kinds are always `Instance`
 /// per wasmparser, so only the recipe varies, not the kind.
-fn try_inject_core_arg<'a>(comp: &mut Component<'a>, target_idx: usize, recipe: u8, _sub: u8) {
+fn try_inject_core_arg<'a>(
+    comp: &mut Component<'a>,
+    target_idx: usize,
+    recipe: u8,
+    _sub: u8,
+    primary_name: &'a str,
+) {
     let new_inst = match recipe % NUM_CORE_RECIPES {
         0 => recipe_core_empty(comp),
         1 => recipe_core_alias_export(comp),
@@ -239,7 +289,7 @@ fn try_inject_core_arg<'a>(comp: &mut Component<'a>, target_idx: usize, recipe: 
         _ => unreachable!(),
     };
     let new_arg = InstantiationArg {
-        name: "wirm_inj",
+        name: primary_name,
         kind: InstantiationArgKind::Instance,
         index: *new_inst,
     };
@@ -426,6 +476,8 @@ fn try_inject_component_arg<'a>(
     recipe: u8,
     sub: u8,
     aux_names: &[&'a str],
+    primary_name: &'a str,
+    round_tag: &'a str,
 ) {
     let depth = injection_depth();
     let item = match recipe % NUM_COMPONENT_KINDS {
@@ -452,12 +504,12 @@ fn try_inject_component_arg<'a>(
         return;
     };
 
-    append_component_arg(comp, target_idx, "wirm_inj", kind, index);
+    append_component_arg(comp, target_idx, primary_name, kind, index);
 
     // Orthogonal phase: re-export the freshly-added item under a
-    // kind-specific name. Always-on so each fuzz iteration exercises
-    // exactly one `add_export_*` helper.
-    export_injected(comp, injected);
+    // round-tagged + kind-specific name. Round tag prevents the two
+    // recipe rounds from colliding when they pick the same kind.
+    export_injected(comp, injected, round_tag);
 }
 
 /// Append a single `ComponentInstantiationArg` to the consumer at
@@ -491,25 +543,41 @@ enum Injected {
     Instance(ComponentInstanceId),
 }
 
-fn export_injected<'a>(comp: &mut Component<'a>, injected: Injected) {
+/// Static export-name sets per round. Each entry is indexed by
+/// kind: 0=Module, 1=Component, 2=Func, 3=Type, 4=Value, 5=Instance.
+/// Using `&'static str` keeps lifetimes simple and avoids any
+/// per-iteration allocation/leak for export names.
+const EXPORTS_A: [&str; 6] = [
+    "wirm_a_m", "wirm_a_c", "wirm_a_f", "wirm_a_t", "wirm_a_v", "wirm_a_i",
+];
+const EXPORTS_B: [&str; 6] = [
+    "wirm_b_m", "wirm_b_c", "wirm_b_f", "wirm_b_t", "wirm_b_v", "wirm_b_i",
+];
+
+fn export_injected<'a>(comp: &mut Component<'a>, injected: Injected, round_tag: &str) {
+    let names = if round_tag == "a" {
+        &EXPORTS_A
+    } else {
+        &EXPORTS_B
+    };
     match injected {
         Injected::Module(id) => {
-            comp.add_export_core_module(ComponentExportName("wirm_inj_m"), id, None);
+            comp.add_export_core_module(ComponentExportName(names[0]), id, None);
         }
         Injected::Component(id) => {
-            comp.add_export_component(ComponentExportName("wirm_inj_c"), id, None);
+            comp.add_export_component(ComponentExportName(names[1]), id, None);
         }
         Injected::Func(id) => {
-            comp.add_export_component_func(ComponentExportName("wirm_inj_f"), id, None);
+            comp.add_export_component_func(ComponentExportName(names[2]), id, None);
         }
         Injected::Type(id) => {
-            comp.add_export_component_type(ComponentExportName("wirm_inj_t"), id, None);
+            comp.add_export_component_type(ComponentExportName(names[3]), id, None);
         }
         Injected::Value(id) => {
-            comp.add_export_component_value(ComponentExportName("wirm_inj_v"), id, None);
+            comp.add_export_component_value(ComponentExportName(names[4]), id, None);
         }
         Injected::Instance(id) => {
-            comp.add_export_component_instance(ComponentExportName("wirm_inj_i"), id, None);
+            comp.add_export_component_instance(ComponentExportName(names[5]), id, None);
         }
     }
 }
