@@ -44,11 +44,11 @@
 use libfuzzer_sys::fuzz_target;
 use wasm_smith::Component as SmithComponent;
 use wasmparser::{
-    ComponentDefinedType, ComponentExportName, ComponentExternalKind, ComponentFuncType,
-    ComponentImportName, ComponentInstance, ComponentInstantiationArg, ComponentOuterAliasKind,
-    ComponentType, ComponentValType, CoreType, Export, ExternalKind, Import, Instance,
-    InstantiationArg, InstantiationArgKind, MemoryType, ModuleTypeDeclaration, PrimitiveValType,
-    TypeBounds, TypeRef, ValType, VariantCase,
+    CanonicalFunction, ComponentDefinedType, ComponentExportName, ComponentExternalKind,
+    ComponentFuncType, ComponentImportName, ComponentInstance, ComponentInstantiationArg,
+    ComponentOuterAliasKind, ComponentType, ComponentValType, CoreType, Export, ExternalKind,
+    Import, Instance, InstantiationArg, InstantiationArgKind, MemoryType, ModuleTypeDeclaration,
+    PrimitiveValType, TypeBounds, TypeRef, ValType, VariantCase,
 };
 use wirm::ir::id::{
     ComponentFunctionId, ComponentId, ComponentInstanceId, ComponentTypeId, CoreInstanceId,
@@ -117,6 +117,15 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8)| {
     if consumers_found == 0 {
         return;
     }
+
+    // Always exercise add_start_section — orthogonal to the
+    // injection logic. Build an empty () -> () func, import it, then
+    // start it with no args/results. The encoder must emit the
+    // start section and resolve its func reference.
+    let start_func_ty = comp.add_component_type(ComponentType::Func(empty_func_type()));
+    let start_func =
+        comp.add_import_component_func(ComponentImportName("wirm_start_f"), *start_func_ty);
+    let _ = comp.add_start_section(start_func, Vec::new(), 0);
 
     // Always exercise add_custom_section — orthogonal to the
     // injection logic, single API call.
@@ -800,13 +809,27 @@ fn recipe_type_defined_variants<'a>(comp: &mut Component<'a>, sub: u8) -> Compon
 
 /// Sub 6: define a fresh `Resource` type and reference it via either
 /// `Defined::Own` or `Defined::Borrow` (selected by the sub byte).
-/// Resource representation is core `i32`, no destructor. Tests the
-/// only `ComponentType::Resource` variant the encoder ever sees from
-/// this target and the resource-handle path through `Defined`.
+/// Resource representation is core `i32`, no destructor. Also adds
+/// canon `ResourceNew/Drop/Rep` funcs as a side effect — these are
+/// the only `CanonicalFunction` variants the fuzz target ever
+/// constructs, so this is also our sole `add_canon_func` exercise.
+/// Resource representation is core `i32`, no destructor.
 fn recipe_type_resource<'a>(comp: &mut Component<'a>, sub: u8) -> ComponentTypeId {
     let resource_ty = comp.add_component_type(ComponentType::Resource {
         rep: ValType::I32,
         dtor: None,
+    });
+    // Canon ops land in CoreFunc space — we don't reference them from
+    // the consumer's arg, but their presence in `comp.canons` forces
+    // the encoder to traverse them and resolve their resource refs.
+    let _ = comp.add_canon_func(CanonicalFunction::ResourceNew {
+        resource: *resource_ty,
+    });
+    let _ = comp.add_canon_func(CanonicalFunction::ResourceDrop {
+        resource: *resource_ty,
+    });
+    let _ = comp.add_canon_func(CanonicalFunction::ResourceRep {
+        resource: *resource_ty,
     });
     let defined = if sub % 2 == 0 {
         ComponentDefinedType::Own(*resource_ty)
