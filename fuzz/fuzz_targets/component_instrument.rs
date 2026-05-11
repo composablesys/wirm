@@ -178,6 +178,15 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8, u8, u8, u8, u8)| {
         let _ = comp.add_start_section(start_func_consumer, vec![vid], 0);
     }
 
+    // In-place mutation of existing `FromExports` instances: at
+    // every scope, append one extra export to each existing
+    // `FromExports`. The new export duplicates the first
+    // entry's target under name `wirm_g_dup`, so it doesn't
+    // change validity (consumers care about specific named
+    // exports; an extra unused name is harmless), but the
+    // encoder's export-list walk sees an extended list.
+    mutate_from_exports_per_scope(&mut comp);
+
     // Duplicate-and-redirect mutation: for each existing
     // `FromExports` instance in the tree (both core and
     // component-side), build an alias-wrapped duplicate and
@@ -263,6 +272,50 @@ fn inject_recursively<'a>(
         );
     }
     count
+}
+
+/// Walk the tree and, at every scope, for each existing
+/// `FromExports` (core or component), append one extra export
+/// entry under a fresh name (`wirm_g_dup`) that duplicates the
+/// first existing entry's `(kind, index)`. Tests the encoder's
+/// in-place export-list mutation path — the existing instance
+/// stays at its original index but its body is mutated.
+fn mutate_from_exports_per_scope<'a>(comp: &mut Component<'a>) {
+    let n = comp.instances.len();
+    for i in 0..n {
+        if let Instance::FromExports(exports) = &mut comp.instances[i] {
+            if let Some(first) = exports.first() {
+                let extra = Export {
+                    name: "wirm_g_dup",
+                    kind: first.kind,
+                    index: first.index,
+                };
+                let mut next = exports.to_vec();
+                next.push(extra);
+                *exports = next.into_boxed_slice();
+            }
+        }
+    }
+    let m = comp.component_instance.len();
+    for i in 0..m {
+        if let ComponentInstance::FromExports(exports) = &mut comp.component_instance[i] {
+            if let Some(first) = exports.first() {
+                let extra = wasmparser::ComponentExport {
+                    name: ComponentExportName("wirm_g_dup"),
+                    kind: first.kind,
+                    index: first.index,
+                    ty: None,
+                };
+                let mut next = exports.to_vec();
+                next.push(extra);
+                *exports = next.into_boxed_slice();
+            }
+        }
+    }
+    let n_sub = comp.components.len();
+    for i in 0..n_sub {
+        mutate_from_exports_per_scope(&mut comp.components[i]);
+    }
 }
 
 /// Walk the component tree and, at every scope, for each existing
