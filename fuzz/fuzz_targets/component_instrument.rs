@@ -119,13 +119,36 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8)| {
     }
 
     // Always exercise add_start_section — orthogonal to the
-    // injection logic. Build an empty () -> () func, import it, then
-    // start it with no args/results. The encoder must emit the
-    // start section and resolve its func reference.
-    let start_func_ty = comp.add_component_type(ComponentType::Func(empty_func_type()));
-    let start_func =
-        comp.add_import_component_func(ComponentImportName("wirm_start_f"), *start_func_ty);
-    let _ = comp.add_start_section(start_func, Vec::new(), 0);
+    // injection logic. Build a producer (() -> u32) and a consumer
+    // ((u32) -> ()), with the producer's ValueID flowing as the
+    // consumer's arg. Tests the start → ValueID → start path the
+    // encoder uses to resolve `Space::CompVal` refs through start
+    // results, which an empty `() -> ()` start wouldn't exercise.
+    // Values are linear; producing without consuming would fail
+    // validation, hence the pair.
+    let start_ty_producer = comp.add_component_type(ComponentType::Func(ComponentFuncType {
+        async_: false,
+        params: Vec::new().into_boxed_slice(),
+        result: Some(ComponentValType::Primitive(PrimitiveValType::U32)),
+    }));
+    let start_func_producer = comp.add_import_component_func(
+        ComponentImportName("wirm_start_p"),
+        *start_ty_producer,
+    );
+    let produced = comp.add_start_section(start_func_producer, Vec::new(), 1);
+    if let Some(&vid) = produced.first() {
+        let start_ty_consumer = comp.add_component_type(ComponentType::Func(ComponentFuncType {
+            async_: false,
+            params: vec![("v", ComponentValType::Primitive(PrimitiveValType::U32))]
+                .into_boxed_slice(),
+            result: None,
+        }));
+        let start_func_consumer = comp.add_import_component_func(
+            ComponentImportName("wirm_start_c"),
+            *start_ty_consumer,
+        );
+        let _ = comp.add_start_section(start_func_consumer, vec![vid], 0);
+    }
 
     // Always exercise add_custom_section — orthogonal to the
     // injection logic, single API call.
