@@ -48,7 +48,7 @@ use wasmparser::{
     ComponentImportName, ComponentInstance, ComponentInstantiationArg, ComponentOuterAliasKind,
     ComponentType, ComponentValType, CoreType, Export, ExternalKind, Import, Instance,
     InstantiationArg, InstantiationArgKind, MemoryType, ModuleTypeDeclaration, PrimitiveValType,
-    TypeBounds, TypeRef,
+    TypeBounds, TypeRef, ValType, VariantCase,
 };
 use wirm::ir::id::{
     ComponentFunctionId, ComponentId, ComponentInstanceId, ComponentTypeId, CoreInstanceId,
@@ -648,7 +648,7 @@ fn empty_func_type<'a>() -> ComponentFuncType<'a> {
 
 // ── kind 3: Type ────────────────────────────────────────────────────
 
-const NUM_KIND_TYPE_SUBS: u8 = 6;
+const NUM_KIND_TYPE_SUBS: u8 = 7;
 
 fn recipe_kind_type<'a>(
     comp: &mut Component<'a>,
@@ -659,9 +659,10 @@ fn recipe_kind_type<'a>(
         0 => Some(recipe_type_primitive(comp)),
         1 => Some(recipe_type_import_bounds(comp)),
         2 => Some(recipe_type_list_chain(comp, depth)),
-        3 => Some(recipe_type_record_tuple(comp, sub)),
+        3 => Some(recipe_type_defined_variants(comp, sub)),
         4 => Some(recipe_type_diamond(comp, depth)),
         5 => Some(recipe_type_via_outer_alias(comp)),
+        6 => Some(recipe_type_resource(comp, sub)),
         _ => unreachable!(),
     }
 }
@@ -760,16 +761,18 @@ fn list_chain_to<'a>(comp: &mut Component<'a>, start_idx: u32, depth: usize) -> 
     last.expect("depth >= 1")
 }
 
-/// Sub 3: rotate among Record / Tuple / Option / Result, each
-/// referencing a fresh Primitive defined type — exercises more of
-/// the `ComponentDefinedType` enum without chasing every leaf
-/// variant.
-fn recipe_type_record_tuple<'a>(comp: &mut Component<'a>, sub: u8) -> ComponentTypeId {
+/// Sub 3: rotate among many `ComponentDefinedType` variants
+/// (Record / Tuple / Option / Result / Variant / Flags / Enum /
+/// Map / FixedLengthList / Future / Stream), each referencing a
+/// fresh Primitive defined type where applicable. Spreads coverage
+/// across the defined-type enum without dedicated recipes for each.
+fn recipe_type_defined_variants<'a>(comp: &mut Component<'a>, sub: u8) -> ComponentTypeId {
     let prim = comp.add_component_type(ComponentType::Defined(
         ComponentDefinedType::Primitive(PrimitiveValType::U32),
     ));
     let val = ComponentValType::Type(*prim);
-    let defined = match sub % 4 {
+    let key_str = ComponentValType::Primitive(PrimitiveValType::String);
+    let defined = match sub % 11 {
         0 => ComponentDefinedType::Record(vec![("x", val)].into_boxed_slice()),
         1 => ComponentDefinedType::Tuple(vec![val].into_boxed_slice()),
         2 => ComponentDefinedType::Option(val),
@@ -777,7 +780,38 @@ fn recipe_type_record_tuple<'a>(comp: &mut Component<'a>, sub: u8) -> ComponentT
             ok: Some(val),
             err: None,
         },
+        4 => ComponentDefinedType::Variant(
+            vec![VariantCase {
+                name: "v",
+                ty: Some(val),
+            }]
+            .into_boxed_slice(),
+        ),
+        5 => ComponentDefinedType::Flags(vec!["a", "b"].into_boxed_slice()),
+        6 => ComponentDefinedType::Enum(vec!["x", "y"].into_boxed_slice()),
+        7 => ComponentDefinedType::Map(key_str, val),
+        8 => ComponentDefinedType::FixedLengthList(val, 2),
+        9 => ComponentDefinedType::Future(Some(val)),
+        10 => ComponentDefinedType::Stream(Some(val)),
         _ => unreachable!(),
+    };
+    comp.add_component_type(ComponentType::Defined(defined))
+}
+
+/// Sub 6: define a fresh `Resource` type and reference it via either
+/// `Defined::Own` or `Defined::Borrow` (selected by the sub byte).
+/// Resource representation is core `i32`, no destructor. Tests the
+/// only `ComponentType::Resource` variant the encoder ever sees from
+/// this target and the resource-handle path through `Defined`.
+fn recipe_type_resource<'a>(comp: &mut Component<'a>, sub: u8) -> ComponentTypeId {
+    let resource_ty = comp.add_component_type(ComponentType::Resource {
+        rep: ValType::I32,
+        dtor: None,
+    });
+    let defined = if sub % 2 == 0 {
+        ComponentDefinedType::Own(*resource_ty)
+    } else {
+        ComponentDefinedType::Borrow(*resource_ty)
     };
     comp.add_component_type(ComponentType::Defined(defined))
 }
