@@ -810,27 +810,45 @@ fn recipe_type_defined_variants<'a>(comp: &mut Component<'a>, sub: u8) -> Compon
 /// Sub 6: define a fresh `Resource` type and reference it via either
 /// `Defined::Own` or `Defined::Borrow` (selected by the sub byte).
 /// Resource representation is core `i32`, no destructor. Also adds
-/// canon `ResourceNew/Drop/Rep` funcs as a side effect — these are
-/// the only `CanonicalFunction` variants the fuzz target ever
-/// constructs, so this is also our sole `add_canon_func` exercise.
-/// Resource representation is core `i32`, no destructor.
+/// canon `ResourceNew/Drop/Rep` funcs and wraps them in a fresh
+/// `FromExports` core instance so the encoder reaches them via
+/// dep traversal (`Instance::get_item_refs` → `Space::CoreFunc` →
+/// `collect_canon`) rather than only via section iteration. This is
+/// our sole exercise of `add_canon_func`.
 fn recipe_type_resource<'a>(comp: &mut Component<'a>, sub: u8) -> ComponentTypeId {
     let resource_ty = comp.add_component_type(ComponentType::Resource {
         rep: ValType::I32,
         dtor: None,
     });
-    // Canon ops land in CoreFunc space — we don't reference them from
-    // the consumer's arg, but their presence in `comp.canons` forces
-    // the encoder to traverse them and resolve their resource refs.
-    let _ = comp.add_canon_func(CanonicalFunction::ResourceNew {
+    let canon_new = comp.add_canon_func(CanonicalFunction::ResourceNew {
         resource: *resource_ty,
     });
-    let _ = comp.add_canon_func(CanonicalFunction::ResourceDrop {
+    let canon_drop = comp.add_canon_func(CanonicalFunction::ResourceDrop {
         resource: *resource_ty,
     });
-    let _ = comp.add_canon_func(CanonicalFunction::ResourceRep {
+    let canon_rep = comp.add_canon_func(CanonicalFunction::ResourceRep {
         resource: *resource_ty,
     });
+    let _wrapper = comp.add_core_instance(Instance::FromExports(
+        vec![
+            Export {
+                name: "new",
+                kind: ExternalKind::Func,
+                index: *canon_new.unwrap_core(),
+            },
+            Export {
+                name: "drop",
+                kind: ExternalKind::Func,
+                index: *canon_drop.unwrap_core(),
+            },
+            Export {
+                name: "rep",
+                kind: ExternalKind::Func,
+                index: *canon_rep.unwrap_core(),
+            },
+        ]
+        .into_boxed_slice(),
+    ));
     let defined = if sub % 2 == 0 {
         ComponentDefinedType::Own(*resource_ty)
     } else {
