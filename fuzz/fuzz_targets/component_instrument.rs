@@ -111,11 +111,22 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8, u8, u8, u8, u8)| {
     let aux_names_a: Vec<&str> = aux_names_owned_a.iter().map(|s| s.as_str()).collect();
     let aux_names_b: Vec<&str> = aux_names_owned_b.iter().map(|s| s.as_str()).collect();
 
-    // Precomputed minimal-valid empty-component bytes, used by the
+    // Precomputed sub-component bytes used by the
     // `recipe_component_from_bytes` sub-recipe. Built once per
     // iteration and declared before `comp` so its `&[u8]` reference
-    // outlives `comp`'s `'a` lifetime.
-    let empty_component_bytes = wasm_encoder::Component::new().finish();
+    // outlives `comp`'s `'a` lifetime. We seed a `ComponentType`
+    // section with one primitive defined type so the encoder's
+    // walk of the parsed sub-component descends into real content
+    // rather than just the bare preamble.
+    let empty_component_bytes = {
+        let mut sub = wasm_encoder::Component::new();
+        let mut types = wasm_encoder::ComponentTypeSection::new();
+        types
+            .defined_type()
+            .primitive(wasm_encoder::PrimitiveValType::U32);
+        sub.section(&types);
+        sub.finish()
+    };
 
     let mut comp = match Component::parse(&bytes, false, false) {
         Ok(c) => c,
@@ -806,12 +817,17 @@ fn dispatch_kind_module<'a>(
     Some((ComponentExternalKind::Module, *id, Injected::Module(id)))
 }
 
-/// Sub 2: build a fresh empty wirm `Module` directly via
-/// `add_module`. Referenced by both the consumer's `wirm_inj_*`
-/// arg (via dispatch) and the orthogonal export phase
-/// (`add_export_core_module`) — so two refs, no dangling.
+/// Sub 2: build a fresh wirm `Module` with a local memory + memory
+/// export, then push via `add_module`. The module has real internal
+/// content (not just `Module::default()`), so when the encoder
+/// walks it, it descends through the module's memory and export
+/// sections. Referenced by both the consumer's `wirm_inj_*` arg
+/// and the orthogonal `add_export_core_module` export phase.
 fn recipe_module_local<'a>(comp: &mut Component<'a>) -> ModuleID {
-    comp.add_module(Module::default())
+    let mut m = Module::default();
+    let mem_id = m.add_local_memory(SYNTH_MEMORY_TYPE);
+    m.exports.add_export_mem("mem".to_string(), *mem_id);
+    comp.add_module(m)
 }
 
 /// Sub 0: empty `CoreType::Module` then an `import` of that type.
