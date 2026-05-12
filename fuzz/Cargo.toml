@@ -12,6 +12,7 @@ libfuzzer-sys = "0.4"
 # wasm-smith releases in lockstep with wasmparser/wasm-encoder. When
 # bumping wirm's wasmparser dep, bump this to match. See fuzz/DECISIONS.md.
 wasm-smith = { version = "0.247.0", features = ["component-model"] }
+wasm-encoder = "0.247.0"
 wasmparser = "0.247.0"
 
 [dependencies.wirm]

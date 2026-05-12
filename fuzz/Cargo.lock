@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "wirm"
-version = "4.0.6"
+version = "5.0.0"
 dependencies = [
  "log",
  "paste",
@@ -296,6 +296,7 @@ name = "wirm-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
+ "wasm-encoder",
  "wasm-smith",
  "wasmparser",
  "wirm",
