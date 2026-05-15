@@ -631,8 +631,8 @@ fn concretize_from_resolved<'a>(
                 return resolve_type_from_import_instance(comp, *instance_index, name);
             };
             match nested_comp.concretize_export(name) {
-                // Preserve the export name on the resource —
-                // downstream code keys resource identity by name
+                // Preserve the export name on the resource.
+                // Downstream code keys resource identity by name
                 // (wit-bindgen-core unwraps it for `HandleLift`).
                 // Returning bare `Resource` here drops the name.
                 Some(ConcreteType::Resource) => ConcreteValType::NamedResource(name),
@@ -651,11 +651,6 @@ fn concretize_from_resolved<'a>(
                 ),
             }
         }
-        // The component model spec defines val types as primitives,
-        // records, variants, lists, options, results, tuples, flags,
-        // enums, strings, resources, and async-handles. The arms
-        // below (Import / InstTyDeclExport / everything else) can
-        // only appear as val types when properly typed.
         ResolvedItem::Import(_, import) => {
             let type_ref = import
                 .get_type_refs()
@@ -671,9 +666,15 @@ fn concretize_from_resolved<'a>(
                 );
             concretize_from_resolved(cx.resolve(&type_ref.ref_), comp, cx, resource_map)
         }
+        ResolvedItem::Export(_, export) => concretize_from_resolved(
+            cx.resolve(&export.get_item_ref().ref_),
+            comp,
+            cx,
+            resource_map,
+        ),
         // Reaching this arm means the input references a
         // `Module` / `Func` / `CompInst` / `CoreInst` / `CoreType` /
-        // `Export` / `CompTyDeclExport` / `ModuleTyDecl` (or a core
+        // `CompTyDeclExport` / `ModuleTyDecl` (or a core
         // `ComponentAlias::CoreInstanceExport`) where the component-
         // model spec requires a val type. Panicking is correct:
         // `concretize_from_resolved` is only called from sites that
