@@ -488,12 +488,12 @@ impl<'ir> TopoCtx<'ir> {
                     self.collect_core_inst(section_idx, &comp.instances[idx], idx, ctx)
                 }
 
-                ComponentSection::CustomSection => self.collect_custom_section(
-                    section_idx,
-                    &comp.custom_sections.custom_sections[idx],
-                    idx,
-                    ctx,
-                ),
+                ComponentSection::CustomSection => {
+                    let section = &comp.custom_sections.custom_sections[idx];
+                    if !section.deleted {
+                        self.collect_custom_section(section_idx, section, idx, ctx);
+                    }
+                }
 
                 ComponentSection::ComponentStartSection => {
                     self.collect_start_section(section_idx, &comp.start_section[idx], idx, ctx)
