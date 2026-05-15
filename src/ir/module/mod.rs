@@ -1864,6 +1864,9 @@ impl<'a> Module<'a> {
 
         // encode the rest of custom sections
         for section in tmp.custom_sections.iter() {
+            if section.deleted {
+                continue;
+            }
             module.section(&wasm_encoder::CustomSection {
                 name: std::borrow::Cow::Borrowed(section.name),
                 data: section.data.clone(),
@@ -1934,6 +1937,13 @@ impl<'a> Module<'a> {
 
     pub fn add_custom_section(&mut self, section: CustomSection<'a>) -> CustomSectionID {
         self.custom_sections.add(section)
+    }
+
+    /// Delete a custom section from the module. The encoder skips deleted entries.
+    pub fn delete_custom_section(&mut self, id: CustomSectionID) {
+        if *id < self.custom_sections.len() as u32 {
+            self.custom_sections.custom_sections[*id as usize].deleted = true;
+        }
     }
 
     // ===========================

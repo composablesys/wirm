@@ -107,7 +107,11 @@ fn visit_comp<'ir>(
                     &component.custom_sections.custom_sections,
                     start_idx,
                     count,
-                    |idx, sect| emit_indexed(out, section_idx, idx, sect, VisitEvent::custom_sect),
+                    |idx, sect| {
+                        if !sect.deleted {
+                            emit_indexed(out, section_idx, idx, sect, VisitEvent::custom_sect)
+                        }
+                    },
                 );
             }
 

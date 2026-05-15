@@ -267,6 +267,13 @@ impl<'a> Component<'a> {
         id
     }
 
+    /// Delete a custom section from the component. The visitor and encoder skip deleted entries.
+    pub fn delete_custom_section(&mut self, id: CustomSectionID) {
+        if *id < self.custom_sections.len() as u32 {
+            self.custom_sections.custom_sections[*id as usize].deleted = true;
+        }
+    }
+
     // ── Imports ───────────────────────────────────────────────────────────
     //
     // Each per-kind helper constructs the right `ComponentTypeRef` variant

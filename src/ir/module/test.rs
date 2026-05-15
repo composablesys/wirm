@@ -932,6 +932,46 @@ fn test_custom_sections_integration_with_existing_api() {
 }
 
 #[test]
+fn test_delete_custom_section_roundtrip() {
+    let (buff, _) = setup();
+    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+
+    let keep1 = module.add_custom_section(CustomSection::new("keep1", b"a".to_vec()));
+    let del = module.add_custom_section(CustomSection::new("del", b"b".to_vec()));
+    let keep2 = module.add_custom_section(CustomSection::new("keep2", b"c".to_vec()));
+
+    module.delete_custom_section(del);
+
+    assert_eq!(
+        module.custom_sections.get_by_id(keep1).unwrap().name,
+        "keep1"
+    );
+    assert_eq!(
+        module.custom_sections.get_by_id(keep2).unwrap().name,
+        "keep2"
+    );
+
+    let encoded = module.encode().expect("encode failed");
+    let reparsed = Module::parse(&encoded, false, false).expect("reparse failed");
+    let names: Vec<&str> = reparsed.custom_sections.iter().map(|s| s.name).collect();
+
+    assert!(names.contains(&"keep1"));
+    assert!(names.contains(&"keep2"));
+    assert!(!names.contains(&"del"));
+}
+
+#[test]
+fn test_delete_custom_section_invalid_id() {
+    let (buff, _) = setup();
+    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+
+    let before = module.custom_sections.len();
+    module.delete_custom_section(CustomSectionID(9999));
+
+    assert_eq!(module.custom_sections.len(), before);
+}
+
+#[test]
 fn test_custom_section_constructors() {
     // Test new() constructor (owned data)
     let owned_data1 = b"data1".to_vec();
