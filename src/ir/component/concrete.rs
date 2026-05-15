@@ -671,9 +671,17 @@ fn concretize_from_resolved<'a>(
                 );
             concretize_from_resolved(cx.resolve(&type_ref.ref_), comp, cx, resource_map)
         }
+        // Top-level type export (`kind: Type, ty: None`); follow to
+        // its `CompType`, mirroring the `Alias::Outer` arm above.
+        ResolvedItem::Export(_, export) => concretize_from_resolved(
+            cx.resolve(&export.get_item_ref().ref_),
+            comp,
+            cx,
+            resource_map,
+        ),
         // Reaching this arm means the input references a
         // `Module` / `Func` / `CompInst` / `CoreInst` / `CoreType` /
-        // `Export` / `CompTyDeclExport` / `ModuleTyDecl` (or a core
+        // `CompTyDeclExport` / `ModuleTyDecl` (or a core
         // `ComponentAlias::CoreInstanceExport`) where the component-
         // model spec requires a val type. Panicking is correct:
         // `concretize_from_resolved` is only called from sites that
