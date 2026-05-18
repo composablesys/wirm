@@ -54,10 +54,15 @@ fuzz_target!(|smith: SmithModule| {
     let pre_count = count_ops(&bytes);
 
     // Force ID shifts in the func/global/memory index spaces. Each new
-    // import lands at index = original_imported_count_of_kind, and any
-    // local entries shift up by one. This makes every operator that
-    // references one of those locals go through the reindex path.
-    let (forbidden_mem, _) = module.add_import_memory(
+    // import lands at index = original_imported_count_of_kind in the
+    // final encoded output, and any local entries of that kind shift up
+    // by one. This makes every operator that references one of those
+    // locals go through the reindex path.
+    let forbidden_mem = module.num_import_memory();
+    let forbidden_global = module.num_import_global();
+    let forbidden_func = module.num_import_func();
+
+    module.add_import_memory(
         "wirm_fuzz".to_string(),
         "forced_mem".to_string(),
         MemoryType {
@@ -68,7 +73,7 @@ fuzz_target!(|smith: SmithModule| {
             page_size_log2: None,
         },
     );
-    let (forbidden_global, _) = module.add_imported_global(
+    module.add_imported_global(
         "wirm_fuzz".to_string(),
         "forced_global".to_string(),
         DataType::I32,
@@ -76,7 +81,7 @@ fuzz_target!(|smith: SmithModule| {
         false,
     );
     let new_func_type = module.types.add_func_type(&[], &[]);
-    let (forbidden_func, _) = module.add_import_func(
+    module.add_import_func(
         "wirm_fuzz".to_string(),
         "forced_func".to_string(),
         new_func_type,
@@ -114,8 +119,8 @@ fuzz_target!(|smith: SmithModule| {
 
     assert_no_reference_to(
         &encoded,
-        forbidden_func.0,
-        forbidden_global.0,
-        forbidden_mem.0,
+        forbidden_func,
+        forbidden_global,
+        forbidden_mem,
     );
 });

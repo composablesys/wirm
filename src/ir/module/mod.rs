@@ -2075,6 +2075,16 @@ impl<'a> Module<'a> {
         self.imports.num_funcs
     }
 
+    /// Get the number of imported globals in the module (including any added ones).
+    pub fn num_import_global(&self) -> u32 {
+        self.imports.num_globals
+    }
+
+    /// Get the number of imported memories in the module (including any added ones).
+    pub fn num_import_memory(&self) -> u32 {
+        self.imports.num_memories
+    }
+
     /// Delete a function from the module.
     pub fn delete_func(&mut self, function_id: FunctionID) {
         self.functions.delete(function_id);
