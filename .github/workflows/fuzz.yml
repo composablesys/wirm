@@ -38,10 +38,20 @@ jobs:
         with:
           workspaces: "fuzz -> target"
 
-      - name: Install cargo-fuzz
-        uses: taiki-e/cache-cargo-install-action@v2
+      # `cargo install cargo-fuzz` without `--locked`: cargo-fuzz 0.13.1's
+      # lockfile pins rustix 0.36.5, which doesn't compile on current nightly
+      # (uses `rustc_attrs` attributes the compiler no longer allows). Fresh
+      # resolution picks a newer rustix that builds.
+      - name: Cache cargo-fuzz
+        id: cache-cargo-fuzz
+        uses: actions/cache@v4
         with:
-          tool: cargo-fuzz@0.13.1
+          path: ~/.cargo/bin/cargo-fuzz
+          key: cargo-fuzz-0.13.1-${{ runner.os }}
+
+      - name: Install cargo-fuzz
+        if: steps.cache-cargo-fuzz.outputs.cache-hit != 'true'
+        run: cargo install cargo-fuzz --version 0.13.1
 
       # Persist the corpus between runs so the fuzzer builds on prior
       # discoveries instead of re-exploring the same surface each time.
