@@ -1486,18 +1486,19 @@ impl<'a> Module<'a> {
                             .unwrap(),
                     },
                     table64: table.ty.table64,
-                    minimum: table.ty.initial, // TODO - Check if this maps
+                    minimum: table.ty.initial,
                     maximum: table.ty.maximum,
                     shared: table.ty.shared,
                 };
                 match &table.init_expr {
                     None => tables.table(table_ty),
-                    Some(const_expr) => tables.table_with_init(
-                        table_ty,
-                        &reencode
-                            .const_expr((*const_expr).clone())
-                            .expect("Error in Converting Const Expr"),
-                    ),
+                    Some(const_expr) => {
+                        let mut init = InitExpr::eval(const_expr)?;
+                        for i in init.exprs.iter_mut() {
+                            i.fix_id_mapping(&func_mapping, &global_mapping)?;
+                        }
+                        tables.table_with_init(table_ty, &init.to_wasmencoder_type())
+                    }
                 };
 
                 if pull_side_effects {
