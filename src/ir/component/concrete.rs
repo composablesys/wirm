@@ -188,20 +188,20 @@ impl<'a> Component<'a> {
 // Internal concretization logic
 // ============================================================
 
-/// Follow an `Outer` alias and return the resolved item plus a `cx`
-/// re-anchored at the target's owning component, so depth=0 refs inside
-/// the resolved type's body dispatch into the right index space rather
-/// than the inner type-body scope `cx` was sitting in.
+/// Follow an `Outer` alias once and return the resolved item plus a
+/// `cx` re-anchored by this alias's depth, so depth=0 refs inside the
+/// resolved item's body dispatch into the right index space.
 fn follow_outer_alias<'a>(
     alias: &ComponentAlias<'_>,
     cx: &VisitCtx<'a>,
 ) -> (ResolvedItem<'a, 'a>, VisitCtx<'a>) {
     let alias_ref = alias.get_item_ref().ref_;
     let resolved = cx.resolve(&alias_ref);
-    let owning_comp_uid = *cx.inner.comp_at(alias_ref.depth);
-    let owning_comp = cx.inner.comp_store.get(&owning_comp_uid);
-    let mut inner = VisitCtxInner::new(owning_comp);
-    inner.push_component(owning_comp);
+    let inner = if alias_ref.depth.val() == 0 {
+        cx.inner.clone()
+    } else {
+        cx.inner.at_outer_depth(alias_ref.depth)
+    };
     (resolved, VisitCtx { inner })
 }
 
