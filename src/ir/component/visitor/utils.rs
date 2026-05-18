@@ -188,19 +188,19 @@ impl<'a> VisitCtxInner<'a> {
         debug_assert_eq!(scope_id, exited_from);
     }
 
-    pub(crate) fn comp_at(&self, depth: Depth) -> &CompUniqueId {
-        // `depth` is relative to the scope_stack (which includes both component scopes and
-        // type scopes), but component_stack only tracks component scopes.  Subtract the number
-        // of type-scope levels that sit above the current component on scope_stack so that the
-        // index into component_stack is correct.
+    fn comp_idx_at(&self, depth: Depth) -> usize {
         let comp_depth = depth.val().saturating_sub(self.type_scope_nesting);
-        let idx = self.component_stack.len() - comp_depth - 1;
+        self.component_stack.len() - comp_depth - 1
+    }
+
+    pub(crate) fn comp_at(&self, depth: Depth) -> &CompUniqueId {
+        let idx = self.comp_idx_at(depth);
         self.component_stack.get(idx).unwrap_or_else(|| {
             panic!(
                 "Internal error: couldn't find component at depth {} \
-                 (adjusted from scope depth {}, type_scope_nesting={}); stack: {:?}",
-                comp_depth,
+                 (idx={}, type_scope_nesting={}); stack: {:?}",
                 depth.val(),
+                idx,
                 self.type_scope_nesting,
                 self.component_stack
             )
@@ -213,6 +213,31 @@ impl<'a> VisitCtxInner<'a> {
 
     pub(crate) fn pop_type_body(&mut self) {
         self.type_body_stack.pop();
+    }
+
+    /// Build a fresh inner that represents the scope `depth` levels
+    /// outer from the current position.
+    pub(crate) fn at_outer_depth(&self, depth: Depth) -> Self {
+        let mut new = self.clone();
+        new.type_body_stack.clear();
+        new.current_section_idx = None;
+
+        for _ in 0..depth.val() {
+            let popped = new.scope_stack.exit_scope();
+            new.node_has_nested_scope.pop();
+            let popped_is_comp = new
+                .component_stack
+                .last()
+                .and_then(|uid| new.registry.borrow().scope_of_comp(*uid))
+                == Some(popped);
+            if popped_is_comp {
+                new.component_stack.pop();
+                new.section_tracker_stack.pop();
+            } else {
+                new.type_scope_nesting = new.type_scope_nesting.saturating_sub(1);
+            }
+        }
+        new
     }
 }
 
