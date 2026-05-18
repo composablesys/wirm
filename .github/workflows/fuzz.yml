@@ -39,7 +39,9 @@ jobs:
           workspaces: "fuzz -> target"
 
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
 
       # Persist the corpus between runs so the fuzzer builds on prior
       # discoveries instead of re-exploring the same surface each time.
