@@ -381,6 +381,73 @@ fn concretize_export_all_patterns_same_signature() {
     }
 }
 
+#[test]
+fn concretize_through_outer_alias_to_func_walks_outer_refs() {
+    let b = bytes(
+        r#"(component
+          (type (list f32))
+          (type (list 0))
+          (type (func (result 1)))
+          (type (instance
+            (alias outer 1 2 (type))
+            (export "f" (func (type 0)))
+          ))
+          (import "i" (instance (type 3)))
+        )"#,
+    );
+    let comp = parsed(&b);
+    let result = comp.concretize_import("i");
+    let Some(ConcreteType::Instance { funcs, .. }) = result else {
+        panic!("expected Some(Instance), got {result:?}");
+    };
+    assert_eq!(funcs.len(), 1, "expected one concretized func");
+    assert_eq!(funcs[0].0, "f");
+}
+
+#[test]
+fn concretize_through_outer_alias_in_val_type_walks_outer_refs() {
+    let b = bytes(
+        r#"(component
+          (type (list f32))
+          (type (list 0))
+          (type (list 1))
+          (type (instance
+            (alias outer 1 2 (type))
+            (type (func (param "p" 0)))
+            (export "f" (func (type 1)))
+          ))
+          (import "i" (instance (type 3)))
+        )"#,
+    );
+    let comp = parsed(&b);
+    let result = comp.concretize_import("i");
+    let Some(ConcreteType::Instance { funcs, .. }) = result else {
+        panic!("expected Some(Instance), got {result:?}");
+    };
+    assert_eq!(funcs.len(), 1, "expected one concretized func");
+    assert_eq!(funcs[0].0, "f");
+}
+
+#[test]
+fn concretize_through_outer_alias_in_eq_type_export_walks_outer_refs() {
+    let b = bytes(
+        r#"(component
+          (type (list f32))
+          (type (list 0))
+          (type (list 1))
+          (type (instance
+            (alias outer 1 2 (type))
+            (type (func (param "p" 0)))
+            (export "ty" (type (eq 0)))
+          ))
+          (import "i" (instance (type 3)))
+        )"#,
+    );
+    let comp = parsed(&b);
+    // Just assert no panic. Bug manifests as a panic during the walk.
+    let _ = comp.concretize_import("i");
+}
+
 // ============================================================
 // concretize_import — val-type coverage
 // ============================================================

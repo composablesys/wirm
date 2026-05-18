@@ -188,6 +188,23 @@ impl<'a> Component<'a> {
 // Internal concretization logic
 // ============================================================
 
+/// Follow an `Outer` alias and return the resolved item plus a `cx`
+/// re-anchored at the target's owning component, so depth=0 refs inside
+/// the resolved type's body dispatch into the right index space rather
+/// than the inner type-body scope `cx` was sitting in.
+fn follow_outer_alias<'a>(
+    alias: &ComponentAlias<'_>,
+    cx: &VisitCtx<'a>,
+) -> (ResolvedItem<'a, 'a>, VisitCtx<'a>) {
+    let alias_ref = alias.get_item_ref().ref_;
+    let resolved = cx.resolve(&alias_ref);
+    let owning_comp_uid = *cx.inner.comp_at(alias_ref.depth);
+    let owning_comp = cx.inner.comp_store.get(&owning_comp_uid);
+    let mut inner = VisitCtxInner::new(owning_comp);
+    inner.push_component(owning_comp);
+    (resolved, VisitCtx { inner })
+}
+
 fn concretize_comp_type<'a>(
     comp: &'a Component<'a>,
     ty: &'a ComponentType<'a>,
@@ -425,12 +442,8 @@ fn concretize_from_resolved_to_val<'a>(
         // land here: the export's `Eq(M)` resolves to the alias decl,
         // and the alias points one scope up at the declared type.
         ResolvedItem::Alias(_, alias @ ComponentAlias::Outer { .. }) => {
-            concretize_from_resolved_to_val(
-                cx.resolve(&alias.get_item_ref().ref_),
-                comp,
-                cx,
-                resource_map,
-            )
+            let (resolved, outer_cx) = follow_outer_alias(alias, cx);
+            concretize_from_resolved_to_val(resolved, comp, &outer_cx, resource_map)
         }
         // An outer `alias outer` can land on an instance-export alias
         // at the parent component scope (e.g.
@@ -509,12 +522,8 @@ fn resolve_and_concretize_func<'a>(
             Some(concretize_func_ty(ft, comp, cx, resource_map))
         }
         ResolvedItem::Alias(_, alias @ ComponentAlias::Outer { .. }) => {
-            resolve_and_concretize_func(
-                cx.resolve(&alias.get_item_ref().ref_),
-                comp,
-                cx,
-                resource_map,
-            )
+            let (resolved, outer_cx) = follow_outer_alias(alias, cx);
+            resolve_and_concretize_func(resolved, comp, &outer_cx, resource_map)
         }
         // `InstanceExport` aliases carry the instance index relative to the owning component's
         // instance namespace.  Resolve through the instantiated component's export instead of
@@ -607,12 +616,10 @@ fn concretize_from_resolved<'a>(
 ) -> ConcreteValType<'a> {
     match resolved {
         ResolvedItem::CompType(_, ty) => concretize_comp_type_to_val(ty, comp, cx, resource_map),
-        ResolvedItem::Alias(_, alias @ ComponentAlias::Outer { .. }) => concretize_from_resolved(
-            cx.resolve(&alias.get_item_ref().ref_),
-            comp,
-            cx,
-            resource_map,
-        ),
+        ResolvedItem::Alias(_, alias @ ComponentAlias::Outer { .. }) => {
+            let (resolved, outer_cx) = follow_outer_alias(alias, cx);
+            concretize_from_resolved(resolved, comp, &outer_cx, resource_map)
+        }
         // Same fix as in `resolve_and_concretize_func`: bypass `cx.resolve()` for InstanceExport
         // and look up the type directly through the instantiated component's export chain.
         ResolvedItem::Alias(
