@@ -763,7 +763,7 @@ impl<'a> Module<'a> {
         pull_side_effects: bool,
         side_effects: &mut HashMap<InjectType, Vec<Injection<'a>>>,
     ) -> types::Result<()> {
-        if !self.num_local_functions > 0 {
+        if self.num_local_functions > 0 {
             for rel_func_idx in (self.imports.num_funcs - self.imports.num_funcs_added) as usize
                 ..self.functions.as_vec().len()
             {
@@ -1783,7 +1783,7 @@ impl<'a> Module<'a> {
             module.section(&data_count);
         }
 
-        if !tmp.num_local_functions > 0 {
+        if tmp.num_local_functions > 0 {
             let mut code = wasm_encoder::CodeSection::new();
 
             #[cfg(feature = "parallel")]

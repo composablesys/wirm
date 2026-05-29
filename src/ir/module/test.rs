@@ -1057,6 +1057,21 @@ fn with_dwarf_captures_code_section_start_offset() {
     );
 }
 
+// A module with no local functions emits no code section, so the rewriter
+// has no code-section anchor to record even when DWARF rewriting is on.
+#[test]
+fn with_dwarf_no_code_section_leaves_code_section_start_none() {
+    let wasm = wat::parse_str("(module)").expect("wat compiles");
+    let module = Module::parse(&wasm, false, false, true).expect("parse");
+    let (_encoded, _side_effects, maps) = module.encode_internal(false).expect("encode");
+    let maps = maps.expect("with_dwarf=true should capture DWARF encode maps");
+    assert!(
+        maps.code_section_start.is_none(),
+        "no code section emitted => no captured start offset",
+    );
+    assert!(maps.per_func_pcs.is_empty());
+}
+
 // `with_dwarf = false` must leave capture off entirely: no DWARF encode maps
 // are produced, so encode pays nothing for modules that didn't opt in.
 #[test]
