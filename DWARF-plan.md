@@ -14,13 +14,13 @@ Work through these in order. Each box is roughly one PR-sized unit.
 - [x] **0. Validate the testing approach.** Spike confirmed the design
       is viable; findings recorded under "Spike findings (step 0)"
       below.
-- [ ] **1. Parse-aside.** Add `gimli` dep. Add opt-in flag (`with_dwarf`
+- [x] **1. Parse-aside.** Add `gimli` dep. Add opt-in flag (`with_dwarf`
       on `Module::parse`). When set, recognize `.debug_*` custom
       sections and pull them into `ModuleDebugData` (currently a stub
       at `src/ir/dwarf.rs`). All other sections continue to flow
       through `custom_sections` unchanged. No rewriting yet — encode
       should round-trip the parsed-aside DWARF byte-identically.
-- [ ] **2. Capture new per-op PCs during encode.** Modify
+- [x] **2. Capture new per-op PCs during encode.** Modify
       `encode_function` (`src/ir/module/mod.rs:1202`) to record the
       `wasm_encoder::Function::byte_len()` after each emitted op,
       producing a `Vec<usize>` of new in-function PCs aligned with the
@@ -108,22 +108,34 @@ These are settled — recorded here so we don't relitigate.
 
 ## Current-state notes
 
-- `src/ir/dwarf.rs` is a one-line stub (`use gimli::read::Dwarf`) and
-  `gimli` is not yet a dependency. `ir/mod.rs` doesn't pull it in.
-- DWARF sections currently pass through opaquely.
-  `parse_internal` (`src/ir/module/mod.rs:430`) sticks unrecognized
-  custom sections into `custom_sections`; `encode_internal`
-  (`src/ir/module/mod.rs:1866`) re-emits them byte-for-byte. After
-  instrumentation, the output's `.debug_line` points at the wrong
-  addresses.
-- The "original instruction → original PC" half is already done.
-  `Module::parse(_, _, with_offsets)` in `src/ir/module/mod.rs:148`
-  threads through to `Instructions::new`
-  (`src/ir/types.rs:1578`), which records `offset - locals_start` per
-  op. Exposed via `Instructions::lookup_pc_offset_for`.
+- `src/ir/dwarf.rs` defines `ModuleDebugData`, which holds the
+  `.debug_*` custom sections lifted aside at parse time. `gimli` 0.33
+  is a dependency; `ir/mod.rs` declares the module.
+- DWARF sections still pass through opaquely by default. When
+  `Module::parse` is called with `with_dwarf = true`, the custom-section
+  dispatch in `parse_internal`
+  (`src/ir/module/mod.rs:447`) diverts `.debug_*` into `Module::debug`
+  instead of `custom_sections`, and `encode_internal`
+  (`src/ir/module/mod.rs:1365`) re-emits them byte-for-byte at the tail
+  of the custom-section run. No address rewriting yet — after
+  instrumentation the output's `.debug_line` still points at the wrong
+  addresses regardless of the opt-in.
+- The "original instruction → original PC" half is done.
+  `Module::parse(_, _, with_offsets, _)` threads through to
+  `Instructions::new` (`src/ir/types.rs:1578`), which records
+  `offset - locals_start` per op. Empirically `locals_start` lands on
+  the first instruction's offset (the entire locals declaration is
+  excluded), so op 0 sits at PC 0. Exposed via
+  `Instructions::lookup_pc_offset_for`.
+- The "emit-order → new PC" half is also done. `encode_internal`
+  captures per-local-function `Vec<usize>` of start offsets (gated on
+  `Module::debug.is_some()`) and returns it as the third tuple
+  element. Capture state lives in a `PcCapture` threaded through
+  `encode_function`'s helpers; PCs are rebased onto the first
+  instruction so they share the parse-side convention directly.
 - Special-mode resolution lives in
   `Module::resolve_special_instrumentation`
-  (`src/ir/module/mod.rs:730`). It expands
+  (`src/ir/module/mod.rs:758`). It expands
   `SemanticAfter`/`BlockEntry`/`BlockExit`/`BlockAlt` plus func-entry
   and func-exit into concrete `Before`/`After`/`Alternate` injections
   pinned to specific target instructions. The anchor walk runs after

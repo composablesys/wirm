@@ -731,7 +731,7 @@ impl<'a> Module<'a> {
 
     /// Emit the module into a wasm binary file.
     pub fn emit_wasm(&mut self, file_name: &str) -> types::Result<()> {
-        let (module, _) = self.encode_internal(false)?;
+        let (module, _, _) = self.encode_internal(false)?;
         let wasm = module.finish();
         std::fs::write(file_name, wasm).map_err(IO)?;
         Ok(())
@@ -1232,7 +1232,8 @@ impl<'a> Module<'a> {
         func_mapping: &HashMap<u32, u32>,
         global_mapping: &HashMap<u32, u32>,
         memory_mapping: &HashMap<u32, u32>,
-    ) -> types::Result<wasm_encoder::Function> {
+        capture_pcs: bool,
+    ) -> types::Result<(wasm_encoder::Function, Option<Vec<usize>>)> {
         let mut reencode = RoundtripReencoder;
         let Body {
             instructions,
@@ -1244,17 +1245,26 @@ impl<'a> Module<'a> {
             converted_locals.push((*c, wasm_encoder::ValType::from(&*ty)));
         }
         let mut function = wasm_encoder::Function::new(converted_locals);
+        // Capture each emitted op's start offset when DWARF rewriting is on.
+        // `locals_base` rebases raw `byte_len()` (which counts from the locals
+        // declaration) onto the first instruction, matching the parse-side
+        // convention used by `Instructions::new`.
+        let locals_base = function.byte_len();
+        let mut capture = capture_pcs.then(|| PcCapture {
+            offsets: Vec::new(),
+            locals_base,
+        });
         let instr_len = instructions.len() - 1;
         let (ops, mut flags) = instructions.get_ops_flags_mut();
         for (idx, op) in ops.iter_mut().enumerate() {
             fix_op_id_mapping(op, func_mapping, global_mapping, memory_mapping)?;
             if flags.is_none() {
-                encode(&op.clone(), &mut function, &mut reencode);
+                encode(&op.clone(), &mut function, &mut reencode, &mut capture);
                 continue;
             }
             let instrument = &mut flags.as_mut().unwrap()[idx];
             if !instrument.has_instr() {
-                encode(&op.clone(), &mut function, &mut reencode);
+                encode(&op.clone(), &mut function, &mut reencode, &mut capture);
                 continue;
             } else {
                 instrument.check_special_is_resolved();
@@ -1279,6 +1289,7 @@ impl<'a> Module<'a> {
                     memory_mapping,
                     &mut function,
                     &mut reencode,
+                    &mut capture,
                 )?;
 
                 // If there are any alternate, encode the alternate
@@ -1291,10 +1302,11 @@ impl<'a> Module<'a> {
                             memory_mapping,
                             &mut function,
                             &mut reencode,
+                            &mut capture,
                         )?;
                     }
                 } else {
-                    encode(&op.clone(), &mut function, &mut reencode);
+                    encode(&op.clone(), &mut function, &mut reencode, &mut capture);
                 }
 
                 // Now encode the after instructions
@@ -1306,6 +1318,7 @@ impl<'a> Module<'a> {
                         memory_mapping,
                         &mut function,
                         &mut reencode,
+                        &mut capture,
                     )?;
                 }
             }
@@ -1317,10 +1330,11 @@ impl<'a> Module<'a> {
                 memory_mapping: &HashMap<u32, u32>,
                 function: &mut wasm_encoder::Function,
                 reencode: &mut RoundtripReencoder,
+                capture: &mut Option<PcCapture>,
             ) -> types::Result<()> {
                 for instr in instrs {
                     fix_op_id_mapping(instr, func_mapping, global_mapping, memory_mapping)?;
-                    encode(instr, function, reencode);
+                    encode(instr, function, reencode, capture);
                 }
                 Ok(())
             }
@@ -1328,7 +1342,13 @@ impl<'a> Module<'a> {
                 instr: &Operator,
                 function: &mut wasm_encoder::Function,
                 reencode: &mut RoundtripReencoder,
+                capture: &mut Option<PcCapture>,
             ) {
+                if let Some(capture) = capture.as_mut() {
+                    capture
+                        .offsets
+                        .push(function.byte_len() - capture.locals_base);
+                }
                 function.instruction(
                     &reencode
                         .instruction(instr.clone())
@@ -1337,7 +1357,7 @@ impl<'a> Module<'a> {
             }
         }
 
-        Ok(function)
+        Ok((function, capture.map(|c| c.offsets)))
     }
 
     /// Encodes an Wirm Module to a wasm_encoder Module.
@@ -1345,14 +1365,17 @@ impl<'a> Module<'a> {
     pub(crate) fn encode_internal(
         &self,
         pull_side_effects: bool,
-    ) -> types::Result<(
-        wasm_encoder::Module,
-        HashMap<InjectType, Vec<Injection<'a>>>,
-    )> {
+    ) -> types::Result<(wasm_encoder::Module, SideEffects<'a>, Option<NewPcMap>)> {
         #[cfg(feature = "parallel")]
         use rayon::prelude::*;
 
         let mut tmp = self.clone();
+
+        // DWARF rewriting opt-in carries over from parse: `Module::debug` is
+        // `Some` iff `with_dwarf` was set. When on, capture each emitted op's
+        // new in-function PC so the DWARF rewriter can remap addresses.
+        let capture_pcs = tmp.debug.is_some();
+        let mut new_pcs_by_func = NewPcMap::new();
 
         // First fix the ID mappings throughout the module
         let func_mapping = if tmp.functions.recalculate_ids {
@@ -1773,6 +1796,7 @@ impl<'a> Module<'a> {
                             &func_mapping,
                             &global_mapping,
                             &memory_mapping,
+                            capture_pcs,
                         );
                         Some((idx, f, encoded_func))
                     })
@@ -1791,13 +1815,18 @@ impl<'a> Module<'a> {
                     let f = f.unwrap_local_mut().expect(
                         "Internal error: Should have found the local function successfully!",
                     );
-                    let encoded_func =
-                        Self::encode_function(f, &func_mapping, &global_mapping, &memory_mapping);
+                    let encoded_func = Self::encode_function(
+                        f,
+                        &func_mapping,
+                        &global_mapping,
+                        &memory_mapping,
+                        capture_pcs,
+                    );
                     Some((idx, f, encoded_func))
                 })
                 .collect::<Vec<_>>();
 
-            for (idx, original_func, function) in functions {
+            for (idx, original_func, encoded) in functions {
                 // at this point the IDs in all the function instrumentation opcodes have been corrected
                 // add the probe side effects!
                 if pull_side_effects {
@@ -1806,7 +1835,11 @@ impl<'a> Module<'a> {
                 if let Some(name) = &original_func.body.name {
                     function_names.append(idx as u32, name.as_str());
                 }
-                code.function(&function?);
+                let (function, func_pcs) = encoded?;
+                if let Some(func_pcs) = func_pcs {
+                    new_pcs_by_func.insert(idx as u32, func_pcs);
+                }
+                code.function(&function);
             }
             module.section(&code);
         }
@@ -1915,7 +1948,7 @@ impl<'a> Module<'a> {
             }
         }
 
-        Ok((module, side_effects))
+        Ok((module, side_effects, capture_pcs.then_some(new_pcs_by_func)))
     }
 
     // ==============================
@@ -2368,6 +2401,23 @@ pub trait LocalOrImport {
 
 type BlockID = u32;
 type InstrBody<'a> = Vec<Operator<'a>>;
+
+/// Side effects pulled out of a module during encode, grouped by injection point.
+type SideEffects<'a> = HashMap<InjectType, Vec<Injection<'a>>>;
+/// Per-local-function map: function index -> start offset of each emitted op in
+/// emit order. Captured during encode when DWARF rewriting is on.
+type NewPcMap = HashMap<u32, Vec<usize>>;
+
+/// Per-op PC capture state threaded through `encode_function`. Present only when
+/// DWARF rewriting is opted in.
+struct PcCapture {
+    /// Start offset of each emitted op within the function body, in emit order,
+    /// using the parse-side convention (measured from the first instruction).
+    offsets: Vec<usize>,
+    /// Locals-declaration byte length, subtracted from raw `byte_len()` to
+    /// rebase offsets onto the first instruction.
+    locals_base: usize,
+}
 struct InstrBodyFlagged<'a> {
     body: InstrBody<'a>,
     bool_flag: LocalID,

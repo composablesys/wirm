@@ -985,3 +985,52 @@ fn test_custom_section_constructors() {
     assert_eq!(section2.name, "test2");
     assert_eq!(section2.data.as_ref(), &owned_data2);
 }
+
+// DWARF rewriting, step 2: encode captures each emitted op's new in-function
+// PC when `with_dwarf` is on. For an uninstrumented module the emit order
+// matches the original op order, so the captured start-PCs must equal the
+// per-op offsets recovered by re-parsing the encoded output with offsets.
+#[test]
+fn with_dwarf_captures_per_op_pcs_matching_reparsed_offsets() {
+    let wat = r#"(module
+        (func (result i32) i32.const 1 i32.const 2 i32.add)
+        (func nop nop))"#;
+    let wasm = wat::parse_str(wat).expect("wat compiles");
+    let module = Module::parse(&wasm, false, false, true).expect("parse");
+
+    let (encoded, _side_effects, new_pcs) = module.encode_internal(false).expect("encode");
+    let new_pcs = new_pcs.expect("with_dwarf=true should capture per-op PCs");
+    assert!(!new_pcs.is_empty(), "expected per-function PC maps");
+    let out = encoded.finish();
+
+    let reparsed = Module::parse(&out, false, true, false).expect("reparse output");
+    for (func_idx, captured) in &new_pcs {
+        let local = reparsed
+            .functions
+            .unwrap_local(FunctionID(*func_idx))
+            .expect("local function");
+        for (i, pc) in captured.iter().enumerate() {
+            assert_eq!(
+                Some(*pc),
+                local.lookup_pc_offset_for(i),
+                "func {func_idx} op {i}: captured PC disagrees with re-parsed offset",
+            );
+        }
+        // No op past the captured range — captured length matches the body.
+        assert_eq!(
+            local.lookup_pc_offset_for(captured.len()),
+            None,
+            "func {func_idx}: re-parsed output has more ops than captured",
+        );
+    }
+}
+
+// `with_dwarf = false` must leave the capture off: no per-op PC map is
+// produced, so encode pays nothing for modules that didn't opt in.
+#[test]
+fn without_dwarf_captures_no_per_op_pcs() {
+    let wasm = wat::parse_str("(module (func nop))").expect("wat compiles");
+    let module = Module::parse(&wasm, false, false, false).expect("parse");
+    let (_encoded, _side_effects, new_pcs) = module.encode_internal(false).expect("encode");
+    assert!(new_pcs.is_none(), "with_dwarf=false should not capture PCs");
+}
