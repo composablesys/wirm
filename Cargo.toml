@@ -13,6 +13,7 @@ keywords = ["wasm", "WebAssembly", "instrumentation"]
 include = ["src/**/*.rs", "Cargo.toml"]
 
 [dependencies]
+gimli = "0.33"
 log = "0.4.22"
 paste = "1"
 rayon = { version = "1.8", optional = true }

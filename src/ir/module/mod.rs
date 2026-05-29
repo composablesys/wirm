@@ -5,6 +5,7 @@ use super::types::{
 };
 use crate::error::Error;
 use crate::error::Error::{InstrumentationError, IO};
+use crate::ir::dwarf::ModuleDebugData;
 use crate::ir::function::FunctionModifier;
 use crate::ir::id::{
     CustomSectionID, DataSegmentID, FunctionID, GlobalID, ImportsID, LocalID, MemoryID, TypeID,
@@ -87,6 +88,11 @@ pub struct Module<'a> {
     pub tags: Vec<TagType>,
     /// Custom Sections
     pub custom_sections: CustomSections<'a>,
+    /// `.debug_*` custom sections lifted aside for DWARF rewriting. `Some`
+    /// when `Module::parse` was called with `with_dwarf = true`; `None`
+    /// otherwise. When `Some`, `.debug_*` sections do *not* appear in
+    /// `custom_sections` — they flow through `debug` instead.
+    pub debug: Option<ModuleDebugData<'a>>,
     /// Number of local functions (not counting imported functions)
     pub(crate) num_local_functions: u32,
     /// Number of local globals (not counting imported globals)
@@ -132,6 +138,10 @@ impl<'a> Module<'a> {
     /// Set enable_multi_memory to `true` to support parsing modules using multiple memories.
     /// Set with_offsets to `true` to save opcode pc offset metadata during parsing
     /// (can be used to determine the static pc offset inside a function body of the start of any opcode).
+    /// Set with_dwarf to `true` to lift `.debug_*` custom sections aside into
+    /// [`Module::debug`] so they can be rewritten coherently with the rest of the
+    /// module. When `false`, DWARF sections flow through `custom_sections`
+    /// opaquely (the default — addresses go stale after instrumentation).
     ///
     /// # Example
     ///
@@ -140,15 +150,16 @@ impl<'a> Module<'a> {
     ///
     /// let file = "path_to_file";
     /// let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    /// let module = Module::parse(&buff, false, false).unwrap();
+    /// let module = Module::parse(&buff, false, false, false).unwrap();
     /// ```
     pub fn parse(
         wasm: &'a [u8],
         enable_multi_memory: bool,
         with_offsets: bool,
+        with_dwarf: bool,
     ) -> Result<Self, Error> {
         let parser = Parser::new(0);
-        Module::parse_internal(wasm, enable_multi_memory, with_offsets, parser)
+        Module::parse_internal(wasm, enable_multi_memory, with_offsets, with_dwarf, parser)
     }
 
     fn parse_body(
@@ -212,6 +223,7 @@ impl<'a> Module<'a> {
         wasm: &'a [u8],
         enable_multi_memory: bool,
         with_offsets: bool,
+        with_dwarf: bool,
         parser: Parser,
     ) -> Result<Self, Error> {
         #[cfg(feature = "parallel")]
@@ -231,6 +243,11 @@ impl<'a> Module<'a> {
         let mut start = None;
         let mut data_section_count = None;
         let mut custom_sections = vec![];
+        // When `with_dwarf` is on, `.debug_*` custom sections divert into
+        // here instead of `custom_sections`. The Option distinguishes
+        // "opted in with no DWARF found" (Some(empty)) from "didn't opt in"
+        // (None).
+        let mut debug_sections: Option<Vec<CustomSection<'a>>> = with_dwarf.then(Vec::new);
         let mut tags: Vec<TagType> = vec![];
 
         let mut module_name: Option<String> = None;
@@ -428,6 +445,16 @@ impl<'a> Module<'a> {
                     }
                 }
                 Payload::CustomSection(custom_section_reader) => {
+                    let cs_name = custom_section_reader.name();
+                    if let Some(debug) = debug_sections.as_mut() {
+                        if ModuleDebugData::is_dwarf_section_name(cs_name) {
+                            debug.push(CustomSection {
+                                name: cs_name,
+                                data: Cow::Borrowed(custom_section_reader.data()),
+                            });
+                            continue;
+                        }
+                    }
                     match custom_section_reader.as_known() {
                         wasmparser::KnownCustom::Name(name_section_reader) => {
                             for subsection in name_section_reader {
@@ -669,6 +696,7 @@ impl<'a> Module<'a> {
             data,
             tags,
             custom_sections: CustomSections::new(custom_sections),
+            debug: debug_sections.map(ModuleDebugData::from_sections),
             num_local_functions: code_sections_length as u32,
             num_local_globals: num_globals,
             num_local_tables: num_tables,
@@ -718,7 +746,7 @@ impl<'a> Module<'a> {
     ///
     /// let file = "path_to_file";
     /// let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    /// let mut module = Module::parse(&buff, false, false).unwrap();
+    /// let mut module = Module::parse(&buff, false, false, false).unwrap();
     /// let result = module.encode();
     /// ```
     pub fn encode(&self) -> types::Result<Vec<u8>> {
@@ -1872,6 +1900,19 @@ impl<'a> Module<'a> {
                 name: std::borrow::Cow::Borrowed(section.name),
                 data: section.data.clone(),
             });
+        }
+
+        // Re-emit DWARF custom sections held aside in `debug`. They follow
+        // the rest of the custom sections; for inputs that already kept DWARF
+        // at the tail (the wasm-tools convention) this preserves byte
+        // ordering.
+        if let Some(debug) = tmp.debug.as_ref() {
+            for section in debug.sections() {
+                module.section(&wasm_encoder::CustomSection {
+                    name: std::borrow::Cow::Borrowed(section.name),
+                    data: section.data.clone(),
+                });
+            }
         }
 
         Ok((module, side_effects))

@@ -11,10 +11,9 @@ code.
 
 Work through these in order. Each box is roughly one PR-sized unit.
 
-- [ ] **0. Validate the testing approach.** Sketch the property/diff
-      test harness against a single hand-written `.wat` + DWARF input,
-      end-to-end, before committing to the full design. Spike, throw
-      it away if needed.
+- [x] **0. Validate the testing approach.** Spike confirmed the design
+      is viable; findings recorded under "Spike findings (step 0)"
+      below.
 - [ ] **1. Parse-aside.** Add `gimli` dep. Add opt-in flag (`with_dwarf`
       on `Module::parse`). When set, recognize `.debug_*` custom
       sections and pull them into `ModuleDebugData` (currently a stub
@@ -51,7 +50,11 @@ Work through these in order. Each box is roughly one PR-sized unit.
       inputs run through `wasm-tools parse --generate-dwarf full`,
       with hand-checked expectations. Cover: locals added, nop
       injected before every op, replacement, block_alt, multi-function
-      module, `func_exit` cloned to multiple return sites.
+      module, `func_exit` cloned to multiple return sites. Inputs must
+      be designed to *expose* miscoherence — see "Spike findings" — so
+      prefer one row per opcode, distinct (line, col) per opcode, and
+      either multi-byte injections or enough cumulative shift that no
+      original op stays inside its old line-program range.
 - [ ] **9. Differential test.** Two offset-discovery paths
       (in-encode capture vs. re-parse-after-encode), assert
       byte-identical maps. Catches off-by-ones in step 2.
@@ -233,6 +236,45 @@ be a footgun.
   DWARF. Different format (JSON), separate rewriter. Out of scope for
   issue #169 — but warn so the user knows their source map is
   pointing at the wrong bytes after instrumentation.
+
+## Spike findings (step 0)
+
+Spike lived in `/tmp/dwarf-spike{,-rt}` (throwaway). Pipeline verified:
+`wasm-tools parse --generate-dwarf full` on a hand-written `.wat`
+produces a module with `.debug_*` custom sections; `wasmparser`
+collects them and `gimli::DwarfSections::load` parses them. `gimli`
+0.33 + `wasmparser` 0.247 cooperate without friction on the read side.
+
+Two findings shape the rest of the work:
+
+1. **Row equality is the wrong invariant.** Injecting a single nop
+   leaves `.debug_line` byte-identical (we don't rewrite it yet), but
+   every original opcode has moved by one byte — the rows now name
+   different ops. A naive "input rows == output rows" assertion would
+   pass. The right invariant is semantic:
+   `output_lookup(new_pc) == input_lookup(anchor_orig_pc)` for every
+   emitted op. The test harness in step 8 is built around this, not
+   row equality.
+2. **The semantic check can still pass by accident on tiny inputs.**
+   Line-program rows define implicit ranges (a row's `(file, line,
+   col)` is in effect until the next row's address). A small shift can
+   land each op inside the *next* row's range, which often has the
+   same `(file, line, col)` by coincidence. Regression inputs must be
+   designed to break this — distinct `(line, col)` per opcode, line
+   programs with one row per opcode, and either multi-byte injections
+   or enough cumulative shift that ops escape their original buckets.
+
+Implications for downstream steps:
+
+- The harness can't run automatically on instrumented modules until
+  the per-op new-PC map (step 2) and the anchor walk (step 4) exist.
+  Step 0's harness only checks the noop baseline automatically; the
+  injection case was hand-mocked.
+- Step 8 input authoring needs explicit thought, not boilerplate.
+- DWARF address convention in wasm-tools-generated output appears to
+  be "offset from the function-size LEB", not "offset from the code
+  section payload start". Worth pinning down before step 5 starts
+  emitting addresses.
 
 ## Non-goals
 

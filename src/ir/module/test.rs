@@ -19,7 +19,7 @@ mod validate;
 #[test]
 fn test_add_local_func() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     // add local func
@@ -44,7 +44,7 @@ fn test_add_local_func() {
 #[test]
 fn test_add_import_func() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     // add imported func
@@ -65,7 +65,7 @@ fn test_add_import_func() {
 #[test]
 fn test_add_local_then_imported_func() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     // add local function
@@ -93,7 +93,7 @@ fn test_add_local_then_imported_func() {
 #[test]
 fn test_add_imported_then_local_func() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     // add imported func
@@ -122,7 +122,7 @@ fn test_add_imported_then_local_func() {
 #[test]
 fn test_add_then_delete_local_func() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     // add local function
@@ -149,7 +149,7 @@ fn test_add_then_delete_local_func() {
 #[test]
 fn test_delete_local_func() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     // delete local function
@@ -170,7 +170,7 @@ fn test_delete_local_func() {
 #[test]
 fn test_add_then_delete_imported_func() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     // add imported func
@@ -195,7 +195,7 @@ fn test_add_then_delete_imported_func() {
 #[test]
 fn test_delete_imported_func() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     // delete imported function
@@ -214,7 +214,7 @@ fn test_delete_imported_func() {
 #[test]
 fn test_delete_local_and_imported_func() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     // delete local function
@@ -239,7 +239,7 @@ fn test_delete_local_and_imported_func() {
 #[test]
 fn test_convert_import_fn_to_local() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     // convert the import to a function
@@ -271,7 +271,7 @@ fn test_convert_import_fn_to_local() {
 #[test]
 fn test_convert_local_fn_to_import() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     // convert local func to import
@@ -295,7 +295,7 @@ fn test_convert_local_fn_to_import() {
 #[test]
 fn test_set_fn_name_import_through_import() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     let mut new_import_names = HashMap::new();
@@ -314,7 +314,7 @@ fn test_set_fn_name_import_through_import() {
 #[test]
 fn test_set_fn_name_import_through_module() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     let mut new_import_names = HashMap::new();
@@ -333,7 +333,7 @@ fn test_set_fn_name_import_through_module() {
 #[test]
 fn test_set_fn_name_local_through_functions() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     let fid = FunctionID(10);
@@ -353,7 +353,7 @@ fn test_set_fn_name_local_through_functions() {
 #[test]
 fn test_set_fn_name_local_through_module() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     let fid = FunctionID(10);
@@ -373,7 +373,7 @@ fn test_set_fn_name_local_through_module() {
 #[test]
 fn test_set_fn_name_local_through_func_builder() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     let mut new_func_names = HashMap::new();
@@ -417,7 +417,7 @@ fn test_set_fn_name_local_through_func_builder() {
 #[test]
 fn test_create_and_add_global() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     // add a local global
@@ -451,7 +451,7 @@ fn test_create_and_add_global() {
 #[test]
 fn test_add_imported_global() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     // add an imported global
@@ -487,7 +487,7 @@ fn test_add_imported_global() {
 #[test]
 fn test_delete_global() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     module.delete_global(GlobalID(2));
@@ -505,7 +505,7 @@ fn test_delete_global() {
 #[test]
 fn test_delete_imported_global() {
     let (buff, mut init_state) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     state_assertions(&module, &init_state, false);
 
     module.delete_global(GlobalID(0));
@@ -670,7 +670,7 @@ fn is_valid(
 
     // reload from file
     let buff = std::fs::read(output_wasm_path).unwrap();
-    let new_module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let new_module = Module::parse(&buff, false, false, false).expect("Unable to parse");
 
     for (id, name) in new_import_names {
         assert_eq!(

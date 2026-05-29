@@ -188,7 +188,7 @@ impl<'a> ComponentVisitor<'a> for ParanoidVisitor {
 }
 
 fn run_on_bytes(bytes: Vec<u8>) -> usize {
-    let comp = Component::parse(&bytes, false, false).expect("component parse failed");
+    let comp = Component::parse(&bytes, false, false, false).expect("component parse failed");
 
     let mut structural = ParanoidVisitor::default();
     walk_structural(&comp, &mut structural);
@@ -222,7 +222,7 @@ fn run_paranoid_file(path: &str) {
 /// Parse `wat` and run `walk_structural` with `visitor`.
 fn walk_wat<V: for<'a> ComponentVisitor<'a>>(wat: &str, visitor: &mut V) {
     let bytes = wat::parse_str(wat).expect("WAT parse failed");
-    let comp = Component::parse(&bytes, false, false).expect("component parse failed");
+    let comp = Component::parse(&bytes, false, false, false).expect("component parse failed");
     walk_structural(&comp, visitor);
 }
 

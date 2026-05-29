@@ -128,7 +128,7 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8, u8, u8, u8, u8)| {
         sub.finish()
     };
 
-    let mut comp = match Component::parse(&bytes, false, false) {
+    let mut comp = match Component::parse(&bytes, false, false, false) {
         Ok(c) => c,
         Err(_) => return,
     };
