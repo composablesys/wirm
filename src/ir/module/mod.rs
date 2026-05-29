@@ -1250,7 +1250,7 @@ impl<'a> Module<'a> {
         // declaration) onto the first instruction, matching the parse-side
         // convention used by `Instructions::new`.
         let locals_base = function.byte_len();
-        let mut capture = capture_pcs.then(|| PcCapture {
+        let mut capture = capture_pcs.then_some(PcCapture {
             offsets: Vec::new(),
             locals_base,
         });
@@ -1365,7 +1365,11 @@ impl<'a> Module<'a> {
     pub(crate) fn encode_internal(
         &self,
         pull_side_effects: bool,
-    ) -> types::Result<(wasm_encoder::Module, SideEffects<'a>, Option<NewPcMap>)> {
+    ) -> types::Result<(
+        wasm_encoder::Module,
+        SideEffects<'a>,
+        Option<DwarfEncodeMaps>,
+    )> {
         #[cfg(feature = "parallel")]
         use rayon::prelude::*;
 
@@ -1375,7 +1379,11 @@ impl<'a> Module<'a> {
         // `Some` iff `with_dwarf` was set. When on, capture each emitted op's
         // new in-function PC so the DWARF rewriter can remap addresses.
         let capture_pcs = tmp.debug.is_some();
-        let mut new_pcs_by_func = NewPcMap::new();
+        let mut new_pcs_by_func = HashMap::new();
+        // Snapshot of `module.len()` at the moment the code section ID byte
+        // gets pushed. The DWARF rewriter uses this to translate per-function
+        // PCs into module-absolute addresses.
+        let mut code_section_start: Option<usize> = None;
 
         // First fix the ID mappings throughout the module
         let func_mapping = if tmp.functions.recalculate_ids {
@@ -1841,6 +1849,9 @@ impl<'a> Module<'a> {
                 }
                 code.function(&function);
             }
+            if capture_pcs {
+                code_section_start = Some(module.len());
+            }
             module.section(&code);
         }
 
@@ -1948,7 +1959,14 @@ impl<'a> Module<'a> {
             }
         }
 
-        Ok((module, side_effects, capture_pcs.then_some(new_pcs_by_func)))
+        Ok((
+            module,
+            side_effects,
+            capture_pcs.then_some(DwarfEncodeMaps {
+                code_section_start,
+                per_func_pcs: new_pcs_by_func,
+            }),
+        ))
     }
 
     // ==============================
@@ -2404,9 +2422,6 @@ type InstrBody<'a> = Vec<Operator<'a>>;
 
 /// Side effects pulled out of a module during encode, grouped by injection point.
 type SideEffects<'a> = HashMap<InjectType, Vec<Injection<'a>>>;
-/// Per-local-function map: function index -> start offset of each emitted op in
-/// emit order. Captured during encode when DWARF rewriting is on.
-type NewPcMap = HashMap<u32, Vec<usize>>;
 
 /// Per-op PC capture state threaded through `encode_function`. Present only when
 /// DWARF rewriting is opted in.
@@ -2417,6 +2432,19 @@ struct PcCapture {
     /// Locals-declaration byte length, subtracted from raw `byte_len()` to
     /// rebase offsets onto the first instruction.
     locals_base: usize,
+}
+
+/// DWARF rewriting state captured during encode. Present only when the input
+/// module opted in via `with_dwarf` at parse time.
+#[allow(dead_code)] // fields are consumed by the in-progress DWARF rewriter
+pub(crate) struct DwarfEncodeMaps {
+    /// Module-absolute byte offset where the code section begins in the output
+    /// (the section ID byte). `None` when no code section was emitted.
+    pub(crate) code_section_start: Option<usize>,
+    /// Per-local-function map: function index -> start offset of each emitted
+    /// op in emit order. PCs share the parse-side convention (measured from the
+    /// first instruction of the function body).
+    pub(crate) per_func_pcs: HashMap<u32, Vec<usize>>,
 }
 struct InstrBodyFlagged<'a> {
     body: InstrBody<'a>,

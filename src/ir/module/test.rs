@@ -998,13 +998,16 @@ fn with_dwarf_captures_per_op_pcs_matching_reparsed_offsets() {
     let wasm = wat::parse_str(wat).expect("wat compiles");
     let module = Module::parse(&wasm, false, false, true).expect("parse");
 
-    let (encoded, _side_effects, new_pcs) = module.encode_internal(false).expect("encode");
-    let new_pcs = new_pcs.expect("with_dwarf=true should capture per-op PCs");
-    assert!(!new_pcs.is_empty(), "expected per-function PC maps");
+    let (encoded, _side_effects, maps) = module.encode_internal(false).expect("encode");
+    let maps = maps.expect("with_dwarf=true should capture DWARF encode maps");
+    assert!(
+        !maps.per_func_pcs.is_empty(),
+        "expected per-function PC maps"
+    );
     let out = encoded.finish();
 
     let reparsed = Module::parse(&out, false, true, false).expect("reparse output");
-    for (func_idx, captured) in &new_pcs {
+    for (func_idx, captured) in &maps.per_func_pcs {
         let local = reparsed
             .functions
             .unwrap_local(FunctionID(*func_idx))
@@ -1025,12 +1028,44 @@ fn with_dwarf_captures_per_op_pcs_matching_reparsed_offsets() {
     }
 }
 
-// `with_dwarf = false` must leave the capture off: no per-op PC map is
-// produced, so encode pays nothing for modules that didn't opt in.
+// DWARF rewriting, step 3: encode records the byte offset where the code
+// section begins in the output, so the rewriter can translate per-function
+// PCs into module-absolute addresses. The captured offset must point at the
+// code-section ID byte (0x0A) and lie past the wasm preamble.
+#[test]
+fn with_dwarf_captures_code_section_start_offset() {
+    let wasm = wat::parse_str("(module (func nop))").expect("wat compiles");
+    let module = Module::parse(&wasm, false, false, true).expect("parse");
+
+    let (encoded, _side_effects, maps) = module.encode_internal(false).expect("encode");
+    let maps = maps.expect("with_dwarf=true should capture DWARF encode maps");
+    let css = maps
+        .code_section_start
+        .expect("code section is emitted for a module with a local function");
+
+    let out = encoded.finish();
+    // Wasm magic+version is 8 bytes; the code section sits after at least the
+    // type and function sections that wirm always emits, so this must be past
+    // the preamble. The captured offset must point at the code-section ID.
+    assert!(
+        css > 8,
+        "code_section_start should be past the 8-byte preamble"
+    );
+    assert_eq!(
+        out[css], 0x0a,
+        "code_section_start must point at the code-section ID byte (0x0A)",
+    );
+}
+
+// `with_dwarf = false` must leave capture off entirely: no DWARF encode maps
+// are produced, so encode pays nothing for modules that didn't opt in.
 #[test]
 fn without_dwarf_captures_no_per_op_pcs() {
     let wasm = wat::parse_str("(module (func nop))").expect("wat compiles");
     let module = Module::parse(&wasm, false, false, false).expect("parse");
-    let (_encoded, _side_effects, new_pcs) = module.encode_internal(false).expect("encode");
-    assert!(new_pcs.is_none(), "with_dwarf=false should not capture PCs");
+    let (_encoded, _side_effects, maps) = module.encode_internal(false).expect("encode");
+    assert!(
+        maps.is_none(),
+        "with_dwarf=false should not capture DWARF maps"
+    );
 }

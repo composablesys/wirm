@@ -25,7 +25,7 @@ Work through these in order. Each box is roughly one PR-sized unit.
       `wasm_encoder::Function::byte_len()` after each emitted op,
       producing a `Vec<usize>` of new in-function PCs aligned with the
       emitted op order. Gated on the same opt-in flag.
-- [ ] **3. Track new code-section start.** During `encode_internal`,
+- [x] **3. Track new code-section start.** During `encode_internal`,
       record the byte offset where the code section begins in the
       output (header bytes + sizes of preceding sections). DWARF PCs
       are relative to the code section start.
