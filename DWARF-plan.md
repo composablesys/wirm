@@ -29,7 +29,7 @@ Work through these in order. Each box is roughly one PR-sized unit.
       record the byte offset where the code section begins in the
       output (header bytes + sizes of preceding sections). DWARF PCs
       are relative to the code section start.
-- [ ] **4. Post-resolve anchor-walk.** After
+- [x] **4. Post-resolve anchor-walk.** After
       `resolve_special_instrumentation`, walk every function's
       `InstrumentationFlag.{before, after, alternate}` and produce
       `Vec<(emit_order_idx, anchor_instr_idx)>` per function. Original

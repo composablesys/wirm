@@ -986,10 +986,6 @@ fn test_custom_section_constructors() {
     assert_eq!(section2.data.as_ref(), &owned_data2);
 }
 
-// DWARF rewriting, step 2: encode captures each emitted op's new in-function
-// PC when `with_dwarf` is on. For an uninstrumented module the emit order
-// matches the original op order, so the captured start-PCs must equal the
-// per-op offsets recovered by re-parsing the encoded output with offsets.
 #[test]
 fn with_dwarf_captures_per_op_pcs_matching_reparsed_offsets() {
     let wat = r#"(module
@@ -1000,28 +996,36 @@ fn with_dwarf_captures_per_op_pcs_matching_reparsed_offsets() {
 
     let (encoded, _side_effects, maps) = module.encode_internal(false).expect("encode");
     let maps = maps.expect("with_dwarf=true should capture DWARF encode maps");
-    assert!(
-        !maps.per_func_pcs.is_empty(),
-        "expected per-function PC maps"
-    );
+    assert!(!maps.per_func.is_empty(), "expected per-function maps");
     let out = encoded.finish();
 
     let reparsed = Module::parse(&out, false, true, false).expect("reparse output");
-    for (func_idx, captured) in &maps.per_func_pcs {
+    for (func_idx, captured) in &maps.per_func {
         let local = reparsed
             .functions
             .unwrap_local(FunctionID(*func_idx))
             .expect("local function");
-        for (i, pc) in captured.iter().enumerate() {
+        assert_eq!(
+            captured.pcs.len(),
+            captured.anchors.len(),
+            "func {func_idx}: pcs and anchors must be parallel arrays",
+        );
+        for (i, pc) in captured.pcs.iter().enumerate() {
             assert_eq!(
                 Some(*pc),
                 local.lookup_pc_offset_for(i),
                 "func {func_idx} op {i}: captured PC disagrees with re-parsed offset",
             );
+            // Uninstrumented: every emitted op is its own original, so anchor
+            // is the identity.
+            assert_eq!(
+                captured.anchors[i], i,
+                "func {func_idx} op {i}: uninstrumented anchor must be identity",
+            );
         }
         // No op past the captured range — captured length matches the body.
         assert_eq!(
-            local.lookup_pc_offset_for(captured.len()),
+            local.lookup_pc_offset_for(captured.pcs.len()),
             None,
             "func {func_idx}: re-parsed output has more ops than captured",
         );
@@ -1069,7 +1073,7 @@ fn with_dwarf_no_code_section_leaves_code_section_start_none() {
         maps.code_section_start.is_none(),
         "no code section emitted => no captured start offset",
     );
-    assert!(maps.per_func_pcs.is_empty());
+    assert!(maps.per_func.is_empty());
 }
 
 // `with_dwarf = false` must leave capture off entirely: no DWARF encode maps
