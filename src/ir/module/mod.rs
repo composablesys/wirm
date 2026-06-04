@@ -5,7 +5,7 @@ use super::types::{
 };
 use crate::error::Error;
 use crate::error::Error::{InstrumentationError, IO};
-use crate::ir::dwarf::ModuleDebugData;
+use crate::ir::dwarf::{ModuleDebugData, OrigFuncDebugData};
 use crate::ir::function::FunctionModifier;
 use crate::ir::id::{
     CustomSectionID, DataSegmentID, FunctionID, GlobalID, ImportsID, LocalID, MemoryID, TypeID,
@@ -132,6 +132,18 @@ impl<'a> Iterator for FlagsIter<'a> {
     }
 }
 
+/// Number of bytes an unsigned LEB128 encoding of `value` occupies. Used by
+/// the DWARF rewriter at both parse and encode time to account for function
+/// body size-LEB lengths in per-function DWARF address composition.
+fn unsigned_leb128_len(mut value: u64) -> usize {
+    let mut len = 1;
+    while value >= 0x80 {
+        value >>= 7;
+        len += 1;
+    }
+    len
+}
+
 impl<'a> Module<'a> {
     /// Parses a `Module` from a wasm binary.
     ///
@@ -167,10 +179,6 @@ impl<'a> Module<'a> {
         enable_multi_memory: bool,
         with_offsets: bool,
     ) -> Result<Body, Error> {
-        let locals_orig = body
-            .get_locals_reader()?
-            .get_binary_reader()
-            .original_position();
         let locals = body
             .get_locals_reader()?
             .into_iter()
@@ -184,13 +192,17 @@ impl<'a> Module<'a> {
             })
             .collect();
 
+        // PCs are measured from the first instruction (after the locals
+        // declaration), aligning the parse-side convention with the encode
+        // side so both can be composed in a single coordinate system.
+        let pc_origin = body.get_binary_reader_for_operators()?.original_position();
         let op_reader = body.get_operators_reader()?;
         let ops = op_reader
             .into_iter_with_offsets()
             .collect::<Result<Vec<(Operator, usize)>, _>>()
             .expect("ops");
 
-        let instructions = Instructions::new(ops, locals_orig, with_offsets);
+        let instructions = Instructions::new(ops, pc_origin, with_offsets);
         if let Some(last) = instructions.get_ops().last() {
             if let Operator::End = last {
             } else {
@@ -219,6 +231,24 @@ impl<'a> Module<'a> {
         })
     }
 
+    /// Compute the DWARF rewriter's input-side metadata for a single function
+    /// body without consuming it.
+    fn orig_func_debug_from(body: &wasmparser::FunctionBody) -> Result<OrigFuncDebugData, Error> {
+        // `body.range()` covers the body *content* (locals + instructions),
+        // excluding the leading size LEB consumed when the FunctionBody was
+        // read. DWARF wasm addresses are measured from that size LEB byte,
+        // so the first instruction's DWARF offset is `size_leb_len + (first
+        // instruction byte − content start)`.
+        let body_range = body.range();
+        let body_content_size = body_range.end - body_range.start;
+        let size_leb_len = unsigned_leb128_len(body_content_size as u64);
+        let first_instr_byte = body.get_binary_reader_for_operators()?.original_position();
+        let first_instr_offset_in_content = first_instr_byte - body_range.start;
+        Ok(OrigFuncDebugData {
+            first_instr_dwarf_offset: size_leb_len + first_instr_offset_in_content,
+        })
+    }
+
     pub(crate) fn parse_internal(
         wasm: &'a [u8],
         enable_multi_memory: bool,
@@ -228,6 +258,11 @@ impl<'a> Module<'a> {
     ) -> Result<Self, Error> {
         #[cfg(feature = "parallel")]
         use rayon::prelude::*;
+
+        // The DWARF rewriter needs orig per-instruction PCs to translate
+        // input row addresses; force offset capture when the caller opted
+        // into DWARF rewriting even if they didn't ask for `with_offsets`.
+        let with_offsets = with_offsets || with_dwarf;
 
         let mut imports: ModuleImports = ModuleImports::default();
         let mut types: HashMap<TypeID, Types> = HashMap::new();
@@ -579,28 +614,33 @@ impl<'a> Module<'a> {
         }
 
         #[cfg(feature = "parallel")]
-        let code_sections = bodies_and_names
+        let bodies_with_dbg: Vec<(Body, OrigFuncDebugData)> = bodies_and_names
             .into_par_iter()
             .map(|(body, name)| {
+                let orig_dbg = Self::orig_func_debug_from(&body)?;
                 let mut body = Self::parse_body(body, enable_multi_memory, with_offsets)?;
                 if let Some(name) = name {
                     body.name = Some(name);
                 }
-                Ok::<_, Error>(body)
+                Ok::<_, Error>((body, orig_dbg))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
         #[cfg(not(feature = "parallel"))]
-        let code_sections = bodies_and_names
+        let bodies_with_dbg: Vec<(Body, OrigFuncDebugData)> = bodies_and_names
             .into_iter()
             .map(|(body, name)| {
+                let orig_dbg = Self::orig_func_debug_from(&body)?;
                 let mut body = Self::parse_body(body, enable_multi_memory, with_offsets)?;
                 if let Some(name) = name {
                     body.name = Some(name);
                 }
-                Ok::<_, Error>(body)
+                Ok::<_, Error>((body, orig_dbg))
             })
             .collect::<Result<Vec<_>, _>>()?;
+
+        let (code_sections, per_func_dbg_vec): (Vec<Body>, Vec<OrigFuncDebugData>) =
+            bodies_with_dbg.into_iter().unzip();
 
         if code_section_count != code_sections.len() || code_section_count != functions.len() {
             return Err(Error::IncorrectCodeCounts {
@@ -681,6 +721,15 @@ impl<'a> Module<'a> {
         let num_memories = memories.len() as u32;
         let num_tables = tables.len() as u32;
         let module_globals = ModuleGlobals::new(&imports, globals);
+        let num_imported_funcs = imports.num_funcs;
+        let debug = debug_sections.map(|s| {
+            let per_func: HashMap<u32, OrigFuncDebugData> = per_func_dbg_vec
+                .into_iter()
+                .enumerate()
+                .map(|(i, dbg)| (num_imported_funcs + i as u32, dbg))
+                .collect();
+            ModuleDebugData::new(s, per_func)
+        });
         Ok(Module {
             types: ModuleTypes::new(recgroups, types),
             imports,
@@ -696,7 +745,7 @@ impl<'a> Module<'a> {
             data,
             tags,
             custom_sections: CustomSections::new(custom_sections),
-            debug: debug_sections.map(ModuleDebugData::from_sections),
+            debug,
             num_local_functions: code_sections_length as u32,
             num_local_globals: num_globals,
             num_local_tables: num_tables,
@@ -1254,6 +1303,10 @@ impl<'a> Module<'a> {
             maps: FuncDwarfMaps {
                 pcs: Vec::new(),
                 anchors: Vec::new(),
+                // Filled in at the end of `encode_function` once the body's
+                // total content length is known.
+                first_instr_dwarf_offset: 0,
+                body_total_size: 0,
             },
             locals_base,
             current_anchor: 0,
@@ -1368,6 +1421,16 @@ impl<'a> Module<'a> {
             }
         }
 
+        if let Some(cap) = capture.as_mut() {
+            // The DWARF rewriter needs the function's first-instruction DWARF
+            // offset and total body size. Size-LEB length is recovered from
+            // the body content length (`function.byte_len()` covers locals +
+            // instructions; the LEB encodes that value when emitted later).
+            let body_content_len = function.byte_len();
+            let size_leb_len = unsigned_leb128_len(body_content_len as u64);
+            cap.maps.first_instr_dwarf_offset = size_leb_len + cap.locals_base;
+            cap.maps.body_total_size = size_leb_len + body_content_len;
+        }
         Ok((function, capture.map(|c| c.maps)))
     }
 
@@ -1954,6 +2017,63 @@ impl<'a> Module<'a> {
             });
         }
 
+        // Rewrite the `.debug_line` section so its addresses match the
+        // new code layout. We then re-emit the DWARF sections below; the
+        // other `.debug_*` sections still pass through verbatim (step 6
+        // covers `.debug_info`, location lists, etc.).
+        if capture_pcs {
+            if let Some(debug) = tmp.debug.as_ref() {
+                let line_idx = debug
+                    .sections()
+                    .iter()
+                    .position(|s| s.name == ".debug_line");
+                if let Some(line_idx) = line_idx {
+                    // Build per-instr orig PCs for each local function with
+                    // captured maps. `with_offsets` is auto-enabled at parse
+                    // time when `with_dwarf` is on, so offsets are always
+                    // present here — treat their absence as a bug.
+                    let mut orig_per_instr_pcs: HashMap<u32, Vec<usize>> = HashMap::new();
+                    for (func_idx, _) in per_func_maps.iter() {
+                        let local = tmp
+                            .functions
+                            .unwrap_local(FunctionID(*func_idx))
+                            .expect("captured DWARF map should be for a local function");
+                        let offsets = local
+                            .body
+                            .instructions
+                            .offsets()
+                            .expect("with_dwarf opt-in must populate orig per-instr offsets");
+                        orig_per_instr_pcs.insert(*func_idx, offsets.to_vec());
+                    }
+                    let per_func_new: HashMap<u32, crate::ir::dwarf::PerFuncEncodeMaps> =
+                        per_func_maps
+                            .iter()
+                            .map(|(idx, m)| {
+                                (
+                                    *idx,
+                                    crate::ir::dwarf::PerFuncEncodeMaps {
+                                        pcs: &m.pcs,
+                                        anchors: &m.anchors,
+                                        first_instr_dwarf_offset: m.first_instr_dwarf_offset,
+                                        body_total_size: m.body_total_size,
+                                    },
+                                )
+                            })
+                            .collect();
+                    let input_bytes = debug.sections()[line_idx].data.as_ref();
+                    let new_bytes = crate::ir::dwarf::rewrite_debug_line(
+                        input_bytes,
+                        debug,
+                        &per_func_new,
+                        &orig_per_instr_pcs,
+                    )?;
+                    if let Some(debug_mut) = tmp.debug.as_mut() {
+                        debug_mut.sections[line_idx].data = std::borrow::Cow::Owned(new_bytes);
+                    }
+                }
+            }
+        }
+
         // Re-emit DWARF custom sections held aside in `debug`. They follow
         // the rest of the custom sections; for inputs that already kept DWARF
         // at the tail (the wasm-tools convention) this preserves byte
@@ -2455,6 +2575,13 @@ pub(crate) struct FuncDwarfMaps {
     /// anchor to themselves; injected ops inherit their host op's idx so a
     /// debugger never "stops inside" wirm-injected code.
     pub(crate) anchors: Vec<usize>,
+    /// DWARF address of the first instruction in the new function body
+    /// (= size-LEB bytes + locals-declaration bytes). Composes with `pcs[i]`
+    /// to give per-function DWARF row addresses: `addr = first_instr_dwarf_offset + pcs[i]`.
+    pub(crate) first_instr_dwarf_offset: usize,
+    /// Total bytes of the new function body including the size LEB. The line
+    /// program's end-of-sequence row marks address `body_total_size`.
+    pub(crate) body_total_size: usize,
 }
 
 /// DWARF rewriting state captured during encode. Present only when the input

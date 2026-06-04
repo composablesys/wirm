@@ -986,11 +986,21 @@ fn test_custom_section_constructors() {
     assert_eq!(section2.data.as_ref(), &owned_data2);
 }
 
+// The third function declares two locals so this also acts as a regression
+// guard against a parse↔encode PC convention drift: until the rewriter work
+// aligned both sides on "PC measured from the first instruction", the parse
+// side incidentally agreed with encode only when there were zero declared
+// locals.
 #[test]
 fn with_dwarf_captures_per_op_pcs_matching_reparsed_offsets() {
     let wat = r#"(module
         (func (result i32) i32.const 1 i32.const 2 i32.add)
-        (func nop nop))"#;
+        (func nop nop)
+        (func (local i32) (local i64)
+            i32.const 0
+            local.set 0
+            i64.const 0
+            local.set 1))"#;
     let wasm = wat::parse_str(wat).expect("wat compiles");
     let module = Module::parse(&wasm, false, false, true).expect("parse");
 
