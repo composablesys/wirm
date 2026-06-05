@@ -1,4 +1,4 @@
-//! Coverage-guided fuzz of the DWARF rewriter against `add.wasm`.
+//! Coverage-guided fuzz of the DWARF rewriter against the parse-aside seeds.
 //!
 //! Companion to the in-crate proptest at
 //! `src/ir/module/test.rs::rewriter_preserves_source_location_under_random_injection`.
@@ -7,11 +7,12 @@
 //! `cargo test`; that check needs `pub(crate)` access to `DwarfEncodeMaps`
 //! which the fuzz crate can't reach across the crate boundary.
 //!
-//! This target trades the strong check for *broader* exploration. It pins
-//! `add.wasm` as the corpus seed and lets libfuzzer generate random
-//! instrumentation plans via `Arbitrary`. Each plan is applied, the module
-//! is re-encoded, and the output is checked against three weaker invariants
-//! that still catch real regressions:
+//! This target trades the strong check for *broader* exploration. The
+//! `Plan.fixture` byte selects between the single-function (`add.wasm`) and
+//! multi-function (`two_funcs.wasm`) seeds; libfuzzer generates the
+//! instrumentation actions. Each plan is applied, the module is re-encoded,
+//! and the output is checked against three weaker invariants that still catch
+//! real regressions:
 //!
 //! 1. The encoded output validates under all wasmparser features.
 //! 2. Gimli successfully re-parses the rewritten `.debug_line`.
@@ -41,19 +42,32 @@ enum Action {
     AltNops(u8),
 }
 
+/// One arbitrary byte chooses the fixture by its low bit: even → `add.wasm`
+/// (single function), odd → `two_funcs.wasm` (multi-function). Splitting 50/50
+/// (rather than the natural-looking `fixture == 0` test) keeps both code paths
+/// exercised across the corpus instead of skewing ~1/256 to single-function.
 #[derive(Debug, Arbitrary)]
 struct Plan {
+    fixture: u8,
     actions: Vec<Action>,
 }
 
-const FIXTURE: &[u8] =
+const ADD_FIXTURE: &[u8] =
     include_bytes!("../../tests/test_inputs/handwritten/dwarf/add.wasm");
+const TWO_FUNCS_FIXTURE: &[u8] =
+    include_bytes!("../../tests/test_inputs/handwritten/dwarf/two_funcs.wasm");
 
 fuzz_target!(|plan: Plan| {
-    let mut module = match wirm::Module::parse(FIXTURE, false, false, true) {
+    let fixture: &[u8] = if plan.fixture & 1 == 0 {
+        ADD_FIXTURE
+    } else {
+        TWO_FUNCS_FIXTURE
+    };
+
+    let mut module = match wirm::Module::parse(fixture, false, false, true) {
         Ok(m) => m,
-        // Fixture is committed and known-parseable, but keep this defensive
-        // in case a future wasmparser bump rejects it.
+        // Fixtures are committed and known-parseable, but keep this defensive
+        // in case a future wasmparser bump rejects them.
         Err(_) => return,
     };
 
@@ -74,13 +88,13 @@ fuzz_target!(|plan: Plan| {
 
     let encoded = module
         .encode()
-        .expect("encode of instrumented add.wasm should succeed");
+        .expect("encode of instrumented DWARF fixture should succeed");
 
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(&encoded)
         .expect("rewritten DWARF module failed wasmparser validation");
 
-    let in_locs = collect_line_col_pairs(FIXTURE);
+    let in_locs = collect_line_col_pairs(fixture);
     let out_locs = collect_line_col_pairs(&encoded);
 
     for loc in &in_locs {

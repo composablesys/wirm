@@ -936,7 +936,7 @@ fn test_custom_sections_integration_with_existing_api() {
 #[test]
 fn test_delete_custom_section_roundtrip() {
     let (buff, _) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
 
     let keep1 = module.add_custom_section(CustomSection::new("keep1", b"a".to_vec()));
     let del = module.add_custom_section(CustomSection::new("del", b"b".to_vec()));
@@ -954,7 +954,7 @@ fn test_delete_custom_section_roundtrip() {
     );
 
     let encoded = module.encode().expect("encode failed");
-    let reparsed = Module::parse(&encoded, false, false).expect("reparse failed");
+    let reparsed = Module::parse(&encoded, false, false, false).expect("reparse failed");
     let names: Vec<&str> = reparsed.custom_sections.iter().map(|s| s.name).collect();
 
     assert!(names.contains(&"keep1"));
@@ -965,7 +965,7 @@ fn test_delete_custom_section_roundtrip() {
 #[test]
 fn test_delete_custom_section_invalid_id() {
     let (buff, _) = setup();
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
 
     let before = module.custom_sections.len();
     module.delete_custom_section(CustomSectionID(9999));
@@ -1088,8 +1088,15 @@ fn assert_source_location_invariant(input_bytes: &[u8], module: &Module) -> Vec<
             .instructions
             .offsets()
             .expect("with_dwarf opt-in must populate offsets");
-        let orig_first = orig_dbg.first_instr_dwarf_offset as u64;
-        let new_first = fmap.first_instr_dwarf_offset as u64;
+        // Line-program rows carry module-cumulative addresses, so the
+        // function's "start of instructions" for lookup is the cumulative
+        // base + the in-function header offset.
+        let orig_first =
+            (orig_dbg.dwarf_addr_base + orig_dbg.first_instr_dwarf_offset) as u64;
+        let new_first = (fmap
+            .dwarf_addr_base
+            .expect("encode_internal must run the cumulative-base pass before returning maps")
+            + fmap.first_instr_dwarf_offset) as u64;
 
         for (emit_idx, &new_pc) in fmap.pcs.iter().enumerate() {
             let anchor = fmap.anchors[emit_idx];
@@ -1133,11 +1140,50 @@ enum DwarfFuzzAction {
     AltNops(u8),
 }
 
+/// Walks the module applying one `DwarfFuzzAction` per op in plan order.
+/// Multi-function inputs see plan entries consumed sequentially across all
+/// functions in code-section order.
+fn apply_dwarf_fuzz_plan(module: &mut Module, plan: &[DwarfFuzzAction]) {
+    use crate::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
+    use crate::iterator::module_iterator::ModuleIterator;
+    use crate::Opcode;
+
+    let mut it = ModuleIterator::new(module, &Vec::new());
+    let mut op_idx = 0usize;
+    loop {
+        if it.curr_op().is_some() {
+            let action = plan.get(op_idx).cloned().unwrap_or(DwarfFuzzAction::Skip);
+            match action {
+                DwarfFuzzAction::Skip => {}
+                DwarfFuzzAction::BeforeNops(n) => {
+                    for _ in 0..n {
+                        it.before().nop();
+                    }
+                }
+                DwarfFuzzAction::AfterNops(n) => {
+                    for _ in 0..n {
+                        it.after().nop();
+                    }
+                }
+                DwarfFuzzAction::AltNops(n) => {
+                    for _ in 0..n {
+                        it.alternate().nop();
+                    }
+                }
+            }
+            op_idx += 1;
+        }
+        if it.next().is_none() {
+            break;
+        }
+    }
+}
+
 proptest::proptest! {
     /// For every emitted op, the rewritten `.debug_line`'s source location at
     /// the new PC must equal the input's source location at the anchor's orig
     /// PC. Generates per-op random instrumentation plans (mix of
-    /// before/after/alt at random counts) over `add.wasm`.
+    /// before/after/alt at random counts) over `add.wasm` (one local function).
     #[test]
     fn rewriter_preserves_source_location_under_random_injection(
         plan in proptest::collection::vec(
@@ -1150,46 +1196,32 @@ proptest::proptest! {
             0..=8usize,
         )
     ) {
-        use crate::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
-        use crate::iterator::module_iterator::ModuleIterator;
-        use crate::Opcode;
-
         let input = std::fs::read(dwarf_fixture_path("add.wasm")).expect("read fixture");
         let mut module = Module::parse(&input, false, false, true).expect("parse");
-        {
-            let mut it = ModuleIterator::new(&mut module, &Vec::new());
-            let mut op_idx = 0usize;
-            loop {
-                if it.curr_op().is_some() {
-                    let action = plan
-                        .get(op_idx)
-                        .cloned()
-                        .unwrap_or(DwarfFuzzAction::Skip);
-                    match action {
-                        DwarfFuzzAction::Skip => {}
-                        DwarfFuzzAction::BeforeNops(n) => {
-                            for _ in 0..n {
-                                it.before().nop();
-                            }
-                        }
-                        DwarfFuzzAction::AfterNops(n) => {
-                            for _ in 0..n {
-                                it.after().nop();
-                            }
-                        }
-                        DwarfFuzzAction::AltNops(n) => {
-                            for _ in 0..n {
-                                it.alternate().nop();
-                            }
-                        }
-                    }
-                    op_idx += 1;
-                }
-                if it.next().is_none() {
-                    break;
-                }
-            }
-        }
+        apply_dwarf_fuzz_plan(&mut module, &plan);
+        let _ = assert_source_location_invariant(&input, &module);
+    }
+
+    /// Multi-function variant: same invariant, on `two_funcs.wasm` (two local
+    /// functions sharing a module-cumulative DWARF address space). Catches
+    /// per-function routing regressions where injection in one function
+    /// scrambles the other's row addresses.
+    #[test]
+    fn rewriter_preserves_source_location_under_random_injection_multi_func(
+        plan in proptest::collection::vec(
+            proptest::prop_oneof![
+                proptest::strategy::Just(DwarfFuzzAction::Skip),
+                (0u8..=3).prop_map(DwarfFuzzAction::BeforeNops),
+                (0u8..=3).prop_map(DwarfFuzzAction::AfterNops),
+                (1u8..=3).prop_map(DwarfFuzzAction::AltNops),
+            ],
+            // Cap at 2 funcs × ~5 ops/func = 10 plan slots.
+            0..=12usize,
+        )
+    ) {
+        let input = std::fs::read(dwarf_fixture_path("two_funcs.wasm")).expect("read fixture");
+        let mut module = Module::parse(&input, false, false, true).expect("parse");
+        apply_dwarf_fuzz_plan(&mut module, &plan);
         let _ = assert_source_location_invariant(&input, &module);
     }
 }

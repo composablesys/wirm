@@ -34,7 +34,7 @@ use crate::opcode::{Inject, Instrumenter};
 use crate::{Location, Opcode};
 use log::warn;
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use wasm_encoder::reencode::{Reencode, RoundtripReencoder};
 use wasm_encoder::TagSection;
 use wasmparser::{
@@ -245,6 +245,8 @@ impl<'a> Module<'a> {
         let first_instr_byte = body.get_binary_reader_for_operators()?.original_position();
         let first_instr_offset_in_content = first_instr_byte - body_range.start;
         Ok(OrigFuncDebugData {
+            // Cumulative base across local functions is set in a second pass below.
+            dwarf_addr_base: 0,
             size_leb_len,
             first_instr_dwarf_offset: size_leb_len + first_instr_offset_in_content,
             body_total_size: size_leb_len + body_content_size,
@@ -663,8 +665,13 @@ impl<'a> Module<'a> {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        let (code_sections, per_func_dbg_vec): (Vec<Body>, Vec<OrigFuncDebugData>) =
+        let (code_sections, mut per_func_dbg_vec): (Vec<Body>, Vec<OrigFuncDebugData>) =
             bodies_with_dbg.into_iter().unzip();
+        crate::ir::dwarf::assign_cumulative_dwarf_addr_bases(
+            per_func_dbg_vec.iter_mut(),
+            |dbg| dbg.body_total_size,
+            |dbg, base| dbg.dwarf_addr_base = base,
+        );
 
         if code_section_count != code_sections.len() || code_section_count != functions.len() {
             return Err(Error::IncorrectCodeCounts {
@@ -1332,6 +1339,8 @@ impl<'a> Module<'a> {
                 // emitted (e.g., a deleted op via a future API). Step 6
                 // refuses translation if an address resolves to such a slot.
                 self_emit_for_orig: vec![usize::MAX; n_ops],
+                // Filled in by `encode_internal` after all functions have been encoded.
+                dwarf_addr_base: None,
                 // Filled in at the end of `encode_function` once the body's
                 // total content length is known.
                 size_leb_len: 0,
@@ -1493,10 +1502,7 @@ impl<'a> Module<'a> {
         let mut tmp = self.clone();
 
         let capture_pcs = tmp.debug.is_some();
-        let mut per_func_maps: HashMap<u32, FuncDwarfMaps> = HashMap::new();
-        // Snapshot of `module.len()` at the moment the code section ID byte
-        // gets pushed. The DWARF rewriter uses this to translate per-function
-        // PCs into module-absolute addresses.
+        let mut per_func_maps: BTreeMap<u32, FuncDwarfMaps> = BTreeMap::new();
         let mut code_section_start: Option<usize> = None;
 
         // First fix the ID mappings throughout the module
@@ -2065,12 +2071,20 @@ impl<'a> Module<'a> {
         // re-emit loop below sees coherent bytes.
         if capture_pcs {
             if let Some(debug) = tmp.debug.as_ref() {
+                // Adjacent to the rewriter so consumers (the `.expect` below)
+                // panic loudly if a future change skips this pass.
+                crate::ir::dwarf::assign_cumulative_dwarf_addr_bases(
+                    per_func_maps.values_mut(),
+                    |entry| entry.body_total_size,
+                    |entry, base| entry.dwarf_addr_base = Some(base),
+                );
+
                 // `with_offsets` is auto-enabled with `with_dwarf`, so offsets
                 // are always present here — treat their absence as a bug. We
                 // borrow them out of `tmp.functions` for the duration of the
                 // rewriter calls; no clone needed.
-                let mut orig_per_instr_pcs: HashMap<u32, &[usize]> = HashMap::new();
-                for (func_idx, _) in per_func_maps.iter() {
+                let mut orig_per_instr_pcs: BTreeMap<u32, &[usize]> = BTreeMap::new();
+                for func_idx in per_func_maps.keys() {
                     let local = tmp
                         .functions
                         .unwrap_local(FunctionID(*func_idx))
@@ -2082,7 +2096,7 @@ impl<'a> Module<'a> {
                         .expect("with_dwarf opt-in must populate orig per-instr offsets");
                     orig_per_instr_pcs.insert(*func_idx, offsets);
                 }
-                let per_func_new: HashMap<u32, crate::ir::dwarf::PerFuncEncodeMaps> = per_func_maps
+                let per_func_new: BTreeMap<u32, crate::ir::dwarf::PerFuncEncodeMaps> = per_func_maps
                     .iter()
                     .map(|(idx, m)| {
                         (
@@ -2091,6 +2105,9 @@ impl<'a> Module<'a> {
                                 pcs: &m.pcs,
                                 anchors: &m.anchors,
                                 self_emit_for_orig: &m.self_emit_for_orig,
+                                dwarf_addr_base: m
+                                    .dwarf_addr_base
+                                    .expect("cumulative pass above set this"),
                                 size_leb_len: m.size_leb_len,
                                 first_instr_dwarf_offset: m.first_instr_dwarf_offset,
                                 body_total_size: m.body_total_size,
@@ -2156,8 +2173,16 @@ impl<'a> Module<'a> {
         // the rest of the custom sections; for inputs that already kept DWARF
         // at the tail (the wasm-tools convention) this preserves byte
         // ordering.
+        //
+        // Drop `.debug_aranges`: PC-bearing, but `gimli::write::Sections`
+        // doesn't expose it, so we can't produce coherent replacement bytes.
+        // Stale aranges are worse than missing (debuggers fall back to
+        // scanning `.debug_info` when absent).
         if let Some(debug) = tmp.debug.as_ref() {
             for section in debug.sections() {
+                if section.name == ".debug_aranges" {
+                    continue;
+                }
                 module.section(&wasm_encoder::CustomSection {
                     name: std::borrow::Cow::Borrowed(section.name),
                     data: section.data.clone(),
@@ -2659,14 +2684,23 @@ pub(crate) struct FuncDwarfMaps {
     /// `low_pc`/`high_pc` that name an instruction byte rather than a
     /// debugger-stop point.
     pub(crate) self_emit_for_orig: Vec<usize>,
+    /// Module-cumulative DWARF address of this function's first body byte in
+    /// the new module. `None` between per-function capture and the cumulative
+    /// pass `encode_internal` runs just before the DWARF rewriter; `Some`
+    /// thereafter. The `Option` makes premature reads (before all bodies are
+    /// encoded and `body_total_size` is known) panic loudly rather than
+    /// silently routing addresses against a stale zero.
+    pub(crate) dwarf_addr_base: Option<usize>,
     /// Byte length of the new function-body size LEB.
     pub(crate) size_leb_len: usize,
-    /// DWARF address of the first instruction in the new function body
-    /// (= size-LEB bytes + locals-declaration bytes). Composes with `pcs[i]`
-    /// to give per-function DWARF row addresses: `addr = first_instr_dwarf_offset + pcs[i]`.
+    /// In-function DWARF offset of the first instruction in the new function
+    /// body (= size-LEB bytes + locals-declaration bytes). Compose with `pcs[i]`
+    /// and `dwarf_addr_base` for absolute module addresses:
+    /// `addr = dwarf_addr_base + first_instr_dwarf_offset + pcs[i]`.
     pub(crate) first_instr_dwarf_offset: usize,
-    /// Total bytes of the new function body including the size LEB. The line
-    /// program's end-of-sequence row marks address `body_total_size`.
+    /// Total bytes of the new function body including the size LEB. The function
+    /// occupies module-cumulative addresses
+    /// `[dwarf_addr_base, dwarf_addr_base + body_total_size)`.
     pub(crate) body_total_size: usize,
 }
 
@@ -2678,7 +2712,7 @@ pub(crate) struct DwarfEncodeMaps {
     /// (the section ID byte). `None` when no code section was emitted.
     pub(crate) code_section_start: Option<usize>,
     /// Per-local-function map: function index -> emit-order PC and anchor maps.
-    pub(crate) per_func: HashMap<u32, FuncDwarfMaps>,
+    pub(crate) per_func: BTreeMap<u32, FuncDwarfMaps>,
 }
 struct InstrBodyFlagged<'a> {
     body: InstrBody<'a>,
