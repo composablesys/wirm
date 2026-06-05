@@ -36,14 +36,15 @@ cargo +nightly fuzz run module_roundtrip -- -max_total_time=300
 
 ## Current targets
 
-| Target                  | Exercises                                                                                                  |
-|-------------------------|------------------------------------------------------------------------------------------------------------|
-| `module_roundtrip`      | `Module::parse` → `Module::encode` → `wasmparser::Validator`                                               |
-| `module_instrument`     | `module_roundtrip` + iterate and inject `nop` before every op                                              |
-| `component_roundtrip`   | `Component::parse` → `Component::encode` → `wasmparser::Validator`                                         |
-| `component_instrument`  | `component_roundtrip` + component-level forward-ref grafting onto an existing core/component `Instantiate` |
-| `component_concretize`  | `Component::concretize_import` / `concretize_export` on every named import/export                          |
-| `component_walks`       | `walk_structural` ≡ `walk_topological`; root `section_idx` in range + monotonic vs. wasmparser             |
+| Target                 | Exercises                                                                                                  |
+|------------------------|------------------------------------------------------------------------------------------------------------|
+| `module_roundtrip`     | `Module::parse` → `Module::encode` → `wasmparser::Validator`                                               |
+| `module_instrument`    | `module_roundtrip` + iterate and inject `nop` before every op                                              |
+| `component_roundtrip`  | `Component::parse` → `Component::encode` → `wasmparser::Validator`                                         |
+| `component_instrument` | `component_roundtrip` + component-level forward-ref grafting onto an existing core/component `Instantiate` |
+| `component_concretize` | `Component::concretize_import` / `concretize_export` on every named import/export                          |
+| `component_walks`      | `walk_structural` ≡ `walk_topological`; root `section_idx` in range + monotonic vs. wasmparser             |
+| `dwarf_invariant`      | DWARF rewriter for `Arbitrary`-generated instrumentation plans; weak validity + `(line, col)` subset check |
 
 More targets planned — see `DECISIONS.md`.
 
