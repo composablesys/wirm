@@ -245,7 +245,9 @@ impl<'a> Module<'a> {
         let first_instr_byte = body.get_binary_reader_for_operators()?.original_position();
         let first_instr_offset_in_content = first_instr_byte - body_range.start;
         Ok(OrigFuncDebugData {
+            size_leb_len,
             first_instr_dwarf_offset: size_leb_len + first_instr_offset_in_content,
+            body_total_size: size_leb_len + body_content_size,
         })
     }
 
@@ -1299,19 +1301,25 @@ impl<'a> Module<'a> {
         // from the locals declaration) onto the first instruction, matching
         // the parse-side convention used by `Instructions::new`.
         let locals_base = function.byte_len();
+        let n_ops = instructions.len();
         let mut capture = capture_pcs.then_some(PcCapture {
             maps: FuncDwarfMaps {
                 pcs: Vec::new(),
                 anchors: Vec::new(),
+                // Sentinel: any unwritten slot means the orig op was never
+                // emitted (e.g., a deleted op via a future API). Step 6
+                // refuses translation if an address resolves to such a slot.
+                self_emit_for_orig: vec![usize::MAX; n_ops],
                 // Filled in at the end of `encode_function` once the body's
                 // total content length is known.
+                size_leb_len: 0,
                 first_instr_dwarf_offset: 0,
                 body_total_size: 0,
             },
             locals_base,
             current_anchor: 0,
         });
-        let instr_len = instructions.len() - 1;
+        let instr_len = n_ops - 1;
         let (ops, mut flags) = instructions.get_ops_flags_mut();
         for (idx, op) in ops.iter_mut().enumerate() {
             // Every op emitted during this iteration anchors to `idx` (the original
@@ -1321,11 +1329,13 @@ impl<'a> Module<'a> {
             }
             fix_op_id_mapping(op, func_mapping, global_mapping, memory_mapping)?;
             if flags.is_none() {
+                record_self_emit(&mut capture, idx);
                 encode(&op.clone(), &mut function, &mut reencode, &mut capture);
                 continue;
             }
             let instrument = &mut flags.as_mut().unwrap()[idx];
             if !instrument.has_instr() {
+                record_self_emit(&mut capture, idx);
                 encode(&op.clone(), &mut function, &mut reencode, &mut capture);
                 continue;
             } else {
@@ -1357,6 +1367,9 @@ impl<'a> Module<'a> {
                 // If there are any alternate, encode the alternate
                 if !at_end && !alternate.is_none() {
                     if let Some(alt) = alternate {
+                        // The alt replaces the orig op; its first emit is the
+                        // best analog of "where this orig op landed".
+                        record_self_emit(&mut capture, idx);
                         update_ids_and_encode(
                             &mut alt.instrs,
                             func_mapping,
@@ -1368,6 +1381,7 @@ impl<'a> Module<'a> {
                         )?;
                     }
                 } else {
+                    record_self_emit(&mut capture, idx);
                     encode(&op.clone(), &mut function, &mut reencode, &mut capture);
                 }
 
@@ -1382,6 +1396,12 @@ impl<'a> Module<'a> {
                         &mut reencode,
                         &mut capture,
                     )?;
+                }
+            }
+
+            fn record_self_emit(capture: &mut Option<PcCapture>, idx: usize) {
+                if let Some(cap) = capture.as_mut() {
+                    cap.maps.self_emit_for_orig[idx] = cap.maps.pcs.len();
                 }
             }
 
@@ -1428,6 +1448,7 @@ impl<'a> Module<'a> {
             // instructions; the LEB encodes that value when emitted later).
             let body_content_len = function.byte_len();
             let size_leb_len = unsigned_leb128_len(body_content_len as u64);
+            cap.maps.size_leb_len = size_leb_len;
             cap.maps.first_instr_dwarf_offset = size_leb_len + cap.locals_base;
             cap.maps.body_total_size = size_leb_len + body_content_len;
         }
@@ -2017,58 +2038,78 @@ impl<'a> Module<'a> {
             });
         }
 
-        // Rewrite the `.debug_line` section so its addresses match the
-        // new code layout. We then re-emit the DWARF sections below; the
-        // other `.debug_*` sections still pass through verbatim (step 6
-        // covers `.debug_info`, location lists, etc.).
+        // Rewrite `.debug_line` (anchor-aware) and the other PC-bearing DWARF
+        // sections (address-translated via gimli::write::Dwarf::from) so the
+        // re-emit loop below sees coherent bytes.
         if capture_pcs {
             if let Some(debug) = tmp.debug.as_ref() {
+                // `with_offsets` is auto-enabled with `with_dwarf`, so offsets
+                // are always present here — treat their absence as a bug. We
+                // borrow them out of `tmp.functions` for the duration of the
+                // rewriter calls; no clone needed.
+                let mut orig_per_instr_pcs: HashMap<u32, &[usize]> = HashMap::new();
+                for (func_idx, _) in per_func_maps.iter() {
+                    let local = tmp
+                        .functions
+                        .unwrap_local(FunctionID(*func_idx))
+                        .expect("captured DWARF map should be for a local function");
+                    let offsets = local
+                        .body
+                        .instructions
+                        .offsets()
+                        .expect("with_dwarf opt-in must populate orig per-instr offsets");
+                    orig_per_instr_pcs.insert(*func_idx, offsets);
+                }
+                let per_func_new: HashMap<u32, crate::ir::dwarf::PerFuncEncodeMaps> = per_func_maps
+                    .iter()
+                    .map(|(idx, m)| {
+                        (
+                            *idx,
+                            crate::ir::dwarf::PerFuncEncodeMaps {
+                                pcs: &m.pcs,
+                                anchors: &m.anchors,
+                                self_emit_for_orig: &m.self_emit_for_orig,
+                                size_leb_len: m.size_leb_len,
+                                first_instr_dwarf_offset: m.first_instr_dwarf_offset,
+                                body_total_size: m.body_total_size,
+                            },
+                        )
+                    })
+                    .collect();
+
                 let line_idx = debug
                     .sections()
                     .iter()
                     .position(|s| s.name == ".debug_line");
-                if let Some(line_idx) = line_idx {
-                    // Build per-instr orig PCs for each local function with
-                    // captured maps. `with_offsets` is auto-enabled at parse
-                    // time when `with_dwarf` is on, so offsets are always
-                    // present here — treat their absence as a bug.
-                    let mut orig_per_instr_pcs: HashMap<u32, Vec<usize>> = HashMap::new();
-                    for (func_idx, _) in per_func_maps.iter() {
-                        let local = tmp
-                            .functions
-                            .unwrap_local(FunctionID(*func_idx))
-                            .expect("captured DWARF map should be for a local function");
-                        let offsets = local
-                            .body
-                            .instructions
-                            .offsets()
-                            .expect("with_dwarf opt-in must populate orig per-instr offsets");
-                        orig_per_instr_pcs.insert(*func_idx, offsets.to_vec());
-                    }
-                    let per_func_new: HashMap<u32, crate::ir::dwarf::PerFuncEncodeMaps> =
-                        per_func_maps
-                            .iter()
-                            .map(|(idx, m)| {
-                                (
-                                    *idx,
-                                    crate::ir::dwarf::PerFuncEncodeMaps {
-                                        pcs: &m.pcs,
-                                        anchors: &m.anchors,
-                                        first_instr_dwarf_offset: m.first_instr_dwarf_offset,
-                                        body_total_size: m.body_total_size,
-                                    },
-                                )
-                            })
-                            .collect();
+                let new_line_bytes = if let Some(line_idx) = line_idx {
                     let input_bytes = debug.sections()[line_idx].data.as_ref();
-                    let new_bytes = crate::ir::dwarf::rewrite_debug_line(
-                        input_bytes,
-                        debug,
-                        &per_func_new,
-                        &orig_per_instr_pcs,
-                    )?;
-                    if let Some(debug_mut) = tmp.debug.as_mut() {
-                        debug_mut.sections[line_idx].data = std::borrow::Cow::Owned(new_bytes);
+                    Some((
+                        line_idx,
+                        crate::ir::dwarf::rewrite_debug_line(
+                            input_bytes,
+                            debug,
+                            &per_func_new,
+                            &orig_per_instr_pcs,
+                        )?,
+                    ))
+                } else {
+                    None
+                };
+                let new_other_sections = crate::ir::dwarf::rewrite_other_dwarf_sections(
+                    debug,
+                    &per_func_new,
+                    &orig_per_instr_pcs,
+                )?;
+
+                if let Some(debug_mut) = tmp.debug.as_mut() {
+                    if let Some((line_idx, bytes)) = new_line_bytes {
+                        debug_mut.sections[line_idx].data = std::borrow::Cow::Owned(bytes);
+                    }
+                    let mut new_other_sections = new_other_sections;
+                    for section in debug_mut.sections.iter_mut() {
+                        if let Some(new_bytes) = new_other_sections.remove(section.name) {
+                            section.data = std::borrow::Cow::Owned(new_bytes);
+                        }
                     }
                 }
             }
@@ -2575,6 +2616,14 @@ pub(crate) struct FuncDwarfMaps {
     /// anchor to themselves; injected ops inherit their host op's idx so a
     /// debugger never "stops inside" wirm-injected code.
     pub(crate) anchors: Vec<usize>,
+    /// For each orig op index, the emit position of the orig op itself (the
+    /// point where the orig op's encoding starts, vs the first emit anchored
+    /// to it which may be a before-injection). Step 6 uses this to translate
+    /// `low_pc`/`high_pc` that name an instruction byte rather than a
+    /// debugger-stop point.
+    pub(crate) self_emit_for_orig: Vec<usize>,
+    /// Byte length of the new function-body size LEB.
+    pub(crate) size_leb_len: usize,
     /// DWARF address of the first instruction in the new function body
     /// (= size-LEB bytes + locals-declaration bytes). Composes with `pcs[i]`
     /// to give per-function DWARF row addresses: `addr = first_instr_dwarf_offset + pcs[i]`.

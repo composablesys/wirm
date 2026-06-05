@@ -35,11 +35,11 @@ Work through these in order. Each box is roughly one PR-sized unit.
       `Vec<(emit_order_idx, anchor_instr_idx)>` per function. Original
       ops map to themselves; injected ops map to their host
       instruction.
-- [ ] **5. `.debug_line` rewriter.** Walk the input's line program;
+- [x] **5. `.debug_line` rewriter.** Walk the input's line program;
       emit a new program where each original PC is translated via the
       maps from steps 2–4. For every injected PC, emit a row with the
       anchor's `(file, line, col, is_stmt, ...)`.
-- [ ] **6. `.debug_info` and friends.** Use
+- [x] **6. `.debug_info` and friends.** Use
       `gimli::write::Dwarf::from(&read, &addr_translator)` with an
       address translator that consults the same maps. This handles
       `DW_AT_low_pc`/`high_pc`, `DW_AT_ranges`, location lists,

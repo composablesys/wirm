@@ -1,11 +1,12 @@
-//! Tests for parse-aside DWARF handling and the `.debug_line` rewriter.
+//! Tests for parse-aside DWARF handling, the `.debug_line` rewriter (step 5),
+//! and the address-translated rewriter for the other DWARF sections (step 6).
 //!
 //! When `with_dwarf` is on, `.debug_*` custom sections lift into
-//! `Module::debug` instead of `custom_sections`. The other DWARF sections
-//! still round-trip byte-identically (no rewriter for them yet); `.debug_line`
-//! is rewritten so its row addresses match the new code layout. We verify
-//! `.debug_line` semantically (rows) rather than by bytes because gimli's
-//! writer may choose more compact opcodes than the input.
+//! `Module::debug` instead of `custom_sections`. `.debug_line` is rewritten
+//! with anchor-aware row inheritance; `.debug_info` (+ `.debug_abbrev`,
+//! `.debug_str` etc.) is rewritten via `gimli::write::Dwarf::from` with an
+//! address translator. Both rewriters preserve semantics, not byte content,
+//! so the tests check logical equivalence rather than byte equality.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -28,6 +29,66 @@ fn debug_section_bytes(wasm: &[u8]) -> BTreeMap<String, Vec<u8>> {
         if let wasmparser::Payload::CustomSection(cs) = payload.expect("valid wasm") {
             if cs.name().starts_with(".debug_") {
                 out.insert(cs.name().to_string(), cs.data().to_vec());
+            }
+        }
+    }
+    out
+}
+
+/// Walks `.debug_info` and collects each DIE's `(low_pc, high_pc)` pair. Used
+/// for semantic comparison since the rewriter may emit different bytes (e.g.
+/// different abbreviation codes) but must preserve address ranges.
+fn debug_info_pcs(wasm: &[u8]) -> Vec<(u64, u64)> {
+    let sections = debug_section_bytes(wasm);
+    let endian = gimli::LittleEndian;
+    let lookup = |name: &str| -> gimli::EndianSlice<'_, gimli::LittleEndian> {
+        gimli::EndianSlice::new(
+            sections.get(name).map(|v| v.as_slice()).unwrap_or(&[]),
+            endian,
+        )
+    };
+    let dwarf = gimli::read::Dwarf::load(|id| -> Result<_, gimli::Error> {
+        Ok(match id {
+            gimli::SectionId::DebugInfo => lookup(".debug_info"),
+            gimli::SectionId::DebugAbbrev => lookup(".debug_abbrev"),
+            gimli::SectionId::DebugStr => lookup(".debug_str"),
+            gimli::SectionId::DebugLine => lookup(".debug_line"),
+            gimli::SectionId::DebugLineStr => lookup(".debug_line_str"),
+            _ => gimli::EndianSlice::new(&[], endian),
+        })
+    })
+    .expect("load DWARF");
+
+    let mut out = Vec::new();
+    let mut units = dwarf.units();
+    while let Some(header) = units.next().expect("unit header") {
+        let unit = dwarf.unit(header).expect("unit");
+        let mut entries = unit.entries();
+        while let Some(entry) = entries.next_dfs().expect("dfs") {
+            // wasm-tools' CU stores low_pc/high_pc as DW_FORM_data4 (low_pc =
+            // absolute, high_pc = length per the DWARF spec); the subprogram
+            // uses DW_FORM_addr for low_pc and data4 for high_pc. Accept both.
+            let read_uint = |v: gimli::read::AttributeValue<_>| -> Option<u64> {
+                match v {
+                    gimli::read::AttributeValue::Addr(a) => Some(a),
+                    gimli::read::AttributeValue::Data1(d) => Some(d as u64),
+                    gimli::read::AttributeValue::Data2(d) => Some(d as u64),
+                    gimli::read::AttributeValue::Data4(d) => Some(d as u64),
+                    gimli::read::AttributeValue::Data8(d) => Some(d),
+                    gimli::read::AttributeValue::Udata(d) => Some(d),
+                    _ => None,
+                }
+            };
+            let low = entry.attr_value(gimli::DW_AT_low_pc).and_then(read_uint);
+            let high_raw = entry.attr_value(gimli::DW_AT_high_pc).and_then(read_uint);
+            // For Addr form high_pc is absolute; for Data*/Udata it's a length.
+            let high = match entry.attr_value(gimli::DW_AT_high_pc) {
+                Some(gimli::read::AttributeValue::Addr(_)) => high_raw,
+                Some(_) => high_raw.zip(low).map(|(l_len, l_addr)| l_addr + l_len),
+                None => None,
+            };
+            if let (Some(l), Some(h)) = (low, high) {
+                out.push((l, h));
             }
         }
     }
@@ -79,10 +140,11 @@ fn opaque_round_trip_preserves_dwarf_section_bytes() {
     assert_eq!(debug_section_bytes(&input), debug_section_bytes(&output));
 }
 
-/// `with_dwarf=true` lifts `.debug_*` aside and re-emits them. The non-line
-/// sections round-trip byte-identically (no rewriter for them yet);
-/// `.debug_line` is rewritten so the bytes may differ but the logical rows
-/// must match for an uninstrumented module.
+/// `with_dwarf=true` lifts `.debug_*` aside and re-emits them. For an
+/// uninstrumented round-trip the rewriters preserve DWARF semantics: every
+/// `.debug_line` row and every `.debug_info` `(low_pc, high_pc)` pair must
+/// match input. Byte equality is not required since gimli's encoder is free
+/// to pick different abbreviation codes, opcode sequences, etc.
 #[test]
 fn parse_aside_lifts_dwarf_into_debug_field() {
     let input = std::fs::read(input_path()).unwrap();
@@ -101,22 +163,15 @@ fn parse_aside_lifts_dwarf_into_debug_field() {
     }
 
     let output = module.encode().unwrap();
-    let in_sections = debug_section_bytes(&input);
-    let out_sections = debug_section_bytes(&output);
-    // Non-line sections still pass through byte-for-byte.
-    for name in DWARF_SECTION_NAMES.iter().filter(|n| **n != ".debug_line") {
-        assert_eq!(
-            in_sections.get(*name),
-            out_sections.get(*name),
-            "{name} should round-trip byte-identically (no rewriter for it)",
-        );
-    }
-    // `.debug_line` must be semantically equivalent: same rows for an
-    // uninstrumented module.
     assert_eq!(
         debug_line_rows(&input),
         debug_line_rows(&output),
         ".debug_line rows must match for an uninstrumented round-trip",
+    );
+    assert_eq!(
+        debug_info_pcs(&input),
+        debug_info_pcs(&output),
+        ".debug_info DIE address ranges must match for an uninstrumented round-trip",
     );
 }
 
@@ -133,6 +188,93 @@ fn parse_aside_empty_when_input_has_no_dwarf() {
         .as_ref()
         .expect("debug present even when empty");
     assert!(debug.sections().is_empty());
+}
+
+/// Instrumented round-trip: injecting 4 nops before `i32.add` grows the
+/// function body by 4 bytes; `.debug_info`'s `(low_pc, high_pc)` must
+/// reflect the new size, not the original. This is the regression case the
+/// `Dwarf::convert` fix in step 6 was added for.
+#[test]
+fn rewriter_translates_high_pc_after_body_growth() {
+    use wasmparser::Operator;
+    use wirm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
+    use wirm::Opcode;
+
+    let input = std::fs::read(input_path()).unwrap();
+    let in_pcs = debug_info_pcs(&input);
+    assert_eq!(in_pcs, vec![(0, 8), (1, 8)], "fixture sanity check");
+
+    let mut module = Module::parse(&input, false, false, true).unwrap();
+    {
+        let mut it = wirm::iterator::module_iterator::ModuleIterator::new(&mut module, &Vec::new());
+        loop {
+            if matches!(it.curr_op(), Some(Operator::I32Add)) {
+                it.before().nop().nop().nop().nop();
+                break;
+            }
+            if it.next().is_none() {
+                break;
+            }
+        }
+    }
+
+    let output = module.encode().unwrap();
+    let out_pcs = debug_info_pcs(&output);
+
+    // Body grew by 4 bytes. CU spans the whole body: (0, 8+4)=(0,12).
+    // Subprogram starts after the size LEB at the locals byte: (1, 12).
+    assert_eq!(
+        out_pcs,
+        vec![(0, 12), (1, 12)],
+        ".debug_info DIE ranges must reflect the post-injection body size",
+    );
+}
+
+/// Alternate-path coverage: replacing `i32.add` (1 byte) with `nop nop nop`
+/// (3 bytes) grows the body by 2 bytes. This exercises `self_emit_for_orig`
+/// on the alt branch — the orig op `i32.add` is *not* emitted, but its
+/// self-emit slot must still point at the first alt instruction so any DIE
+/// addressing the orig op lands on the alt's start byte.
+#[test]
+fn rewriter_handles_alternate_replacement() {
+    use wasmparser::Operator;
+    use wirm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
+    use wirm::Opcode;
+
+    let input = std::fs::read(input_path()).unwrap();
+    let mut module = Module::parse(&input, false, false, true).unwrap();
+    {
+        let mut it = wirm::iterator::module_iterator::ModuleIterator::new(&mut module, &Vec::new());
+        loop {
+            if matches!(it.curr_op(), Some(Operator::I32Add)) {
+                it.alternate().nop().nop().nop();
+                break;
+            }
+            if it.next().is_none() {
+                break;
+            }
+        }
+    }
+
+    let output = module.encode().unwrap();
+    let out_pcs = debug_info_pcs(&output);
+
+    // Body grew by 2 bytes (3 nops − 1 i32.add). CU/subprogram extents track.
+    assert_eq!(
+        out_pcs,
+        vec![(0, 10), (1, 10)],
+        ".debug_info DIE ranges must reflect the alt-induced body size delta",
+    );
+
+    // Sanity-check `.debug_line`: the i32.add's row must be addressable in
+    // the rewritten output. With the alt path, `self_emit_for_orig[i32.add]`
+    // points at the first nop's emit position, so the row stays present at
+    // the alt's start byte (offset_in_op = 0).
+    let out_rows = debug_line_rows(&output);
+    assert!(
+        !out_rows.is_empty(),
+        ".debug_line must still cover the function after alt replacement",
+    );
 }
 
 /// Explicit address-translation invariant for the rewriter: for an
