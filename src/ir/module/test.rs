@@ -1262,6 +1262,127 @@ fn rewriter_handles_func_exit_injection_strong() {
     }
 }
 
+// Step 14: when `with_dwarf` is on and the module also carries an adjacent
+// debug section (`external_debug_info` or `sourceMappingURL`), parsing must
+// emit a `log::warn!` so the user knows their adjacent debug-info goes stale
+// after instrumentation — wirm passes those bytes through unchanged.
+
+/// One-shot global logger that captures every log record into a shared
+/// `Vec<String>`. The first test to install it wins; subsequent tests reuse
+/// the same buffer and snapshot-diff to isolate their own records.
+mod warn_capture {
+    use std::sync::{Mutex, OnceLock};
+
+    static BUFFER: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+    static INSTALLED: OnceLock<()> = OnceLock::new();
+    static LOGGER: CaptureLogger = CaptureLogger;
+
+    struct CaptureLogger;
+    impl log::Log for CaptureLogger {
+        fn enabled(&self, _: &log::Metadata) -> bool {
+            true
+        }
+        fn log(&self, record: &log::Record) {
+            if let Some(buf) = BUFFER.get() {
+                if let Ok(mut v) = buf.lock() {
+                    v.push(format!("{}: {}", record.level(), record.args()));
+                }
+            }
+        }
+        fn flush(&self) {}
+    }
+
+    pub fn install() -> &'static Mutex<Vec<String>> {
+        let buf = BUFFER.get_or_init(|| Mutex::new(Vec::new()));
+        INSTALLED.get_or_init(|| {
+            // Best-effort: if some other test in the same process already set
+            // a logger we silently fall back to whatever it's doing (the
+            // buffer just stays empty for our tests).
+            let _ = log::set_logger(&LOGGER);
+            log::set_max_level(log::LevelFilter::Warn);
+        });
+        buf
+    }
+
+    /// Snapshot the current buffer length so a test can read just the
+    /// records it produced.
+    pub fn snapshot(buf: &Mutex<Vec<String>>) -> usize {
+        buf.lock().map(|v| v.len()).unwrap_or(0)
+    }
+
+    pub fn records_since(buf: &Mutex<Vec<String>>, start: usize) -> Vec<String> {
+        buf.lock().map(|v| v[start..].to_vec()).unwrap_or_default()
+    }
+}
+
+fn module_with_custom_section(name: &str, data: &[u8]) -> Vec<u8> {
+    let mut m = wasm_encoder::Module::new();
+    m.section(&wasm_encoder::CustomSection {
+        name: std::borrow::Cow::Borrowed(name),
+        data: std::borrow::Cow::Borrowed(data),
+    });
+    m.finish()
+}
+
+#[test]
+fn with_dwarf_warns_on_external_debug_info_section() {
+    let buf = warn_capture::install();
+    let start = warn_capture::snapshot(buf);
+
+    let bytes = module_with_custom_section("external_debug_info", b"https://example/dwarf");
+    let module = Module::parse(&bytes, false, false, true).expect("parse");
+    // The section passes through opaquely — it's NOT diverted into
+    // Module::debug because it isn't a `.debug_*` section.
+    assert!(
+        module
+            .debug
+            .as_ref()
+            .is_some_and(|d| d.sections().is_empty()),
+        "Module::debug should be Some(empty); adjacent debug sections \
+         do not divert into the DWARF rewriter",
+    );
+
+    let records = warn_capture::records_since(buf, start);
+    assert!(
+        records
+            .iter()
+            .any(|r| r.contains("external_debug_info") && r.contains("does not rewrite")),
+        "expected an external_debug_info warning, got: {records:?}",
+    );
+}
+
+#[test]
+fn with_dwarf_warns_on_source_mapping_url_section() {
+    let buf = warn_capture::install();
+    let start = warn_capture::snapshot(buf);
+
+    let bytes = module_with_custom_section("sourceMappingURL", b"./map.json");
+    let _module = Module::parse(&bytes, false, false, true).expect("parse");
+
+    let records = warn_capture::records_since(buf, start);
+    assert!(
+        records
+            .iter()
+            .any(|r| r.contains("sourceMappingURL") && r.contains("does not rewrite")),
+        "expected a sourceMappingURL warning, got: {records:?}",
+    );
+}
+
+#[test]
+fn without_dwarf_does_not_warn_on_adjacent_debug_sections() {
+    let buf = warn_capture::install();
+    let start = warn_capture::snapshot(buf);
+
+    let bytes = module_with_custom_section("external_debug_info", b"https://example/dwarf");
+    let _module = Module::parse(&bytes, false, false, false).expect("parse");
+
+    let records = warn_capture::records_since(buf, start);
+    assert!(
+        !records.iter().any(|r| r.contains("external_debug_info")),
+        "no warning expected when with_dwarf=false, got: {records:?}",
+    );
+}
+
 // DWARF rewriting, step 9: differential test for an INSTRUMENTED module.
 // Two paths produce per-emit byte offsets — the in-encode capture (each emit
 // op's `function.byte_len()` rebased onto the first instruction) and a

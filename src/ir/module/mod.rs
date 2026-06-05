@@ -483,6 +483,27 @@ impl<'a> Module<'a> {
                 }
                 Payload::CustomSection(custom_section_reader) => {
                     let cs_name = custom_section_reader.name();
+                    if with_dwarf {
+                        // Warn on rewriting gaps. Both of these are truly not wirm's
+                        // responsibility.
+                        match cs_name {
+                            // wirm can't pull debug info from a URL and rewrite it...
+                            "external_debug_info" => warn!(
+                                "DWARF rewriting opted in but module also carries an \
+                                 `external_debug_info` custom section. Its referenced \
+                                 side-file's addresses go stale after instrumentation \
+                                 and wirm does not rewrite it.",
+                            ),
+                            // totally different format (JSON)
+                            "sourceMappingURL" => warn!(
+                                "DWARF rewriting opted in but module also carries a \
+                                 `sourceMappingURL` custom section. The referenced \
+                                 source map's byte offsets go stale after \
+                                 instrumentation and wirm does not rewrite it.",
+                            ),
+                            _ => {}
+                        }
+                    }
                     if let Some(debug) = debug_sections.as_mut() {
                         if ModuleDebugData::is_dwarf_section_name(cs_name) {
                             debug.push(CustomSection {

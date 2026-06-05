@@ -62,14 +62,20 @@ Work through these in order. Each box is roughly one PR-sized unit.
        corpus) × (random instrumentation plans). Single invariant:
        `lookup(new_pc)` in output equals `lookup(anchor_orig_pc)` in
        input, for every emitted op.
-- [ ] **12. libfuzzer target (corpus-based).** Reuse the parse-aside
+- [x] **12. libfuzzer target (corpus-based).** Reuse the parse-aside
        seeds from steps 8/11; let libfuzzer generate the
        instrumentation plan via `Arbitrary`.
 - [ ] **13. libfuzzer target (synthesized DWARF).** Helper that emits
        a stub `.debug_line` on top of `wasm-smith` output so we get
        unbounded variation. Optional, deferred until earlier layers
-       are stable.
-- [ ] **14. Warn on adjacent debug sections.** When DWARF rewriting is
+       are stable. *Deferred alongside step 11: wasm-smith outputs are
+       multi-function, which step 6 refuses, so most cases would hit
+       the refusal path. Interesting features (loc lists, ranges,
+       inlined subroutines) are blocked behind multi-function support.
+       Action-space variation is already covered by step 10 proptest +
+       step 12 libfuzzer. Revisit alongside step 11 once multi-CU
+       routing lands.*
+- [x] **14. Warn on adjacent debug sections.** When DWARF rewriting is
        opted in, detect `external_debug_info` and `sourceMappingURL`
        custom sections during parse and emit a `log::warn!` (the `log`
        crate is already a dep). The user opted into DWARF rewriting,
