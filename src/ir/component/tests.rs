@@ -1405,7 +1405,7 @@ fn test_delete_custom_section_roundtrip() {
     use crate::ir::types::CustomSection;
 
     let b = bytes(r#"(component)"#);
-    let mut comp = Component::parse(&b, false, false).unwrap();
+    let mut comp = Component::parse(&b, false, false, false).unwrap();
 
     let keep1 = comp.add_custom_section(CustomSection::new("keep1", b"a".to_vec()));
     let del = comp.add_custom_section(CustomSection::new("del", b"b".to_vec()));
@@ -1417,7 +1417,7 @@ fn test_delete_custom_section_roundtrip() {
     assert_eq!(comp.custom_sections.get_by_id(keep2).unwrap().name, "keep2");
 
     let encoded = comp.encode().expect("encode failed");
-    let reparsed = Component::parse(&encoded, false, false).expect("reparse failed");
+    let reparsed = Component::parse(&encoded, false, false, false).expect("reparse failed");
     let names: Vec<&str> = reparsed.custom_sections.iter().map(|s| s.name).collect();
 
     assert!(names.contains(&"keep1"));
@@ -1430,7 +1430,7 @@ fn test_delete_custom_section_invalid_id() {
     use crate::ir::id::CustomSectionID;
 
     let b = bytes(r#"(component)"#);
-    let mut comp = Component::parse(&b, false, false).unwrap();
+    let mut comp = Component::parse(&b, false, false, false).unwrap();
 
     let before = comp.custom_sections.len();
     comp.delete_custom_section(CustomSectionID(9999));

@@ -2217,8 +2217,9 @@ impl<'a> CustomSection<'a> {
         }
     }
 
-    /// Create a new custom section with borrowed data (private)
-    fn new_borrowed(name: &'a str, data: &'a [u8]) -> Self {
+    /// Create a new custom section that borrows its data slice from the
+    /// surrounding parse buffer.
+    pub(crate) fn new_borrowed(name: &'a str, data: &'a [u8]) -> Self {
         CustomSection {
             name,
             data: Cow::Borrowed(data),

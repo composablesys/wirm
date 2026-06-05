@@ -29,6 +29,11 @@ fn multi_func_input_path() -> PathBuf {
         .join("tests/test_inputs/handwritten/dwarf/two_funcs.wasm")
 }
 
+fn from_rust_input_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/test_inputs/handwritten/dwarf/from-rust/from-rust.wasm")
+}
+
 /// Pulls every `.debug_*` custom section's bytes out, keyed by name.
 /// `BTreeMap` so equality is order-independent — encode may legitimately
 /// place DWARF sections in a different position relative to other custom
@@ -278,28 +283,146 @@ fn rewriter_handles_added_local() {
     }
 }
 
-/// Multi-function inputs currently exercise the rewriter's defensive gate:
-/// per-function DWARF address spaces overlap when each starts at 0, so step
-/// 6 refuses to translate until per-CU routing lands. This test pins the
-/// error so a future change that softens the gate is intentional.
+/// Multi-function inputs use a shared module-cumulative DWARF address space.
+/// An uninstrumented round-trip must preserve every row address and every DIE
+/// range — the rewriter has nothing to translate.
 #[test]
-fn rewriter_refuses_multi_function_input() {
+fn rewriter_preserves_row_addresses_uninstrumented_multi_func() {
     let input = std::fs::read(multi_func_input_path()).unwrap();
+    let in_rows = debug_line_rows(&input);
+    let in_pcs = debug_info_pcs(&input);
+
     let module = Module::parse(&input, false, false, true).unwrap();
-    let err = module
-        .encode()
-        .expect_err("multi-function .debug_info rewriting should refuse");
-    // Structural match: the gate must produce a `DwarfError`, and the
-    // message must reference multi-function (so the test fails loudly if a
-    // future refactor produces the right variant but the wrong reason).
-    let msg = match &err {
-        wirm::error::Error::DwarfError(m) => m,
-        other => panic!("expected DwarfError variant, got {other:?}"),
-    };
-    assert!(
-        msg.contains("multi-function"),
-        "DwarfError message should mention multi-function, got: {msg}",
+    let output = module.encode().unwrap();
+    let out_rows = debug_line_rows(&output);
+    let out_pcs = debug_info_pcs(&output);
+
+    let in_addrs: Vec<u64> = in_rows.iter().map(|r| r.0).collect();
+    let out_addrs: Vec<u64> = out_rows.iter().map(|r| r.0).collect();
+    assert_eq!(
+        in_addrs, out_addrs,
+        "uninstrumented multi-function round-trip must preserve row addresses",
     );
+    assert_eq!(
+        in_pcs, out_pcs,
+        ".debug_info ranges must match for an uninstrumented multi-function round-trip",
+    );
+
+    // Spot-check the fixture so a future regeneration that shifts addresses
+    // surfaces in the test, not silently in downstream invariants.
+    // CU spans both functions; foo and bar each occupy one subprogram DIE.
+    assert_eq!(in_pcs, vec![(0, 16), (1, 8), (9, 16)]);
+}
+
+/// Injecting into the second function must shift its body forward and grow
+/// every DIE / line-program address that lives past the first function. The
+/// first function's addresses must stay put.
+#[test]
+fn rewriter_handles_instrumentation_in_second_function() {
+    use wasmparser::Operator;
+    use wirm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
+    use wirm::Opcode;
+
+    let input = std::fs::read(multi_func_input_path()).unwrap();
+    let in_pcs = debug_info_pcs(&input);
+    assert_eq!(in_pcs, vec![(0, 16), (1, 8), (9, 16)], "fixture sanity check");
+
+    let mut module = Module::parse(&input, false, false, true).unwrap();
+    // Inject 3 nops before bar's `i32.mul`. Bar grows by 3 bytes; foo stays.
+    // Assert we hit a bar instruction (func index 1) so a future fixture
+    // change that put `i32.mul` into foo couldn't silently patch the wrong
+    // function.
+    {
+        let mut it = wirm::iterator::module_iterator::ModuleIterator::new(&mut module, &Vec::new());
+        loop {
+            if matches!(it.curr_op(), Some(Operator::I32Mul)) {
+                let (loc, _) = it.curr_loc();
+                let wirm::Location::Module { func_idx, .. } = loc else {
+                    panic!("expected module-level location, got {loc:?}");
+                };
+                assert_eq!(
+                    *func_idx, 1u32,
+                    "fixture changed: i32.mul should still be in bar (func 1)",
+                );
+                it.before().nop().nop().nop();
+                break;
+            }
+            if it.next().is_none() {
+                break;
+            }
+        }
+    }
+
+    let output = module.encode().unwrap();
+    let out_pcs = debug_info_pcs(&output);
+
+    // foo unchanged: subprogram still (1, 8). bar grows by 3: low_pc still 9
+    // (its base shifts only if foo grew, which it didn't), high_pc 16 → 19.
+    // CU spans [0, foo_total + bar_total) = [0, 8 + 11) = [0, 19).
+    assert_eq!(out_pcs, vec![(0, 19), (1, 8), (9, 19)]);
+}
+
+/// Instrumenting the first function shifts the second function's base forward.
+/// Both DIE ranges and `.debug_line` rows for the second function must track
+/// the new base, while the first function's addresses adjust to its own growth.
+#[test]
+fn rewriter_handles_instrumentation_in_first_function() {
+    use wasmparser::Operator;
+    use wirm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
+    use wirm::Opcode;
+
+    let input = std::fs::read(multi_func_input_path()).unwrap();
+    let mut module = Module::parse(&input, false, false, true).unwrap();
+    // 2 nops before foo's `i32.add`. foo grows by 2 bytes; bar's base shifts.
+    // Assert we land in foo (func 0); a fixture change that put `i32.add` in
+    // bar would otherwise silently mis-attribute the growth.
+    {
+        let mut it = wirm::iterator::module_iterator::ModuleIterator::new(&mut module, &Vec::new());
+        loop {
+            if matches!(it.curr_op(), Some(Operator::I32Add)) {
+                let (loc, _) = it.curr_loc();
+                let wirm::Location::Module { func_idx, .. } = loc else {
+                    panic!("expected module-level location, got {loc:?}");
+                };
+                assert_eq!(
+                    *func_idx, 0u32,
+                    "fixture changed: i32.add should still be in foo (func 0)",
+                );
+                it.before().nop().nop();
+                break;
+            }
+            if it.next().is_none() {
+                break;
+            }
+        }
+    }
+
+    let output = module.encode().unwrap();
+    let out_pcs = debug_info_pcs(&output);
+
+    // foo grows by 2: (1, 8) → (1, 10). bar's base shifts by foo's 2-byte growth:
+    // bar's body is unchanged so its range slides forward by 2: (9, 16) → (11, 18).
+    // CU: (0, 16) → (0, 18).
+    assert_eq!(out_pcs, vec![(0, 18), (1, 10), (11, 18)]);
+
+    // `.debug_line` rows for bar must shift right by 2 (foo's growth), since
+    // bar's body is unchanged but its base address slid forward. Filter both
+    // sides to bar's region (addr ≥ original bar low_pc = 9). Out has 2 more
+    // rows than in (the two injected nops anchor onto i32.add and produce
+    // extra in-foo rows), so length isn't comparable globally.
+    let in_rows = debug_line_rows(&input);
+    let out_rows = debug_line_rows(&output);
+    let bar_in: Vec<_> = in_rows.iter().filter(|(a, _, _)| *a >= 9).collect();
+    let bar_out: Vec<_> = out_rows.iter().filter(|(a, _, _)| *a >= 11).collect();
+    assert_eq!(bar_in.len(), bar_out.len(), "bar row count must match");
+    for ((ia, il, ic), (oa, ol, oc)) in bar_in.iter().zip(bar_out.iter()) {
+        assert_eq!((*il, *ic), (*ol, *oc), "(line, col) must be preserved");
+        assert_eq!(
+            *oa,
+            *ia + 2,
+            "bar row at addr {ia} must shift by foo's 2-byte growth, got {oa}",
+        );
+    }
 }
 
 // Note: the `func_exit` injection test was moved to
@@ -328,4 +451,46 @@ fn rewriter_preserves_row_addresses_uninstrumented() {
     // Spot-check the test data so a future refactor that silently loses rows
     // is caught: add.wasm has rows at addrs 2, 4, 6, 7.
     assert_eq!(in_addrs, vec![2, 4, 6, 7]);
+}
+
+/// Real rustc-emitted DWARF (v4, multi-function, inlined subroutines,
+/// rangelist CU, `DW_FORM_addr` low/high_pc, `dead code` tombstones) must
+/// round-trip + re-validate. The strong source-location invariant is checked
+/// crate-side in `src/ir/module/test.rs` (it needs `pub(crate)` access to
+/// the DWARF encode maps); here we just confirm the pipeline doesn't error
+/// out on realistic DWARF.
+#[test]
+fn from_rust_uninstrumented_round_trips_and_validates() {
+    let input = std::fs::read(from_rust_input_path()).unwrap();
+    let module = Module::parse(&input, false, false, true).unwrap();
+    let output = module.encode().unwrap();
+    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&output)
+        .expect("rewritten module must validate");
+}
+
+/// Same with one nop injected before every op. Encode must succeed and the
+/// output must re-validate; the strong invariant is verified crate-side.
+#[test]
+fn from_rust_instrumented_round_trips_and_validates() {
+    use wirm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
+    use wirm::Opcode;
+
+    let input = std::fs::read(from_rust_input_path()).unwrap();
+    let mut module = Module::parse(&input, false, false, true).unwrap();
+    {
+        let mut it = wirm::iterator::module_iterator::ModuleIterator::new(&mut module, &Vec::new());
+        loop {
+            if it.curr_op().is_some() {
+                it.before().nop();
+            }
+            if it.next().is_none() {
+                break;
+            }
+        }
+    }
+    let output = module.encode().unwrap();
+    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&output)
+        .expect("instrumented module must validate");
 }
