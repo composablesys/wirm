@@ -304,13 +304,31 @@ When a real input demands more, pick from:
   the same per-function PC maps the DWARF rewriter computes. Source
   maps are byte-offset-based, so the math is identical to step 5's.
 
-### DWARF v4 vs v5
+### DWARF v4 vs v5 — DONE for rustc-shape inputs
 
-Our fixtures are DWARF v5 (wasm-tools default). Real-world `rustc -g`
-emits v4 by default; clang likewise. `gimli` supports both and our
-convert flow rounds-trips the input version, but the v4 path hasn't
-been exercised on real inputs. Add a v4 fixture as part of the
-multi-function-lift verification.
+The `tests/test_inputs/handwritten/dwarf/from-rust/` fixture is rustc
+debug output (DWARF v4, multi-function, inlined subroutines, rangelist
+CU, `DW_FORM_addr` low/high_pc, `dead code` low_pc tombstones). The
+strong invariant holds on it (`rewriter_handles_from_rust_fixture_*`
+in `src/ir/module/test.rs`).
+
+Surfacing this fixture caught one real rewriter bug: the input-row
+lookup used `HashMap<orig_pc, row>` exact match, which dropped rows
+whose orig PC sat *between* instruction starts (rustc emits these
+freely; wasm-tools' synthetic DWARF doesn't). Replaced with a
+`partition_point` lookup that picks "the row whose PC is the largest
+≤ query PC" — same semantics as `lookup_src_at` in the test helpers.
+
+Past-end and mid-instruction *output* rows are still not preserved (the
+rewriter emits one row per emit position, not one per input row). This
+doesn't affect the strong invariant — emit positions are always at
+instruction starts, so `lookup(new_pc) == lookup(anchor_orig_pc)` holds
+— but the output's `.debug_line` lookups in mid-instruction or
+past-end address ranges may disagree with the input's. Real debuggers
+never stop in those ranges (wasm instructions are atomic), so this is
+documented scope, not a defect.
+
+Clang-shape inputs remain untested.
 
 ## Components
 

@@ -1294,6 +1294,42 @@ fn rewriter_handles_func_exit_injection_strong() {
     }
 }
 
+// Real rustc-emitted DWARF v4 fixture (`from-rust/from-rust.wasm`): multi
+// function, inlined-subroutine DIEs, rangelist CU, `dead code` low_pc
+// tombstone on the unused `panic` subprogram. Checks the strong invariant
+// `output_lookup(new_pc) == input_lookup(anchor_orig_pc)` at every emit
+// position — same contract the handwritten-fixture tests enforce.
+#[test]
+fn rewriter_handles_from_rust_fixture_uninstrumented_strong() {
+    let input = std::fs::read(dwarf_fixture_path("from-rust/from-rust.wasm"))
+        .expect("read from-rust fixture");
+    let module = Module::parse(&input, false, false, true).expect("parse");
+    let _ = assert_source_location_invariant(&input, &module);
+}
+
+#[test]
+fn rewriter_handles_from_rust_fixture_instrumented_strong() {
+    use crate::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
+    use crate::iterator::module_iterator::ModuleIterator;
+    use crate::Opcode;
+
+    let input = std::fs::read(dwarf_fixture_path("from-rust/from-rust.wasm"))
+        .expect("read from-rust fixture");
+    let mut module = Module::parse(&input, false, false, true).expect("parse");
+    {
+        let mut it = ModuleIterator::new(&mut module, &Vec::new());
+        loop {
+            if it.curr_op().is_some() {
+                it.before().nop();
+            }
+            if it.next().is_none() {
+                break;
+            }
+        }
+    }
+    let _ = assert_source_location_invariant(&input, &module);
+}
+
 // Step 14: when `with_dwarf` is on and the module also carries an adjacent
 // debug section (`external_debug_info` or `sourceMappingURL`), parsing must
 // emit a `log::warn!` so the user knows their adjacent debug-info goes stale

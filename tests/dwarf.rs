@@ -29,6 +29,11 @@ fn multi_func_input_path() -> PathBuf {
         .join("tests/test_inputs/handwritten/dwarf/two_funcs.wasm")
 }
 
+fn from_rust_input_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/test_inputs/handwritten/dwarf/from-rust/from-rust.wasm")
+}
+
 /// Pulls every `.debug_*` custom section's bytes out, keyed by name.
 /// `BTreeMap` so equality is order-independent — encode may legitimately
 /// place DWARF sections in a different position relative to other custom
@@ -446,4 +451,46 @@ fn rewriter_preserves_row_addresses_uninstrumented() {
     // Spot-check the test data so a future refactor that silently loses rows
     // is caught: add.wasm has rows at addrs 2, 4, 6, 7.
     assert_eq!(in_addrs, vec![2, 4, 6, 7]);
+}
+
+/// Real rustc-emitted DWARF (v4, multi-function, inlined subroutines,
+/// rangelist CU, `DW_FORM_addr` low/high_pc, `dead code` tombstones) must
+/// round-trip + re-validate. The strong source-location invariant is checked
+/// crate-side in `src/ir/module/test.rs` (it needs `pub(crate)` access to
+/// the DWARF encode maps); here we just confirm the pipeline doesn't error
+/// out on realistic DWARF.
+#[test]
+fn from_rust_uninstrumented_round_trips_and_validates() {
+    let input = std::fs::read(from_rust_input_path()).unwrap();
+    let module = Module::parse(&input, false, false, true).unwrap();
+    let output = module.encode().unwrap();
+    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&output)
+        .expect("rewritten module must validate");
+}
+
+/// Same with one nop injected before every op. Encode must succeed and the
+/// output must re-validate; the strong invariant is verified crate-side.
+#[test]
+fn from_rust_instrumented_round_trips_and_validates() {
+    use wirm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
+    use wirm::Opcode;
+
+    let input = std::fs::read(from_rust_input_path()).unwrap();
+    let mut module = Module::parse(&input, false, false, true).unwrap();
+    {
+        let mut it = wirm::iterator::module_iterator::ModuleIterator::new(&mut module, &Vec::new());
+        loop {
+            if it.curr_op().is_some() {
+                it.before().nop();
+            }
+            if it.next().is_none() {
+                break;
+            }
+        }
+    }
+    let output = module.encode().unwrap();
+    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&output)
+        .expect("instrumented module must validate");
 }

@@ -240,25 +240,30 @@ pub(crate) fn rewrite_debug_line(
         };
         let new_maps = per_func_new.get(func_idx).unwrap();
 
-        // Build orig_pc → row lookup for this function's input sequence.
-        // Input rows carry module-cumulative addresses, so strip both the
-        // function's base and its in-function header offset to recover the
-        // pure orig PC the encode-side maps use.
+        // Build a PC-sorted `(orig_pc, &row)` list for this function's input
+        // sequence. Rows define implicit ranges (each row's source is in
+        // effect until the next row's address), so the right lookup is
+        // "find the row whose PC is the largest ≤ query PC" — same semantics
+        // as `lookup_src_at` in the test helpers. Exact-key match would miss
+        // rows that sit mid-instruction or at past-end source markers (rustc
+        // emits both).
         let Some(input_seq) = sequences.get(seq_idx) else {
             // Input had no sequence for this function: leave it without
             // line-program coverage.
             continue;
         };
         let orig_first_abs = orig_dbg.dwarf_addr_base + orig_dbg.first_instr_dwarf_offset;
-        let mut by_orig_pc: HashMap<usize, &write::LineRow> = HashMap::new();
-        for cr in input_seq {
-            let addr = cr.address as usize;
-            if addr < orig_first_abs {
-                continue;
-            }
-            let orig_pc = addr - orig_first_abs;
-            by_orig_pc.insert(orig_pc, &cr.row);
-        }
+        let mut rows_by_orig_pc: Vec<(usize, &write::LineRow)> = input_seq
+            .iter()
+            .filter_map(|cr| {
+                let addr = cr.address as usize;
+                if addr < orig_first_abs {
+                    return None;
+                }
+                Some((addr - orig_first_abs, &cr.row))
+            })
+            .collect();
+        rows_by_orig_pc.sort_by_key(|&(pc, _)| pc);
 
         // Sequence base = new module-cumulative address of this function's
         // first body byte. Row `address_offset` is then the in-function offset
@@ -270,9 +275,14 @@ pub(crate) fn rewrite_debug_line(
             let Some(&orig_pc) = orig_pcs.get(anchor) else {
                 continue;
             };
-            let Some(src_row) = by_orig_pc.get(&orig_pc) else {
+            // Largest `(p, _)` with `p <= orig_pc`. None means no row covers
+            // this PC (the function's prologue, before any row sets a
+            // location) — skip the emit position rather than fabricate one.
+            let after = rows_by_orig_pc.partition_point(|&(p, _)| p <= orig_pc);
+            if after == 0 {
                 continue;
-            };
+            }
+            let src_row = rows_by_orig_pc[after - 1].1;
             let new_addr_offset = (new_maps.first_instr_dwarf_offset + new_pc) as u64;
             let row = new_program.row();
             row.address_offset = new_addr_offset;
