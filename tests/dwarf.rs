@@ -13,10 +13,20 @@ use std::path::PathBuf;
 
 use wirm::ir::module::Module;
 
+#[path = "common/dwarf.rs"]
+mod dwarf_helpers;
+
+use dwarf_helpers::line_rows as debug_line_rows;
+
 const DWARF_SECTION_NAMES: &[&str] = &[".debug_abbrev", ".debug_str", ".debug_line", ".debug_info"];
 
 fn input_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/test_inputs/handwritten/dwarf/add.wasm")
+}
+
+fn multi_func_input_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/test_inputs/handwritten/dwarf/two_funcs.wasm")
 }
 
 /// Pulls every `.debug_*` custom section's bytes out, keyed by name.
@@ -35,94 +45,7 @@ fn debug_section_bytes(wasm: &[u8]) -> BTreeMap<String, Vec<u8>> {
     out
 }
 
-/// Walks `.debug_info` and collects each DIE's `(low_pc, high_pc)` pair. Used
-/// for semantic comparison since the rewriter may emit different bytes (e.g.
-/// different abbreviation codes) but must preserve address ranges.
-fn debug_info_pcs(wasm: &[u8]) -> Vec<(u64, u64)> {
-    let sections = debug_section_bytes(wasm);
-    let endian = gimli::LittleEndian;
-    let lookup = |name: &str| -> gimli::EndianSlice<'_, gimli::LittleEndian> {
-        gimli::EndianSlice::new(
-            sections.get(name).map(|v| v.as_slice()).unwrap_or(&[]),
-            endian,
-        )
-    };
-    let dwarf = gimli::read::Dwarf::load(|id| -> Result<_, gimli::Error> {
-        Ok(match id {
-            gimli::SectionId::DebugInfo => lookup(".debug_info"),
-            gimli::SectionId::DebugAbbrev => lookup(".debug_abbrev"),
-            gimli::SectionId::DebugStr => lookup(".debug_str"),
-            gimli::SectionId::DebugLine => lookup(".debug_line"),
-            gimli::SectionId::DebugLineStr => lookup(".debug_line_str"),
-            _ => gimli::EndianSlice::new(&[], endian),
-        })
-    })
-    .expect("load DWARF");
-
-    let mut out = Vec::new();
-    let mut units = dwarf.units();
-    while let Some(header) = units.next().expect("unit header") {
-        let unit = dwarf.unit(header).expect("unit");
-        let mut entries = unit.entries();
-        while let Some(entry) = entries.next_dfs().expect("dfs") {
-            // wasm-tools' CU stores low_pc/high_pc as DW_FORM_data4 (low_pc =
-            // absolute, high_pc = length per the DWARF spec); the subprogram
-            // uses DW_FORM_addr for low_pc and data4 for high_pc. Accept both.
-            let read_uint = |v: gimli::read::AttributeValue<_>| -> Option<u64> {
-                match v {
-                    gimli::read::AttributeValue::Addr(a) => Some(a),
-                    gimli::read::AttributeValue::Data1(d) => Some(d as u64),
-                    gimli::read::AttributeValue::Data2(d) => Some(d as u64),
-                    gimli::read::AttributeValue::Data4(d) => Some(d as u64),
-                    gimli::read::AttributeValue::Data8(d) => Some(d),
-                    gimli::read::AttributeValue::Udata(d) => Some(d),
-                    _ => None,
-                }
-            };
-            let low = entry.attr_value(gimli::DW_AT_low_pc).and_then(read_uint);
-            let high_raw = entry.attr_value(gimli::DW_AT_high_pc).and_then(read_uint);
-            // For Addr form high_pc is absolute; for Data*/Udata it's a length.
-            let high = match entry.attr_value(gimli::DW_AT_high_pc) {
-                Some(gimli::read::AttributeValue::Addr(_)) => high_raw,
-                Some(_) => high_raw.zip(low).map(|(l_len, l_addr)| l_addr + l_len),
-                None => None,
-            };
-            if let (Some(l), Some(h)) = (low, high) {
-                out.push((l, h));
-            }
-        }
-    }
-    out
-}
-
-/// Parses the input's `.debug_line` via gimli and collects each non-end-of-
-/// sequence row as `(address, line, column)`. Used for semantic comparison
-/// between input and rewritten outputs.
-fn debug_line_rows(wasm: &[u8]) -> Vec<(u64, u64, u64)> {
-    let dl_bytes = debug_section_bytes(wasm)
-        .remove(".debug_line")
-        .expect("input has .debug_line");
-    let endian = gimli::LittleEndian;
-    let slice = gimli::EndianSlice::new(&dl_bytes, endian);
-    let dl = gimli::read::DebugLine::new(slice.slice(), endian);
-    let program = dl
-        .program(gimli::DebugLineOffset(0), 4, None, None)
-        .expect("line program parses");
-    let mut rows = program.rows();
-    let mut out = Vec::new();
-    while let Some((_header, row)) = rows.next_row().expect("row reads") {
-        if row.end_sequence() {
-            continue;
-        }
-        let line = row.line().map(|n| n.get()).unwrap_or(0);
-        let column = match row.column() {
-            gimli::ColumnType::LeftEdge => 0,
-            gimli::ColumnType::Column(c) => c.get(),
-        };
-        out.push((row.address(), line, column));
-    }
-    out
-}
+use dwarf_helpers::debug_info_pcs;
 
 /// `with_dwarf=false` leaves DWARF flowing through `custom_sections`. The
 /// section bytes themselves still round-trip verbatim, since `custom_sections`
@@ -277,6 +200,11 @@ fn rewriter_handles_alternate_replacement() {
     );
 }
 
+// Note: the heavy-injection regression (nop before every op) was moved to
+// `src/ir/module/test.rs::rewriter_anchors_nop_before_every_op_to_host_source_strong`
+// where it can apply the full `lookup(new_pc) == lookup(anchor_orig_pc)`
+// invariant via `pub(crate) DwarfEncodeMaps` access.
+
 /// Rewritten DWARF lands in the output module's custom sections in
 /// input order — re-emit is order-preserving so downstream tooling that
 /// scans `.debug_*` payloads doesn't have to deal with reshuffled section
@@ -312,6 +240,71 @@ fn rewriter_preserves_dwarf_section_order_in_output() {
         &[".debug_line_str".to_string()],
     );
 }
+
+/// Adding a local declaration grows the locals-vec encoding, shifting the
+/// first-instruction DWARF offset. The translator must map orig addresses
+/// for instruction bytes onto the shifted positions and preserve the
+/// boundary addresses (`addr == size_leb_len → size_leb_len`,
+/// `addr == first_instr_dwarf_offset → first_instr_dwarf_offset_new`).
+#[test]
+fn rewriter_handles_added_local() {
+    use wirm::module_builder::AddLocal;
+    use wirm::DataType;
+
+    let input = std::fs::read(input_path()).unwrap();
+    let mut module = Module::parse(&input, false, false, true).unwrap();
+    {
+        let mut it = wirm::iterator::module_iterator::ModuleIterator::new(&mut module, &Vec::new());
+        // Cursor is on the first op; add a local to the current function.
+        let _local = it.add_local(DataType::I32);
+    }
+
+    let output = module.encode().unwrap();
+
+    // Body content grew by 2 bytes (1 run-count + 1 type byte for the i32),
+    // so DIE ranges expand by exactly 2 and low_pc boundaries are preserved.
+    // Input ranges: (0, 8) and (1, 8). Expected output: (0, 10) and (1, 10).
+    let out_pcs = debug_info_pcs(&output);
+    assert_eq!(out_pcs, vec![(0, 10), (1, 10)]);
+
+    // Line-program rows must shift right by the same 2 bytes (the locals
+    // grew but instruction encodings didn't change).
+    let in_rows = debug_line_rows(&input);
+    let out_rows = debug_line_rows(&output);
+    assert_eq!(in_rows.len(), out_rows.len());
+    for ((ia, il, ic), (oa, ol, oc)) in in_rows.iter().zip(out_rows.iter()) {
+        assert_eq!(*oa, *ia + 2, "row address must shift by added locals bytes");
+        assert_eq!((*il, *ic), (*ol, *oc), "(line, col) must be preserved");
+    }
+}
+
+/// Multi-function inputs currently exercise the rewriter's defensive gate:
+/// per-function DWARF address spaces overlap when each starts at 0, so step
+/// 6 refuses to translate until per-CU routing lands. This test pins the
+/// error so a future change that softens the gate is intentional.
+#[test]
+fn rewriter_refuses_multi_function_input() {
+    let input = std::fs::read(multi_func_input_path()).unwrap();
+    let module = Module::parse(&input, false, false, true).unwrap();
+    let err = module
+        .encode()
+        .expect_err("multi-function .debug_info rewriting should refuse");
+    // Structural match: the gate must produce a `DwarfError`, and the
+    // message must reference multi-function (so the test fails loudly if a
+    // future refactor produces the right variant but the wrong reason).
+    let msg = match &err {
+        wirm::error::Error::DwarfError(m) => m,
+        other => panic!("expected DwarfError variant, got {other:?}"),
+    };
+    assert!(
+        msg.contains("multi-function"),
+        "DwarfError message should mention multi-function, got: {msg}",
+    );
+}
+
+// Note: the `func_exit` injection test was moved to
+// `src/ir/module/test.rs::rewriter_handles_func_exit_injection_strong` so it
+// can apply the full `lookup(new_pc) == lookup(anchor_orig_pc)` invariant.
 
 /// Explicit address-translation invariant for the rewriter: for an
 /// uninstrumented module the rewritten rows must use the same addresses as

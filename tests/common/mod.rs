@@ -8,6 +8,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use wasmparser::Operator;
 
+pub mod dwarf;
 pub mod validate;
 pub mod wast_iter;
 use wirm::ir::types::InstrumentationMode;

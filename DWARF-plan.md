@@ -46,7 +46,7 @@ Work through these in order. Each box is roughly one PR-sized unit.
       aranges, frame info — anything that holds a PC.
 - [x] **7. Re-emit DWARF as custom sections.** Encoded DWARF goes into
       the output module's custom sections in the conventional order.
-- [ ] **8. Unit/regression tests.** Five or six hand-written `.wat`
+- [x] **8. Unit/regression tests.** Five or six hand-written `.wat`
       inputs run through `wasm-tools parse --generate-dwarf full`,
       with hand-checked expectations. Cover: locals added, nop
       injected before every op, replacement, block_alt, multi-function
@@ -55,15 +55,13 @@ Work through these in order. Each box is roughly one PR-sized unit.
       prefer one row per opcode, distinct (line, col) per opcode, and
       either multi-byte injections or enough cumulative shift that no
       original op stays inside its old line-program range.
-- [ ] **9. Differential test.** Two offset-discovery paths
+- [x] **9. Differential test.** Two offset-discovery paths
       (in-encode capture vs. re-parse-after-encode), assert
       byte-identical maps. Catches off-by-ones in step 2.
-- [ ] **10. Property test.** `proptest` over (small dwarf-bearing
+- [x] **10. Property test.** `proptest` over (small dwarf-bearing
        corpus) × (random instrumentation plans). Single invariant:
        `lookup(new_pc)` in output equals `lookup(anchor_orig_pc)` in
        input, for every emitted op.
-- [ ] **11. Real-binary tests.** Small Rust + C debug builds checked
-       in, end-to-end DWARF round-trip.
 - [ ] **12. libfuzzer target (corpus-based).** Reuse the parse-aside
        seeds from steps 8/11; let libfuzzer generate the
        instrumentation plan via `Arbitrary`.

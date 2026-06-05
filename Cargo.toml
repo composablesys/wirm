@@ -25,6 +25,7 @@ wast = "247.0.0"
 wasmprinter = "0.247.0"
 wat = "1.247.0"
 wasmtime = "44.0.0"
+proptest = "1"
 
 [features]
 default = []

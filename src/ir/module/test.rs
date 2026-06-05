@@ -12,6 +12,8 @@ use std::path::PathBuf;
 
 // Shared with integration tests. See tests/common/wast_iter.rs for the same
 // pattern — keeps the "validate with all features" choice in one place.
+#[path = "../../../tests/common/dwarf.rs"]
+mod dwarf_helpers;
 #[path = "../../../tests/common/validate.rs"]
 mod validate;
 
@@ -1034,6 +1036,293 @@ fn with_dwarf_captures_per_op_pcs_matching_reparsed_offsets() {
             );
         }
         // No op past the captured range — captured length matches the body.
+        assert_eq!(
+            local.lookup_pc_offset_for(captured.pcs.len()),
+            None,
+            "func {func_idx}: re-parsed output has more ops than captured",
+        );
+    }
+}
+
+// DWARF rewriting, step 10: property test for the source-location invariant.
+//
+// For every emitted op, `lookup(new_pc)` in the output's `.debug_line` must
+// equal `lookup(anchor_orig_pc)` in the input's. That is, the debugger sees
+// the same source location for an emitted op as it would for the orig op
+// that emit anchors to (whether the emit is the orig op itself, an injected
+// before/after, or an alt's first instruction). This is the strong
+// correctness invariant for the rewriter.
+//
+// The proptest generates random before-injection plans (a Vec of nop counts)
+// over `add.wasm` and asserts the invariant for every captured emit. Failed
+// plans get shrunk automatically.
+
+use dwarf_helpers::{debug_info_pcs, line_rows, lookup_src_at};
+
+/// The strong source-location invariant the rewriter must preserve: for every
+/// emitted op `i`, the output line program's source location at
+/// `new_first + pcs[i]` equals the input line program's source location at
+/// `orig_first + orig_pcs[anchors[i]]`. Encodes the module via
+/// `encode_internal`, returns the encoded bytes so callers can run extra
+/// sanity checks (e.g. range expansion) without re-encoding.
+fn assert_source_location_invariant(input_bytes: &[u8], module: &Module) -> Vec<u8> {
+    let (encoded, _side_effects, maps) = module.encode_internal(false).expect("encode");
+    let maps = maps.expect("with_dwarf=true captures DWARF maps");
+    let out_bytes = encoded.finish();
+
+    let in_rows = line_rows(input_bytes);
+    let out_rows = line_rows(&out_bytes);
+
+    let debug = module.debug.as_ref().expect("orig debug data");
+    for (func_idx, fmap) in &maps.per_func {
+        let orig_dbg = debug
+            .per_func
+            .get(func_idx)
+            .expect("orig per-func data for captured function");
+        let local = module
+            .functions
+            .unwrap_local(FunctionID(*func_idx))
+            .expect("local function for captured map");
+        let orig_pcs = local
+            .body
+            .instructions
+            .offsets()
+            .expect("with_dwarf opt-in must populate offsets");
+        let orig_first = orig_dbg.first_instr_dwarf_offset as u64;
+        let new_first = fmap.first_instr_dwarf_offset as u64;
+
+        for (emit_idx, &new_pc) in fmap.pcs.iter().enumerate() {
+            let anchor = fmap.anchors[emit_idx];
+            let orig_pc = orig_pcs[anchor] as u64;
+            let new_dwarf_addr = new_first + new_pc as u64;
+            let orig_dwarf_addr = orig_first + orig_pc;
+            let out_src = lookup_src_at(&out_rows, new_dwarf_addr);
+            let in_src = lookup_src_at(&in_rows, orig_dwarf_addr);
+            assert_eq!(
+                out_src, in_src,
+                "func {func_idx} emit {emit_idx} (anchor orig {anchor}): \
+                 src mismatch — orig_addr={orig_dwarf_addr}, new_addr={new_dwarf_addr}",
+            );
+        }
+    }
+
+    out_bytes
+}
+
+fn dwarf_fixture_path(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/test_inputs/handwritten/dwarf")
+        .join(name)
+}
+
+// `proptest::strategy::Strategy` provides the `.prop_map` adapter we use in
+// the generator's `prop_oneof![]` arms. The macro expands its strategy
+// expressions at module scope, so the trait import has to be here, not inside
+// the test body.
+use proptest::strategy::Strategy as _;
+
+/// Per-op random instrumentation: one of these is generated for every visited
+/// op. `Skip` leaves the op alone; the other variants inject N nops in the
+/// corresponding mode. Alt with N=0 is treated as a no-op so we never produce
+/// a "replace orig with nothing" plan.
+#[derive(Debug, Clone)]
+enum DwarfFuzzAction {
+    Skip,
+    BeforeNops(u8),
+    AfterNops(u8),
+    AltNops(u8),
+}
+
+proptest::proptest! {
+    /// For every emitted op, the rewritten `.debug_line`'s source location at
+    /// the new PC must equal the input's source location at the anchor's orig
+    /// PC. Generates per-op random instrumentation plans (mix of
+    /// before/after/alt at random counts) over `add.wasm`.
+    #[test]
+    fn rewriter_preserves_source_location_under_random_injection(
+        plan in proptest::collection::vec(
+            proptest::prop_oneof![
+                proptest::strategy::Just(DwarfFuzzAction::Skip),
+                (0u8..=3).prop_map(DwarfFuzzAction::BeforeNops),
+                (0u8..=3).prop_map(DwarfFuzzAction::AfterNops),
+                (1u8..=3).prop_map(DwarfFuzzAction::AltNops),
+            ],
+            0..=8usize,
+        )
+    ) {
+        use crate::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
+        use crate::iterator::module_iterator::ModuleIterator;
+        use crate::Opcode;
+
+        let input = std::fs::read(dwarf_fixture_path("add.wasm")).expect("read fixture");
+        let mut module = Module::parse(&input, false, false, true).expect("parse");
+        {
+            let mut it = ModuleIterator::new(&mut module, &Vec::new());
+            let mut op_idx = 0usize;
+            loop {
+                if it.curr_op().is_some() {
+                    let action = plan
+                        .get(op_idx)
+                        .cloned()
+                        .unwrap_or(DwarfFuzzAction::Skip);
+                    match action {
+                        DwarfFuzzAction::Skip => {}
+                        DwarfFuzzAction::BeforeNops(n) => {
+                            for _ in 0..n {
+                                it.before().nop();
+                            }
+                        }
+                        DwarfFuzzAction::AfterNops(n) => {
+                            for _ in 0..n {
+                                it.after().nop();
+                            }
+                        }
+                        DwarfFuzzAction::AltNops(n) => {
+                            for _ in 0..n {
+                                it.alternate().nop();
+                            }
+                        }
+                    }
+                    op_idx += 1;
+                }
+                if it.next().is_none() {
+                    break;
+                }
+            }
+        }
+        let _ = assert_source_location_invariant(&input, &module);
+    }
+}
+
+// Step 8 regression: nop injected before every op. Asserts the strong source-
+// location invariant for every emit position, then sanity-checks that
+// instrumentation actually took effect (DIE ranges expanded, max addr shifted).
+// `lookup(new_pc) == lookup(anchor_orig_pc)` would trivially hold for an
+// uninstrumented round-trip, so the post-helper checks confirm the test isn't
+// silently a no-op.
+#[test]
+fn rewriter_anchors_nop_before_every_op_to_host_source_strong() {
+    use crate::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
+    use crate::iterator::module_iterator::ModuleIterator;
+    use crate::Opcode;
+
+    let input = std::fs::read(dwarf_fixture_path("add.wasm")).expect("read fixture");
+    let mut module = Module::parse(&input, false, false, true).expect("parse");
+    {
+        let mut it = ModuleIterator::new(&mut module, &Vec::new());
+        loop {
+            if it.curr_op().is_some() {
+                it.before().nop();
+            }
+            if it.next().is_none() {
+                break;
+            }
+        }
+    }
+    let out = assert_source_location_invariant(&input, &module);
+
+    // Sanity: every DIE range must have expanded to cover the injected bytes.
+    let in_pcs = debug_info_pcs(&input);
+    let out_pcs = debug_info_pcs(&out);
+    assert_eq!(in_pcs.len(), out_pcs.len(), "DIE count must be preserved");
+    for ((il, ih), (ol, oh)) in in_pcs.iter().zip(out_pcs.iter()) {
+        assert!(
+            *oh - *ol > *ih - *il,
+            "DIE range must expand for injected bytes ({il}..{ih} → {ol}..{oh})",
+        );
+    }
+}
+
+// Step 8 regression: func_exit injection. Drives the special-mode resolution
+// path that fans `func_exit` out to every exit slot (here a single end op).
+// Strong source-location invariant + DIE range expansion confirm both the
+// fan-out wiring and the address translation behave.
+#[test]
+fn rewriter_handles_func_exit_injection_strong() {
+    use crate::opcode::Instrumenter;
+    use crate::Opcode;
+
+    let input = std::fs::read(dwarf_fixture_path("add.wasm")).expect("read fixture");
+    let mut module = Module::parse(&input, false, false, true).expect("parse");
+    {
+        let mut it =
+            crate::iterator::module_iterator::ModuleIterator::new(&mut module, &Vec::new());
+        it.func_exit().nop().nop();
+    }
+    let out = assert_source_location_invariant(&input, &module);
+
+    let in_pcs = debug_info_pcs(&input);
+    let out_pcs = debug_info_pcs(&out);
+    assert_eq!(in_pcs.len(), out_pcs.len());
+    for ((il, ih), (ol, oh)) in in_pcs.iter().zip(out_pcs.iter()) {
+        assert!(
+            *oh - *ol > *ih - *il,
+            "DIE range must expand for injected exit bytes ({il}..{ih} → {ol}..{oh})",
+        );
+    }
+}
+
+// DWARF rewriting, step 9: differential test for an INSTRUMENTED module.
+// Two paths produce per-emit byte offsets — the in-encode capture (each emit
+// op's `function.byte_len()` rebased onto the first instruction) and a
+// re-parse of the encoded output with `with_offsets=true`. They must agree
+// byte-for-byte, including across injected ops, because parsing the output
+// observes every byte the encoder emitted.
+//
+// Injecting a nop before every visited op exercises the cumulative shift the
+// step-0 spike findings flagged as the primary source of off-by-one bugs.
+#[test]
+fn with_dwarf_capture_matches_reparsed_offsets_with_injection() {
+    use crate::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
+    use crate::iterator::module_iterator::ModuleIterator;
+    use crate::Opcode;
+
+    let wat = r#"(module
+        (func (result i32) i32.const 1 i32.const 2 i32.add)
+        (func (local i32) (local i64)
+            i32.const 0
+            local.set 0
+            i64.const 0
+            local.set 1))"#;
+    let wasm = wat::parse_str(wat).expect("wat compiles");
+    let mut module = Module::parse(&wasm, false, false, true).expect("parse");
+    {
+        // Inject a nop before every visited op across every local function.
+        let mut it = ModuleIterator::new(&mut module, &Vec::new());
+        loop {
+            if it.curr_op().is_some() {
+                it.before().nop();
+            }
+            if it.next().is_none() {
+                break;
+            }
+        }
+    }
+
+    let (encoded, _side_effects, maps) = module.encode_internal(false).expect("encode");
+    let maps = maps.expect("with_dwarf=true should capture DWARF encode maps");
+    let out = encoded.finish();
+    let reparsed = Module::parse(&out, false, true, false).expect("reparse output");
+
+    assert!(
+        !maps.per_func.is_empty(),
+        "expected per-function maps for the instrumented test wat",
+    );
+    for (func_idx, captured) in &maps.per_func {
+        let local = reparsed
+            .functions
+            .unwrap_local(FunctionID(*func_idx))
+            .expect("local function in re-parsed output");
+        for (i, pc) in captured.pcs.iter().enumerate() {
+            assert_eq!(
+                Some(*pc),
+                local.lookup_pc_offset_for(i),
+                "func {func_idx} emit {i}: in-encode capture vs re-parse mismatch",
+            );
+        }
+        // Both paths must cover the same number of ops (no missing or extra
+        // emits on either side). `lookup_pc_offset_for(captured.len())` past
+        // the end returns `None` in re-parsed output.
         assert_eq!(
             local.lookup_pc_offset_for(captured.pcs.len()),
             None,
