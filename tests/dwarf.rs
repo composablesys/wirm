@@ -277,6 +277,42 @@ fn rewriter_handles_alternate_replacement() {
     );
 }
 
+/// Rewritten DWARF lands in the output module's custom sections in
+/// input order — re-emit is order-preserving so downstream tooling that
+/// scans `.debug_*` payloads doesn't have to deal with reshuffled section
+/// layouts.
+#[test]
+fn rewriter_preserves_dwarf_section_order_in_output() {
+    let input = std::fs::read(input_path()).unwrap();
+    let module = Module::parse(&input, false, false, true).unwrap();
+    let output = module.encode().unwrap();
+
+    let mut out_names: Vec<String> = Vec::new();
+    for payload in wasmparser::Parser::new(0).parse_all(&output) {
+        if let wasmparser::Payload::CustomSection(cs) = payload.expect("valid wasm") {
+            if cs.name().starts_with(".debug_") {
+                out_names.push(cs.name().to_string());
+            }
+        }
+    }
+    let input_prefix: Vec<String> = DWARF_SECTION_NAMES
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    assert!(
+        out_names.starts_with(&input_prefix),
+        "input `.debug_*` sections must appear in input order at the head of \
+         the output: expected prefix {input_prefix:?}, got {out_names:?}",
+    );
+    // For add.wasm, gimli additionally materializes `.debug_line_str` (the v5
+    // path table) during the .debug_line rewrite. Pin the exact tail so a
+    // future change that drops or reorders gimli additions is caught.
+    assert_eq!(
+        &out_names[input_prefix.len()..],
+        &[".debug_line_str".to_string()],
+    );
+}
+
 /// Explicit address-translation invariant for the rewriter: for an
 /// uninstrumented module the rewritten rows must use the same addresses as
 /// the input, because new layout equals orig layout.

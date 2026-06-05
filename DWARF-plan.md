@@ -44,7 +44,7 @@ Work through these in order. Each box is roughly one PR-sized unit.
       address translator that consults the same maps. This handles
       `DW_AT_low_pc`/`high_pc`, `DW_AT_ranges`, location lists,
       aranges, frame info — anything that holds a PC.
-- [ ] **7. Re-emit DWARF as custom sections.** Encoded DWARF goes into
+- [x] **7. Re-emit DWARF as custom sections.** Encoded DWARF goes into
       the output module's custom sections in the conventional order.
 - [ ] **8. Unit/regression tests.** Five or six hand-written `.wat`
       inputs run through `wasm-tools parse --generate-dwarf full`,

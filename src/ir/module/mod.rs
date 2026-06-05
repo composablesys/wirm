@@ -2111,6 +2111,20 @@ impl<'a> Module<'a> {
                             section.data = std::borrow::Cow::Owned(new_bytes);
                         }
                     }
+                    // Append any DWARF sections gimli produced that the input
+                    // didn't carry (e.g. `.debug_line_str` for inputs whose
+                    // strings only become inlined after rewrite). They land at
+                    // the tail in deterministic name order.
+                    let mut new_names: Vec<&'static str> =
+                        new_other_sections.keys().copied().collect();
+                    new_names.sort_unstable();
+                    for name in new_names {
+                        let bytes = new_other_sections.remove(name).unwrap();
+                        debug_mut.sections.push(CustomSection {
+                            name,
+                            data: std::borrow::Cow::Owned(bytes),
+                        });
+                    }
                 }
             }
         }
