@@ -509,6 +509,7 @@ impl<'a> Module<'a> {
                             debug.push(CustomSection {
                                 name: cs_name,
                                 data: Cow::Borrowed(custom_section_reader.data()),
+                                deleted: false
                             });
                             continue;
                         }
@@ -2144,6 +2145,7 @@ impl<'a> Module<'a> {
                         debug_mut.sections.push(CustomSection {
                             name,
                             data: std::borrow::Cow::Owned(bytes),
+                            deleted: false
                         });
                     }
                 }
