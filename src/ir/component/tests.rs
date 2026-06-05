@@ -14,7 +14,7 @@ fn bytes(wat: &str) -> Vec<u8> {
 }
 
 fn parsed(b: &[u8]) -> Component<'_> {
-    Component::parse(b, false, false).unwrap()
+    Component::parse(b, false, false, false).unwrap()
 }
 
 /// Resolve the ref carried by `comp.exports[export_idx]` against `comp`'s own index space.
@@ -317,7 +317,9 @@ fn concretize_export_all_patterns_same_signature() {
         // Round-trip through owned bytes to satisfy the `'static` bound.
         let bytes = wat::parse_str(wat).expect("WAT parse failed");
         let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
-        let comp = Box::leak(Box::new(Component::parse(bytes, false, false).unwrap()));
+        let comp = Box::leak(Box::new(
+            Component::parse(bytes, false, false, false).unwrap(),
+        ));
         let Some(ConcreteType::Instance { mut funcs, .. }) = comp.concretize_export("iface") else {
             panic!("expected Instance");
         };
@@ -461,7 +463,9 @@ fn first_param_type(wat: &str) -> ConcreteValType<'_> {
     let bytes = bytes(wat);
     // Safety: we box-leak to get 'static for simplicity in tests.
     let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
-    let comp = Box::leak(Box::new(Component::parse(bytes, false, false).unwrap()));
+    let comp = Box::leak(Box::new(
+        Component::parse(bytes, false, false, false).unwrap(),
+    ));
     let Some(ConcreteType::Instance { funcs, .. }) = comp.concretize_import("iface") else {
         panic!("expected Instance");
     };
@@ -718,10 +722,10 @@ fn server_and_middleware_concretize_to_same_func_type() {
     let server_b_s: &'static [u8] = Box::leak(server_b.into_boxed_slice());
     let middleware_a_s: &'static [u8] = Box::leak(middleware_a.into_boxed_slice());
     let sb = Box::leak(Box::new(
-        Component::parse(server_b_s, false, false).unwrap(),
+        Component::parse(server_b_s, false, false, false).unwrap(),
     ));
     let ma = Box::leak(Box::new(
-        Component::parse(middleware_a_s, false, false).unwrap(),
+        Component::parse(middleware_a_s, false, false, false).unwrap(),
     ));
 
     let Some(ConcreteType::Instance {
@@ -800,10 +804,10 @@ fn server_and_middleware_same_func_type_explicit_type_decl() {
     let server_b_s: &'static [u8] = Box::leak(server_b.into_boxed_slice());
     let middleware_a_s: &'static [u8] = Box::leak(middleware_a.into_boxed_slice());
     let sb = Box::leak(Box::new(
-        Component::parse(server_b_s, false, false).unwrap(),
+        Component::parse(server_b_s, false, false, false).unwrap(),
     ));
     let ma = Box::leak(Box::new(
-        Component::parse(middleware_a_s, false, false).unwrap(),
+        Component::parse(middleware_a_s, false, false, false).unwrap(),
     ));
 
     let Some(ConcreteType::Instance {
@@ -869,7 +873,9 @@ fn concretize_func_param_via_alias_to_imported_instance_type_direct() {
         )"#,
     );
     let b_s: &'static [u8] = Box::leak(b.into_boxed_slice());
-    let comp = Box::leak(Box::new(Component::parse(b_s, false, false).unwrap()));
+    let comp = Box::leak(Box::new(
+        Component::parse(b_s, false, false, false).unwrap(),
+    ));
 
     let Some(ConcreteType::Func(ft)) = comp.concretize_import("handle") else {
         panic!("expected ConcreteType::Func for 'handle' import");
@@ -1026,7 +1032,7 @@ fn count_wirm_sections_by_kind(
 /// payloads of that kind. Returns the parsed component for any
 /// follow-up assertions the caller wants to make.
 fn assert_section_count_invariant<'a>(bytes: &'a [u8]) -> Component<'a> {
-    let comp = Component::parse(bytes, false, false).expect("wirm parse");
+    let comp = Component::parse(bytes, false, false, false).expect("wirm parse");
     let binary_counts = count_binary_sections_by_kind(bytes);
     let wirm_counts = count_wirm_sections_by_kind(&comp);
     assert_eq!(

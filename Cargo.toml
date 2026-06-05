@@ -13,6 +13,7 @@ keywords = ["wasm", "WebAssembly", "instrumentation"]
 include = ["src/**/*.rs", "Cargo.toml"]
 
 [dependencies]
+gimli = "0.33"
 log = "0.4.22"
 paste = "1"
 rayon = { version = "1.8", optional = true }
@@ -24,6 +25,7 @@ wast = "247.0.0"
 wasmprinter = "0.247.0"
 wat = "1.247.0"
 wasmtime = "44.0.0"
+proptest = "1"
 
 [features]
 default = []

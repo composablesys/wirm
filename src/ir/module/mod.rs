@@ -5,6 +5,7 @@ use super::types::{
 };
 use crate::error::Error;
 use crate::error::Error::{InstrumentationError, IO};
+use crate::ir::dwarf::{ModuleDebugData, OrigFuncDebugData};
 use crate::ir::function::FunctionModifier;
 use crate::ir::id::{
     CustomSectionID, DataSegmentID, FunctionID, GlobalID, ImportsID, LocalID, MemoryID, TypeID,
@@ -87,6 +88,11 @@ pub struct Module<'a> {
     pub tags: Vec<TagType>,
     /// Custom Sections
     pub custom_sections: CustomSections<'a>,
+    /// `.debug_*` custom sections lifted aside for DWARF rewriting. `Some`
+    /// when `Module::parse` was called with `with_dwarf = true`; `None`
+    /// otherwise. When `Some`, `.debug_*` sections do *not* appear in
+    /// `custom_sections` — they flow through `debug` instead.
+    pub debug: Option<ModuleDebugData<'a>>,
     /// Number of local functions (not counting imported functions)
     pub(crate) num_local_functions: u32,
     /// Number of local globals (not counting imported globals)
@@ -126,12 +132,28 @@ impl<'a> Iterator for FlagsIter<'a> {
     }
 }
 
+/// Number of bytes an unsigned LEB128 encoding of `value` occupies. Used by
+/// the DWARF rewriter at both parse and encode time to account for function
+/// body size-LEB lengths in per-function DWARF address composition.
+fn unsigned_leb128_len(mut value: u64) -> usize {
+    let mut len = 1;
+    while value >= 0x80 {
+        value >>= 7;
+        len += 1;
+    }
+    len
+}
+
 impl<'a> Module<'a> {
     /// Parses a `Module` from a wasm binary.
     ///
     /// Set enable_multi_memory to `true` to support parsing modules using multiple memories.
     /// Set with_offsets to `true` to save opcode pc offset metadata during parsing
     /// (can be used to determine the static pc offset inside a function body of the start of any opcode).
+    /// Set with_dwarf to `true` to lift `.debug_*` custom sections aside into
+    /// [`Module::debug`] so they can be rewritten coherently with the rest of the
+    /// module. When `false`, DWARF sections flow through `custom_sections`
+    /// opaquely (the default — addresses go stale after instrumentation).
     ///
     /// # Example
     ///
@@ -140,15 +162,16 @@ impl<'a> Module<'a> {
     ///
     /// let file = "path_to_file";
     /// let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    /// let module = Module::parse(&buff, false, false).unwrap();
+    /// let module = Module::parse(&buff, false, false, false).unwrap();
     /// ```
     pub fn parse(
         wasm: &'a [u8],
         enable_multi_memory: bool,
         with_offsets: bool,
+        with_dwarf: bool,
     ) -> Result<Self, Error> {
         let parser = Parser::new(0);
-        Module::parse_internal(wasm, enable_multi_memory, with_offsets, parser)
+        Module::parse_internal(wasm, enable_multi_memory, with_offsets, with_dwarf, parser)
     }
 
     fn parse_body(
@@ -156,10 +179,6 @@ impl<'a> Module<'a> {
         enable_multi_memory: bool,
         with_offsets: bool,
     ) -> Result<Body, Error> {
-        let locals_orig = body
-            .get_locals_reader()?
-            .get_binary_reader()
-            .original_position();
         let locals = body
             .get_locals_reader()?
             .into_iter()
@@ -173,13 +192,17 @@ impl<'a> Module<'a> {
             })
             .collect();
 
+        // PCs are measured from the first instruction (after the locals
+        // declaration), aligning the parse-side convention with the encode
+        // side so both can be composed in a single coordinate system.
+        let pc_origin = body.get_binary_reader_for_operators()?.original_position();
         let op_reader = body.get_operators_reader()?;
         let ops = op_reader
             .into_iter_with_offsets()
             .collect::<Result<Vec<(Operator, usize)>, _>>()
             .expect("ops");
 
-        let instructions = Instructions::new(ops, locals_orig, with_offsets);
+        let instructions = Instructions::new(ops, pc_origin, with_offsets);
         if let Some(last) = instructions.get_ops().last() {
             if let Operator::End = last {
             } else {
@@ -208,14 +231,40 @@ impl<'a> Module<'a> {
         })
     }
 
+    /// Compute the DWARF rewriter's input-side metadata for a single function
+    /// body without consuming it.
+    fn orig_func_debug_from(body: &wasmparser::FunctionBody) -> Result<OrigFuncDebugData, Error> {
+        // `body.range()` covers the body *content* (locals + instructions),
+        // excluding the leading size LEB consumed when the FunctionBody was
+        // read. DWARF wasm addresses are measured from that size LEB byte,
+        // so the first instruction's DWARF offset is `size_leb_len + (first
+        // instruction byte − content start)`.
+        let body_range = body.range();
+        let body_content_size = body_range.end - body_range.start;
+        let size_leb_len = unsigned_leb128_len(body_content_size as u64);
+        let first_instr_byte = body.get_binary_reader_for_operators()?.original_position();
+        let first_instr_offset_in_content = first_instr_byte - body_range.start;
+        Ok(OrigFuncDebugData {
+            size_leb_len,
+            first_instr_dwarf_offset: size_leb_len + first_instr_offset_in_content,
+            body_total_size: size_leb_len + body_content_size,
+        })
+    }
+
     pub(crate) fn parse_internal(
         wasm: &'a [u8],
         enable_multi_memory: bool,
         with_offsets: bool,
+        with_dwarf: bool,
         parser: Parser,
     ) -> Result<Self, Error> {
         #[cfg(feature = "parallel")]
         use rayon::prelude::*;
+
+        // The DWARF rewriter needs orig per-instruction PCs to translate
+        // input row addresses; force offset capture when the caller opted
+        // into DWARF rewriting even if they didn't ask for `with_offsets`.
+        let with_offsets = with_offsets || with_dwarf;
 
         let mut imports: ModuleImports = ModuleImports::default();
         let mut types: HashMap<TypeID, Types> = HashMap::new();
@@ -231,6 +280,11 @@ impl<'a> Module<'a> {
         let mut start = None;
         let mut data_section_count = None;
         let mut custom_sections = vec![];
+        // When `with_dwarf` is on, `.debug_*` custom sections divert into
+        // here instead of `custom_sections`. The Option distinguishes
+        // "opted in with no DWARF found" (Some(empty)) from "didn't opt in"
+        // (None).
+        let mut debug_sections: Option<Vec<CustomSection<'a>>> = with_dwarf.then(Vec::new);
         let mut tags: Vec<TagType> = vec![];
 
         let mut module_name: Option<String> = None;
@@ -428,6 +482,38 @@ impl<'a> Module<'a> {
                     }
                 }
                 Payload::CustomSection(custom_section_reader) => {
+                    let cs_name = custom_section_reader.name();
+                    if with_dwarf {
+                        // Warn on rewriting gaps. Both of these are truly not wirm's
+                        // responsibility.
+                        match cs_name {
+                            // wirm can't pull debug info from a URL and rewrite it...
+                            "external_debug_info" => warn!(
+                                "DWARF rewriting opted in but module also carries an \
+                                 `external_debug_info` custom section. Its referenced \
+                                 side-file's addresses go stale after instrumentation \
+                                 and wirm does not rewrite it.",
+                            ),
+                            // totally different format (JSON)
+                            "sourceMappingURL" => warn!(
+                                "DWARF rewriting opted in but module also carries a \
+                                 `sourceMappingURL` custom section. The referenced \
+                                 source map's byte offsets go stale after \
+                                 instrumentation and wirm does not rewrite it.",
+                            ),
+                            _ => {}
+                        }
+                    }
+                    if let Some(debug) = debug_sections.as_mut() {
+                        if ModuleDebugData::is_dwarf_section_name(cs_name) {
+                            debug.push(CustomSection {
+                                name: cs_name,
+                                data: Cow::Borrowed(custom_section_reader.data()),
+                                deleted: false
+                            });
+                            continue;
+                        }
+                    }
                     match custom_section_reader.as_known() {
                         wasmparser::KnownCustom::Name(name_section_reader) => {
                             for subsection in name_section_reader {
@@ -552,28 +638,33 @@ impl<'a> Module<'a> {
         }
 
         #[cfg(feature = "parallel")]
-        let code_sections = bodies_and_names
+        let bodies_with_dbg: Vec<(Body, OrigFuncDebugData)> = bodies_and_names
             .into_par_iter()
             .map(|(body, name)| {
+                let orig_dbg = Self::orig_func_debug_from(&body)?;
                 let mut body = Self::parse_body(body, enable_multi_memory, with_offsets)?;
                 if let Some(name) = name {
                     body.name = Some(name);
                 }
-                Ok::<_, Error>(body)
+                Ok::<_, Error>((body, orig_dbg))
             })
             .collect::<Result<Vec<_>, _>>()?;
 
         #[cfg(not(feature = "parallel"))]
-        let code_sections = bodies_and_names
+        let bodies_with_dbg: Vec<(Body, OrigFuncDebugData)> = bodies_and_names
             .into_iter()
             .map(|(body, name)| {
+                let orig_dbg = Self::orig_func_debug_from(&body)?;
                 let mut body = Self::parse_body(body, enable_multi_memory, with_offsets)?;
                 if let Some(name) = name {
                     body.name = Some(name);
                 }
-                Ok::<_, Error>(body)
+                Ok::<_, Error>((body, orig_dbg))
             })
             .collect::<Result<Vec<_>, _>>()?;
+
+        let (code_sections, per_func_dbg_vec): (Vec<Body>, Vec<OrigFuncDebugData>) =
+            bodies_with_dbg.into_iter().unzip();
 
         if code_section_count != code_sections.len() || code_section_count != functions.len() {
             return Err(Error::IncorrectCodeCounts {
@@ -654,6 +745,15 @@ impl<'a> Module<'a> {
         let num_memories = memories.len() as u32;
         let num_tables = tables.len() as u32;
         let module_globals = ModuleGlobals::new(&imports, globals);
+        let num_imported_funcs = imports.num_funcs;
+        let debug = debug_sections.map(|s| {
+            let per_func: HashMap<u32, OrigFuncDebugData> = per_func_dbg_vec
+                .into_iter()
+                .enumerate()
+                .map(|(i, dbg)| (num_imported_funcs + i as u32, dbg))
+                .collect();
+            ModuleDebugData::new(s, per_func)
+        });
         Ok(Module {
             types: ModuleTypes::new(recgroups, types),
             imports,
@@ -669,6 +769,7 @@ impl<'a> Module<'a> {
             data,
             tags,
             custom_sections: CustomSections::new(custom_sections),
+            debug,
             num_local_functions: code_sections_length as u32,
             num_local_globals: num_globals,
             num_local_tables: num_tables,
@@ -703,7 +804,7 @@ impl<'a> Module<'a> {
 
     /// Emit the module into a wasm binary file.
     pub fn emit_wasm(&mut self, file_name: &str) -> types::Result<()> {
-        let (module, _) = self.encode_internal(false)?;
+        let (module, _, _) = self.encode_internal(false)?;
         let wasm = module.finish();
         std::fs::write(file_name, wasm).map_err(IO)?;
         Ok(())
@@ -718,7 +819,7 @@ impl<'a> Module<'a> {
     ///
     /// let file = "path_to_file";
     /// let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    /// let mut module = Module::parse(&buff, false, false).unwrap();
+    /// let mut module = Module::parse(&buff, false, false, false).unwrap();
     /// let result = module.encode();
     /// ```
     pub fn encode(&self) -> types::Result<Vec<u8>> {
@@ -735,7 +836,7 @@ impl<'a> Module<'a> {
         pull_side_effects: bool,
         side_effects: &mut HashMap<InjectType, Vec<Injection<'a>>>,
     ) -> types::Result<()> {
-        if !self.num_local_functions > 0 {
+        if self.num_local_functions > 0 {
             for rel_func_idx in (self.imports.num_funcs - self.imports.num_funcs_added) as usize
                 ..self.functions.as_vec().len()
             {
@@ -1204,7 +1305,8 @@ impl<'a> Module<'a> {
         func_mapping: &HashMap<u32, u32>,
         global_mapping: &HashMap<u32, u32>,
         memory_mapping: &HashMap<u32, u32>,
-    ) -> types::Result<wasm_encoder::Function> {
+        capture_pcs: bool,
+    ) -> types::Result<(wasm_encoder::Function, Option<FuncDwarfMaps>)> {
         let mut reencode = RoundtripReencoder;
         let Body {
             instructions,
@@ -1216,17 +1318,47 @@ impl<'a> Module<'a> {
             converted_locals.push((*c, wasm_encoder::ValType::from(&*ty)));
         }
         let mut function = wasm_encoder::Function::new(converted_locals);
-        let instr_len = instructions.len() - 1;
+        // Capture each emitted op's start offset and anchor when DWARF
+        // rewriting is on. `locals_base` rebases raw `byte_len()` (which counts
+        // from the locals declaration) onto the first instruction, matching
+        // the parse-side convention used by `Instructions::new`.
+        let locals_base = function.byte_len();
+        let n_ops = instructions.len();
+        let mut capture = capture_pcs.then_some(PcCapture {
+            maps: FuncDwarfMaps {
+                pcs: Vec::new(),
+                anchors: Vec::new(),
+                // Sentinel: any unwritten slot means the orig op was never
+                // emitted (e.g., a deleted op via a future API). Step 6
+                // refuses translation if an address resolves to such a slot.
+                self_emit_for_orig: vec![usize::MAX; n_ops],
+                // Filled in at the end of `encode_function` once the body's
+                // total content length is known.
+                size_leb_len: 0,
+                first_instr_dwarf_offset: 0,
+                body_total_size: 0,
+            },
+            locals_base,
+            current_anchor: 0,
+        });
+        let instr_len = n_ops - 1;
         let (ops, mut flags) = instructions.get_ops_flags_mut();
         for (idx, op) in ops.iter_mut().enumerate() {
+            // Every op emitted during this iteration anchors to `idx` (the original
+            // op and any before/after/alt injections attached to it).
+            if let Some(capture) = capture.as_mut() {
+                capture.current_anchor = idx;
+            }
             fix_op_id_mapping(op, func_mapping, global_mapping, memory_mapping)?;
             if flags.is_none() {
-                encode(&op.clone(), &mut function, &mut reencode);
+                record_self_emit(&mut capture, idx);
+                encode(&op.clone(), &mut function, &mut reencode, &mut capture);
                 continue;
             }
             let instrument = &mut flags.as_mut().unwrap()[idx];
             if !instrument.has_instr() {
-                encode(&op.clone(), &mut function, &mut reencode);
+                record_self_emit(&mut capture, idx);
+                encode(&op.clone(), &mut function, &mut reencode, &mut capture);
                 continue;
             } else {
                 instrument.check_special_is_resolved();
@@ -1251,11 +1383,15 @@ impl<'a> Module<'a> {
                     memory_mapping,
                     &mut function,
                     &mut reencode,
+                    &mut capture,
                 )?;
 
                 // If there are any alternate, encode the alternate
                 if !at_end && !alternate.is_none() {
                     if let Some(alt) = alternate {
+                        // The alt replaces the orig op; its first emit is the
+                        // best analog of "where this orig op landed".
+                        record_self_emit(&mut capture, idx);
                         update_ids_and_encode(
                             &mut alt.instrs,
                             func_mapping,
@@ -1263,10 +1399,12 @@ impl<'a> Module<'a> {
                             memory_mapping,
                             &mut function,
                             &mut reencode,
+                            &mut capture,
                         )?;
                     }
                 } else {
-                    encode(&op.clone(), &mut function, &mut reencode);
+                    record_self_emit(&mut capture, idx);
+                    encode(&op.clone(), &mut function, &mut reencode, &mut capture);
                 }
 
                 // Now encode the after instructions
@@ -1278,7 +1416,14 @@ impl<'a> Module<'a> {
                         memory_mapping,
                         &mut function,
                         &mut reencode,
+                        &mut capture,
                     )?;
+                }
+            }
+
+            fn record_self_emit(capture: &mut Option<PcCapture>, idx: usize) {
+                if let Some(cap) = capture.as_mut() {
+                    cap.maps.self_emit_for_orig[idx] = cap.maps.pcs.len();
                 }
             }
 
@@ -1289,10 +1434,11 @@ impl<'a> Module<'a> {
                 memory_mapping: &HashMap<u32, u32>,
                 function: &mut wasm_encoder::Function,
                 reencode: &mut RoundtripReencoder,
+                capture: &mut Option<PcCapture>,
             ) -> types::Result<()> {
                 for instr in instrs {
                     fix_op_id_mapping(instr, func_mapping, global_mapping, memory_mapping)?;
-                    encode(instr, function, reencode);
+                    encode(instr, function, reencode, capture);
                 }
                 Ok(())
             }
@@ -1300,7 +1446,15 @@ impl<'a> Module<'a> {
                 instr: &Operator,
                 function: &mut wasm_encoder::Function,
                 reencode: &mut RoundtripReencoder,
+                capture: &mut Option<PcCapture>,
             ) {
+                if let Some(capture) = capture.as_mut() {
+                    capture
+                        .maps
+                        .pcs
+                        .push(function.byte_len() - capture.locals_base);
+                    capture.maps.anchors.push(capture.current_anchor);
+                }
                 function.instruction(
                     &reencode
                         .instruction(instr.clone())
@@ -1309,7 +1463,18 @@ impl<'a> Module<'a> {
             }
         }
 
-        Ok(function)
+        if let Some(cap) = capture.as_mut() {
+            // The DWARF rewriter needs the function's first-instruction DWARF
+            // offset and total body size. Size-LEB length is recovered from
+            // the body content length (`function.byte_len()` covers locals +
+            // instructions; the LEB encodes that value when emitted later).
+            let body_content_len = function.byte_len();
+            let size_leb_len = unsigned_leb128_len(body_content_len as u64);
+            cap.maps.size_leb_len = size_leb_len;
+            cap.maps.first_instr_dwarf_offset = size_leb_len + cap.locals_base;
+            cap.maps.body_total_size = size_leb_len + body_content_len;
+        }
+        Ok((function, capture.map(|c| c.maps)))
     }
 
     /// Encodes an Wirm Module to a wasm_encoder Module.
@@ -1319,12 +1484,20 @@ impl<'a> Module<'a> {
         pull_side_effects: bool,
     ) -> types::Result<(
         wasm_encoder::Module,
-        HashMap<InjectType, Vec<Injection<'a>>>,
+        SideEffects<'a>,
+        Option<DwarfEncodeMaps>,
     )> {
         #[cfg(feature = "parallel")]
         use rayon::prelude::*;
 
         let mut tmp = self.clone();
+
+        let capture_pcs = tmp.debug.is_some();
+        let mut per_func_maps: HashMap<u32, FuncDwarfMaps> = HashMap::new();
+        // Snapshot of `module.len()` at the moment the code section ID byte
+        // gets pushed. The DWARF rewriter uses this to translate per-function
+        // PCs into module-absolute addresses.
+        let mut code_section_start: Option<usize> = None;
 
         // First fix the ID mappings throughout the module
         let func_mapping = if tmp.functions.recalculate_ids {
@@ -1724,7 +1897,7 @@ impl<'a> Module<'a> {
             module.section(&data_count);
         }
 
-        if !tmp.num_local_functions > 0 {
+        if tmp.num_local_functions > 0 {
             let mut code = wasm_encoder::CodeSection::new();
 
             #[cfg(feature = "parallel")]
@@ -1745,6 +1918,7 @@ impl<'a> Module<'a> {
                             &func_mapping,
                             &global_mapping,
                             &memory_mapping,
+                            capture_pcs,
                         );
                         Some((idx, f, encoded_func))
                     })
@@ -1763,13 +1937,18 @@ impl<'a> Module<'a> {
                     let f = f.unwrap_local_mut().expect(
                         "Internal error: Should have found the local function successfully!",
                     );
-                    let encoded_func =
-                        Self::encode_function(f, &func_mapping, &global_mapping, &memory_mapping);
+                    let encoded_func = Self::encode_function(
+                        f,
+                        &func_mapping,
+                        &global_mapping,
+                        &memory_mapping,
+                        capture_pcs,
+                    );
                     Some((idx, f, encoded_func))
                 })
                 .collect::<Vec<_>>();
 
-            for (idx, original_func, function) in functions {
+            for (idx, original_func, encoded) in functions {
                 // at this point the IDs in all the function instrumentation opcodes have been corrected
                 // add the probe side effects!
                 if pull_side_effects {
@@ -1778,7 +1957,14 @@ impl<'a> Module<'a> {
                 if let Some(name) = &original_func.body.name {
                     function_names.append(idx as u32, name.as_str());
                 }
-                code.function(&function?);
+                let (function, func_maps) = encoded?;
+                if let Some(func_maps) = func_maps {
+                    per_func_maps.insert(idx as u32, func_maps);
+                }
+                code.function(&function);
+            }
+            if capture_pcs {
+                code_section_start = Some(module.len());
             }
             module.section(&code);
         }
@@ -1874,7 +2060,119 @@ impl<'a> Module<'a> {
             });
         }
 
-        Ok((module, side_effects))
+        // Rewrite `.debug_line` (anchor-aware) and the other PC-bearing DWARF
+        // sections (address-translated via gimli::write::Dwarf::from) so the
+        // re-emit loop below sees coherent bytes.
+        if capture_pcs {
+            if let Some(debug) = tmp.debug.as_ref() {
+                // `with_offsets` is auto-enabled with `with_dwarf`, so offsets
+                // are always present here — treat their absence as a bug. We
+                // borrow them out of `tmp.functions` for the duration of the
+                // rewriter calls; no clone needed.
+                let mut orig_per_instr_pcs: HashMap<u32, &[usize]> = HashMap::new();
+                for (func_idx, _) in per_func_maps.iter() {
+                    let local = tmp
+                        .functions
+                        .unwrap_local(FunctionID(*func_idx))
+                        .expect("captured DWARF map should be for a local function");
+                    let offsets = local
+                        .body
+                        .instructions
+                        .offsets()
+                        .expect("with_dwarf opt-in must populate orig per-instr offsets");
+                    orig_per_instr_pcs.insert(*func_idx, offsets);
+                }
+                let per_func_new: HashMap<u32, crate::ir::dwarf::PerFuncEncodeMaps> = per_func_maps
+                    .iter()
+                    .map(|(idx, m)| {
+                        (
+                            *idx,
+                            crate::ir::dwarf::PerFuncEncodeMaps {
+                                pcs: &m.pcs,
+                                anchors: &m.anchors,
+                                self_emit_for_orig: &m.self_emit_for_orig,
+                                size_leb_len: m.size_leb_len,
+                                first_instr_dwarf_offset: m.first_instr_dwarf_offset,
+                                body_total_size: m.body_total_size,
+                            },
+                        )
+                    })
+                    .collect();
+
+                let line_idx = debug
+                    .sections()
+                    .iter()
+                    .position(|s| s.name == ".debug_line");
+                let new_line_bytes = if let Some(line_idx) = line_idx {
+                    let input_bytes = debug.sections()[line_idx].data.as_ref();
+                    Some((
+                        line_idx,
+                        crate::ir::dwarf::rewrite_debug_line(
+                            input_bytes,
+                            debug,
+                            &per_func_new,
+                            &orig_per_instr_pcs,
+                        )?,
+                    ))
+                } else {
+                    None
+                };
+                let new_other_sections = crate::ir::dwarf::rewrite_other_dwarf_sections(
+                    debug,
+                    &per_func_new,
+                    &orig_per_instr_pcs,
+                )?;
+
+                if let Some(debug_mut) = tmp.debug.as_mut() {
+                    if let Some((line_idx, bytes)) = new_line_bytes {
+                        debug_mut.sections[line_idx].data = std::borrow::Cow::Owned(bytes);
+                    }
+                    let mut new_other_sections = new_other_sections;
+                    for section in debug_mut.sections.iter_mut() {
+                        if let Some(new_bytes) = new_other_sections.remove(section.name) {
+                            section.data = std::borrow::Cow::Owned(new_bytes);
+                        }
+                    }
+                    // Append any DWARF sections gimli produced that the input
+                    // didn't carry (e.g. `.debug_line_str` for inputs whose
+                    // strings only become inlined after rewrite). They land at
+                    // the tail in deterministic name order.
+                    let mut new_names: Vec<&'static str> =
+                        new_other_sections.keys().copied().collect();
+                    new_names.sort_unstable();
+                    for name in new_names {
+                        let bytes = new_other_sections.remove(name).unwrap();
+                        debug_mut.sections.push(CustomSection {
+                            name,
+                            data: std::borrow::Cow::Owned(bytes),
+                            deleted: false
+                        });
+                    }
+                }
+            }
+        }
+
+        // Re-emit DWARF custom sections held aside in `debug`. They follow
+        // the rest of the custom sections; for inputs that already kept DWARF
+        // at the tail (the wasm-tools convention) this preserves byte
+        // ordering.
+        if let Some(debug) = tmp.debug.as_ref() {
+            for section in debug.sections() {
+                module.section(&wasm_encoder::CustomSection {
+                    name: std::borrow::Cow::Borrowed(section.name),
+                    data: section.data.clone(),
+                });
+            }
+        }
+
+        Ok((
+            module,
+            side_effects,
+            capture_pcs.then_some(DwarfEncodeMaps {
+                code_section_start,
+                per_func: per_func_maps,
+            }),
+        ))
     }
 
     // ==============================
@@ -2327,6 +2625,61 @@ pub trait LocalOrImport {
 
 type BlockID = u32;
 type InstrBody<'a> = Vec<Operator<'a>>;
+
+/// Side effects pulled out of a module during encode, grouped by injection point.
+type SideEffects<'a> = HashMap<InjectType, Vec<Injection<'a>>>;
+
+/// Encode-time scratch threaded through `encode_function`.
+struct PcCapture {
+    /// PC and anchor arrays under construction, returned verbatim at the end.
+    maps: FuncDwarfMaps,
+    /// Locals-declaration byte length, subtracted from raw `byte_len()` to
+    /// rebase offsets onto the first instruction.
+    locals_base: usize,
+    /// Anchor for the next emission, set once per outer-loop iteration.
+    current_anchor: usize,
+}
+
+/// Per-function PC and anchor maps captured during encode.
+///
+/// `pcs` and `anchors` are parallel arrays indexed by emit-order position:
+/// for each emitted op `i`, `pcs[i]` is its byte offset within the function
+/// body and `anchors[i]` is the original-instruction index it should inherit
+/// debug info from.
+pub(crate) struct FuncDwarfMaps {
+    /// Start offset of each emitted op within the function body.
+    pub(crate) pcs: Vec<usize>,
+    /// Original-instruction index each emitted op anchors to. Original ops
+    /// anchor to themselves; injected ops inherit their host op's idx so a
+    /// debugger never "stops inside" wirm-injected code.
+    pub(crate) anchors: Vec<usize>,
+    /// For each orig op index, the emit position of the orig op itself (the
+    /// point where the orig op's encoding starts, vs the first emit anchored
+    /// to it which may be a before-injection). Step 6 uses this to translate
+    /// `low_pc`/`high_pc` that name an instruction byte rather than a
+    /// debugger-stop point.
+    pub(crate) self_emit_for_orig: Vec<usize>,
+    /// Byte length of the new function-body size LEB.
+    pub(crate) size_leb_len: usize,
+    /// DWARF address of the first instruction in the new function body
+    /// (= size-LEB bytes + locals-declaration bytes). Composes with `pcs[i]`
+    /// to give per-function DWARF row addresses: `addr = first_instr_dwarf_offset + pcs[i]`.
+    pub(crate) first_instr_dwarf_offset: usize,
+    /// Total bytes of the new function body including the size LEB. The line
+    /// program's end-of-sequence row marks address `body_total_size`.
+    pub(crate) body_total_size: usize,
+}
+
+/// DWARF rewriting state captured during encode. Present only when the input
+/// module opted in via `with_dwarf` at parse time.
+#[allow(dead_code)] // fields are consumed by the in-progress DWARF rewriter
+pub(crate) struct DwarfEncodeMaps {
+    /// Module-absolute byte offset where the code section begins in the output
+    /// (the section ID byte). `None` when no code section was emitted.
+    pub(crate) code_section_start: Option<usize>,
+    /// Per-local-function map: function index -> emit-order PC and anchor maps.
+    pub(crate) per_func: HashMap<u32, FuncDwarfMaps>,
+}
 struct InstrBodyFlagged<'a> {
     body: InstrBody<'a>,
     bool_flag: LocalID,

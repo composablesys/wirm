@@ -197,6 +197,7 @@ impl<'a> Component<'a> {
             bytes,
             false,
             false,
+            false,
             Parser::new(0),
             0,
             sub_space_id,
@@ -707,6 +708,9 @@ impl<'a> Component<'a> {
     /// Set enable_multi_memory to `true` to support parsing modules using multiple memories.
     /// Set with_offsets to `true` to save opcode pc offset metadata during parsing
     /// (can be used to determine the static pc offset inside a function body of the start of any opcode).
+    /// Set with_dwarf to `true` to lift `.debug_*` custom sections aside in each
+    /// contained core module so they can be rewritten coherently with the rest
+    /// of the module. See [`crate::Module::parse`] for details.
     ///
     /// # Example
     ///
@@ -715,12 +719,13 @@ impl<'a> Component<'a> {
     ///
     /// let file = "path_to_file";
     /// let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    /// let comp = Component::parse(&buff, false, false).unwrap();
+    /// let comp = Component::parse(&buff, false, false, false).unwrap();
     /// ```
     pub fn parse(
         wasm: &'_ [u8],
         enable_multi_memory: bool,
         with_offsets: bool,
+        with_dwarf: bool,
     ) -> Result<Component<'_>, Error> {
         let parser = Parser::new(0);
 
@@ -732,6 +737,7 @@ impl<'a> Component<'a> {
             wasm,
             enable_multi_memory,
             with_offsets,
+            with_dwarf,
             parser,
             0,
             space_id,
@@ -746,6 +752,7 @@ impl<'a> Component<'a> {
         wasm: &'a [u8],
         enable_multi_memory: bool,
         with_offsets: bool,
+        with_dwarf: bool,
         parser: Parser,
         start: usize,
         space_id: ScopeId,
@@ -996,6 +1003,7 @@ impl<'a> Component<'a> {
                         &wasm[unchecked_range.start - start..unchecked_range.end - start],
                         enable_multi_memory,
                         with_offsets,
+                        with_dwarf,
                         parser,
                     )?;
                     store_handle.borrow_mut().assign_assumed_id(
@@ -1025,6 +1033,7 @@ impl<'a> Component<'a> {
                         &wasm[unchecked_range.start - start..unchecked_range.end - start],
                         enable_multi_memory,
                         with_offsets,
+                        with_dwarf,
                         parser,
                         unchecked_range.start,
                         sub_space_id,
@@ -1244,7 +1253,7 @@ impl<'a> Component<'a> {
     ///
     /// let file = "path/to/file.wasm";
     /// let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    /// let mut comp = Component::parse(&buff, false, false).unwrap();
+    /// let mut comp = Component::parse(&buff, false, false, false).unwrap();
     /// let result = comp.encode();
     /// ```
     pub fn encode(&self) -> crate::ir::types::Result<Vec<u8>> {

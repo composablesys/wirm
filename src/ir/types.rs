@@ -1577,15 +1577,18 @@ impl<'a> Instructions<'a> {
 
     pub fn new(
         instructions: Vec<(Operator<'a>, usize)>,
-        locals_start: usize,
+        pc_origin: usize,
         save_offsets: bool,
     ) -> Self {
         let mut instrs = vec![];
         let mut pcs = vec![];
         instructions.iter().for_each(|(operator, offset)| {
             instrs.push(operator.clone());
-            // we want to store the offset inside a function body (including locals bytes)! not the overall module.
-            pcs.push(*offset - locals_start);
+            // Offsets are measured from the first instruction (after the locals
+            // declaration), matching the encode-side convention so the DWARF
+            // rewriter can compose orig and new PCs in a single coordinate
+            // system.
+            pcs.push(*offset - pc_origin);
         });
         Self {
             instructions: instrs,
@@ -1700,6 +1703,12 @@ impl<'a> Instructions<'a> {
         } else {
             None
         }
+    }
+
+    /// All captured per-instruction PCs, or `None` if `with_offsets` wasn't set
+    /// at parse time. PCs are measured from the function's first instruction.
+    pub fn offsets(&self) -> Option<&[usize]> {
+        self.offsets.as_deref()
     }
 }
 

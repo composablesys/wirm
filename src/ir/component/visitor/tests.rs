@@ -592,7 +592,7 @@ fn test_event_generation(label: &str, bytes: &[u8]) {
     let original = wasmprinter::print_bytes(bytes).expect("couldn't convert original Wasm to wat");
     println!("original: {:?}", original);
 
-    let comp = Component::parse(bytes, false, false).expect("Unable to parse");
+    let comp = Component::parse(bytes, false, false, false).expect("Unable to parse");
     let evts_struct = get_events(&comp, get_structural_events);
     let evts_topo = get_events(&comp, get_topological_events);
     check_event_validity(&evts_struct, &evts_topo);

@@ -22,7 +22,7 @@ use crate::common::{
 fn no_injection() {
     let file = "tests/test_inputs/handwritten/components/add.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut component = Component::parse(&buff, false, false).expect("Unable to parse");
+    let mut component = Component::parse(&buff, false, false, false).expect("Unable to parse");
     let mut comp_it = ComponentIterator::new(&mut component, HashMap::new());
 
     let interested = Operator::Call { function_index: 1 };
@@ -1385,7 +1385,7 @@ fn test_semantic_after_simple_2br_table() {
 fn add_imports_when_has_start_func() {
     let file = "tests/test_inputs/instr_testing/modules/add-imports-when-has-start-func.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     module.add_import_func("ima".to_string(), "new_import".to_string(), TypeID(0));
     module.add_import_func("ya_dont".to_string(), "say".to_string(), TypeID(0));
     let result = module.encode().expect("error");

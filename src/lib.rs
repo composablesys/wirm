@@ -42,7 +42,7 @@
 //! use wirm::wasmparser::Operator;
 //!
 //! let bytes = std::fs::read("input.wasm").unwrap();
-//! let mut module = Module::parse(&bytes, false, false).unwrap();
+//! let mut module = Module::parse(&bytes, false, false, false).unwrap();
 //!
 //! {
 //!     // Iterator walks function bodies one instruction at a time.
@@ -134,7 +134,7 @@
 //! use wirm::ir::component::concrete::ConcreteType;
 //!
 //! let bytes = std::fs::read("example.wasm").unwrap();
-//! let comp = Component::parse(&bytes, false, false).unwrap();
+//! let comp = Component::parse(&bytes, false, false, false).unwrap();
 //!
 //! if let Some(ConcreteType::Instance { funcs, .. }) =
 //!     comp.concretize_import("wasi:http/handler@0.3.0-draft")
@@ -212,7 +212,7 @@
 //! }
 //!
 //! let bytes = std::fs::read("example.wasm").unwrap();
-//! let comp = Component::parse(&bytes, false, false).unwrap();
+//! let comp = Component::parse(&bytes, false, false, false).unwrap();
 //! let mut finder = TypesFromImports::default();
 //! walk_structural(&comp, &mut finder);
 //! ```
