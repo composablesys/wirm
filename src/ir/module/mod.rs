@@ -428,6 +428,41 @@ impl<'a> Module<'a> {
                     }
                 }
                 Payload::CustomSection(custom_section_reader) => {
+<<<<<<< Updated upstream
+=======
+                    let cs_name = custom_section_reader.name();
+                    if with_dwarf {
+                        // Warn on rewriting gaps. Both of these are truly not wirm's
+                        // responsibility.
+                        match cs_name {
+                            // wirm can't pull debug info from a URL and rewrite it...
+                            "external_debug_info" => warn!(
+                                "DWARF rewriting opted in but module also carries an \
+                                 `external_debug_info` custom section. Its referenced \
+                                 side-file's addresses go stale after instrumentation \
+                                 and wirm does not rewrite it.",
+                            ),
+                            // totally different format (JSON)
+                            "sourceMappingURL" => warn!(
+                                "DWARF rewriting opted in but module also carries a \
+                                 `sourceMappingURL` custom section. The referenced \
+                                 source map's byte offsets go stale after \
+                                 instrumentation and wirm does not rewrite it.",
+                            ),
+                            _ => {}
+                        }
+                    }
+                    if let Some(debug) = debug_sections.as_mut() {
+                        if ModuleDebugData::is_dwarf_section_name(cs_name) {
+                            debug.push(CustomSection {
+                                name: cs_name,
+                                data: Cow::Borrowed(custom_section_reader.data()),
+                                deleted: false,
+                            });
+                            continue;
+                        }
+                    }
+>>>>>>> Stashed changes
                     match custom_section_reader.as_known() {
                         wasmparser::KnownCustom::Name(name_section_reader) => {
                             for subsection in name_section_reader {
@@ -1874,7 +1909,123 @@ impl<'a> Module<'a> {
             });
         }
 
+<<<<<<< Updated upstream
         Ok((module, side_effects))
+=======
+        // Rewrite `.debug_line` (anchor-aware) and the other PC-bearing DWARF
+        // sections (address-translated via gimli::write::Dwarf::from) so the
+        // re-emit loop below sees coherent bytes.
+        if capture_pcs {
+            if let Some(debug) = tmp.debug.as_ref() {
+                // `with_offsets` is auto-enabled with `with_dwarf`, so offsets
+                // are always present here — treat their absence as a bug. We
+                // borrow them out of `tmp.functions` for the duration of the
+                // rewriter calls; no clone needed.
+                let mut orig_per_instr_pcs: HashMap<u32, &[usize]> = HashMap::new();
+                for (func_idx, _) in per_func_maps.iter() {
+                    let local = tmp
+                        .functions
+                        .unwrap_local(FunctionID(*func_idx))
+                        .expect("captured DWARF map should be for a local function");
+                    let offsets = local
+                        .body
+                        .instructions
+                        .offsets()
+                        .expect("with_dwarf opt-in must populate orig per-instr offsets");
+                    orig_per_instr_pcs.insert(*func_idx, offsets);
+                }
+                let per_func_new: HashMap<u32, crate::ir::dwarf::PerFuncEncodeMaps> = per_func_maps
+                    .iter()
+                    .map(|(idx, m)| {
+                        (
+                            *idx,
+                            crate::ir::dwarf::PerFuncEncodeMaps {
+                                pcs: &m.pcs,
+                                anchors: &m.anchors,
+                                self_emit_for_orig: &m.self_emit_for_orig,
+                                size_leb_len: m.size_leb_len,
+                                first_instr_dwarf_offset: m.first_instr_dwarf_offset,
+                                body_total_size: m.body_total_size,
+                            },
+                        )
+                    })
+                    .collect();
+
+                let line_idx = debug
+                    .sections()
+                    .iter()
+                    .position(|s| s.name == ".debug_line");
+                let new_line_bytes = if let Some(line_idx) = line_idx {
+                    let input_bytes = debug.sections()[line_idx].data.as_ref();
+                    Some((
+                        line_idx,
+                        crate::ir::dwarf::rewrite_debug_line(
+                            input_bytes,
+                            debug,
+                            &per_func_new,
+                            &orig_per_instr_pcs,
+                        )?,
+                    ))
+                } else {
+                    None
+                };
+                let new_other_sections = crate::ir::dwarf::rewrite_other_dwarf_sections(
+                    debug,
+                    &per_func_new,
+                    &orig_per_instr_pcs,
+                )?;
+
+                if let Some(debug_mut) = tmp.debug.as_mut() {
+                    if let Some((line_idx, bytes)) = new_line_bytes {
+                        debug_mut.sections[line_idx].data = std::borrow::Cow::Owned(bytes);
+                    }
+                    let mut new_other_sections = new_other_sections;
+                    for section in debug_mut.sections.iter_mut() {
+                        if let Some(new_bytes) = new_other_sections.remove(section.name) {
+                            section.data = std::borrow::Cow::Owned(new_bytes);
+                        }
+                    }
+                    // Append any DWARF sections gimli produced that the input
+                    // didn't carry (e.g. `.debug_line_str` for inputs whose
+                    // strings only become inlined after rewrite). They land at
+                    // the tail in deterministic name order.
+                    let mut new_names: Vec<&'static str> =
+                        new_other_sections.keys().copied().collect();
+                    new_names.sort_unstable();
+                    for name in new_names {
+                        let bytes = new_other_sections.remove(name).unwrap();
+                        debug_mut.sections.push(CustomSection {
+                            name,
+                            data: std::borrow::Cow::Owned(bytes),
+                            deleted: false,
+                        });
+                    }
+                }
+            }
+        }
+
+        // Re-emit DWARF custom sections held aside in `debug`. They follow
+        // the rest of the custom sections; for inputs that already kept DWARF
+        // at the tail (the wasm-tools convention) this preserves byte
+        // ordering.
+        if let Some(debug) = tmp.debug.as_ref() {
+            for section in debug.sections() {
+                module.section(&wasm_encoder::CustomSection {
+                    name: std::borrow::Cow::Borrowed(section.name),
+                    data: section.data.clone(),
+                });
+            }
+        }
+
+        Ok((
+            module,
+            side_effects,
+            capture_pcs.then_some(DwarfEncodeMaps {
+                code_section_start,
+                per_func: per_func_maps,
+            }),
+        ))
+>>>>>>> Stashed changes
     }
 
     // ==============================
