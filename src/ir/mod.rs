@@ -4,6 +4,7 @@ use std::ops::{Deref, Index, IndexMut};
 use std::slice::SliceIndex;
 
 pub mod component;
+pub mod dwarf;
 pub mod function;
 mod helpers;
 pub mod id;

@@ -8,6 +8,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 use wasmparser::Operator;
 
+pub mod dwarf;
 pub mod validate;
 pub mod wast_iter;
 use wirm::ir::types::InstrumentationMode;
@@ -131,7 +132,7 @@ where
     F: for<'a, 'b> FnOnce(&mut ModuleIterator<'a, 'b>),
 {
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     {
         let mut mod_it = ModuleIterator::new(&mut module, &vec![]);
         instrument(&mut mod_it);
@@ -148,7 +149,7 @@ where
     F: for<'a, 'b> FnOnce(&mut ComponentIterator<'a, 'b>),
 {
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut component = Component::parse(&buff, false, false).expect("Unable to parse");
+    let mut component = Component::parse(&buff, false, false, false).expect("Unable to parse");
     {
         let mut comp_it = ComponentIterator::new(&mut component, HashMap::new());
         instrument(&mut comp_it);
@@ -237,7 +238,7 @@ pub fn validate_module_instr<F>(
     F: for<'a, 'b> FnOnce(&mut ModuleIterator<'a, 'b>),
 {
     let buff = wat::parse_str(wat_src).expect("couldn't parse WAT");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse");
     {
         let mut mod_it = ModuleIterator::new(&mut module, &vec![]);
         instrument(&mut mod_it);

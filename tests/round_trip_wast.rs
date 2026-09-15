@@ -11,12 +11,12 @@ fn roundtrip(label: &str, bytes: &[u8], component: bool) {
     let original = wasmprinter::print_bytes(bytes).expect("couldn't convert original Wasm to wat");
     println!("original: {:?}", original);
     if component {
-        let parser = Component::parse(bytes, false, false).expect("Unable to parse");
+        let parser = Component::parse(bytes, false, false, false).expect("Unable to parse");
         let result = parser.encode().expect("error");
         let out = wasmprinter::print_bytes(result.clone()).expect("couldn't translate Wasm to wat");
         assert_eq!(out, original);
     } else {
-        let parser = Module::parse(bytes, false, false).expect("Unable to parse");
+        let parser = Module::parse(bytes, false, false, false).expect("Unable to parse");
         let result = parser.encode().expect("error during parse");
         let out = wasmprinter::print_bytes(result.clone()).expect("couldn't translate Wasm to wat");
         assert_eq!(out, original);

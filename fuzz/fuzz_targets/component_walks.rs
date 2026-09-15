@@ -438,7 +438,7 @@ fuzz_target!(|smith: SmithComponent| {
         return;
     }
 
-    let comp = match wirm::Component::parse(&bytes, false, false) {
+    let comp = match wirm::Component::parse(&bytes, false, false, false) {
         Ok(c) => c,
         Err(_) => return,
     };

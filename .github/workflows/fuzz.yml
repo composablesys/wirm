@@ -29,6 +29,7 @@ jobs:
           - component_instrument
           - component_concretize
           - component_walks
+          - dwarf_invariant
     steps:
       - uses: actions/checkout@v4
 

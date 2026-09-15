@@ -46,7 +46,7 @@ fuzz_target!(|smith: SmithModule| {
         return;
     }
 
-    let mut module = match wirm::Module::parse(&bytes, false, false) {
+    let mut module = match wirm::Module::parse(&bytes, false, false, false) {
         Ok(m) => m,
         Err(_) => return,
     };

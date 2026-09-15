@@ -39,6 +39,8 @@ pub enum Error {
     InvalidMemoryReservedByte {
         func_range: Range<usize>,
     },
+    /// Error raised while reading or rewriting DWARF sections.
+    DwarfError(String),
 }
 
 impl From<BinaryReaderError> for Error {
@@ -122,6 +124,7 @@ impl std::fmt::Display for Error {
             Error::InvalidMemoryReservedByte { func_range } => {
                 write!(f, "Found a `memory.*` instruction with an invalid reserved byte in function at {:?}", func_range)
             }
+            Error::DwarfError(msg) => write!(f, "DWARF rewriting error: {msg}"),
         }
     }
 }

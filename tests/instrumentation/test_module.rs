@@ -14,7 +14,7 @@ use crate::common::check_instrumentation_encoding;
 fn test_fn_types() {
     let file = "tests/test_inputs/handwritten/modules/add.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     assert_eq!(
         *module.functions.get_kind(FunctionID(0)),
@@ -50,7 +50,7 @@ fn test_fn_types() {
 fn test_exports() {
     let file = "tests/test_inputs/instr_testing/modules/function_modification/export_deletion.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     // Get func ID by name
     assert_eq!(
@@ -86,7 +86,7 @@ fn test_exports() {
 fn test_import_delete() {
     let file = "tests/test_inputs/instr_testing/modules/function_modification/import_delete.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     let id = module.imports.find("bogus".to_string(), "hi".to_string());
     let fid = module
@@ -112,7 +112,7 @@ fn test_import_delete() {
 fn test_local_fn_delete() {
     let file = "tests/test_inputs/instr_testing/modules/function_modification/local_fn_delete.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     module.delete_func(FunctionID(2));
 
@@ -129,7 +129,7 @@ fn test_local_fn_delete() {
 fn test_panic_call_delete() {
     let file = "tests/test_inputs/handwritten/modules/add.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     module.delete_func(FunctionID(1));
 
@@ -142,7 +142,7 @@ fn test_renumber_fn_id() {
     let file =
         "tests/test_inputs/instr_testing/modules/function_modification/local_fn_renumber.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     module.delete_func(FunctionID(1));
 
@@ -159,7 +159,7 @@ fn test_middle_import_to_local() {
     let file =
         "tests/test_inputs/instr_testing/modules/function_modification/middle_import_to_local.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     let mut builder = FunctionBuilder::new(&[DataType::I32, DataType::I32], &[]);
     builder.i32_const(1);
@@ -182,7 +182,7 @@ fn test_first_import_to_local() {
     let file =
         "tests/test_inputs/instr_testing/modules/function_modification/first_import_to_local.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     let mut builder = FunctionBuilder::new(&[DataType::I32, DataType::I32], &[]);
     builder.i32_const(1);
@@ -205,7 +205,7 @@ fn test_last_import_to_local() {
     let file =
         "tests/test_inputs/instr_testing/modules/function_modification/last_import_to_local.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     let mut builder = FunctionBuilder::new(&[DataType::I32, DataType::I32], &[]);
     builder.i32_const(1);
@@ -228,7 +228,7 @@ fn test_all_import_to_local() {
     let file =
         "tests/test_inputs/instr_testing/modules/function_modification/all_import_to_local.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     // Convert all to local
     let mut first_builder = FunctionBuilder::new(&[DataType::I32, DataType::I32], &[]);
@@ -265,7 +265,7 @@ fn test_some_import_to_local() {
     let file =
         "tests/test_inputs/instr_testing/modules/function_modification/some_import_to_local.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     // Convert all to local
     let mut first_builder = FunctionBuilder::new(&[DataType::I32, DataType::I32], &[]);
@@ -295,7 +295,7 @@ fn test_middle_import_to_local_import_delete() {
     let file =
         "tests/test_inputs/instr_testing/modules/function_modification/middle_import_to_local_import_delete.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     let mut builder = FunctionBuilder::new(&[DataType::I32, DataType::I32], &[]);
     builder.i32_const(1);
@@ -320,7 +320,7 @@ fn test_middle_import_to_local_local_delete() {
     let file =
         "tests/test_inputs/instr_testing/modules/function_modification/middle_import_to_local_local_delete.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     let mut builder = FunctionBuilder::new(&[DataType::I32, DataType::I32], &[]);
     builder.i32_const(1);
@@ -345,7 +345,7 @@ fn test_middle_import_to_local_local_delete() {
 fn test_add_import() {
     let file = "tests/test_inputs/instr_testing/modules/function_modification/add_import.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     module.add_import_func("wirm".to_string(), "better".to_string(), TypeID(2));
 
@@ -362,7 +362,7 @@ fn test_middle_local_to_import() {
     let file =
         "tests/test_inputs/instr_testing/modules/function_modification/middle_local_to_import.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     module.convert_local_fn_to_import(
         FunctionID(2),
@@ -384,7 +384,7 @@ fn test_first_local_to_import() {
     let file =
         "tests/test_inputs/instr_testing/modules/function_modification/first_local_to_import.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     module.convert_local_fn_to_import(
         FunctionID(1),
@@ -406,7 +406,7 @@ fn test_last_local_to_import() {
     let file =
         "tests/test_inputs/instr_testing/modules/function_modification/last_local_to_import.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     module.convert_local_fn_to_import(
         FunctionID(3),
@@ -428,7 +428,7 @@ fn test_all_local_to_import() {
     let file =
         "tests/test_inputs/instr_testing/modules/function_modification/all_local_to_import.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     module.convert_local_fn_to_import(
         FunctionID(3),
@@ -462,7 +462,7 @@ fn test_some_local_to_import() {
     let file =
         "tests/test_inputs/instr_testing/modules/function_modification/some_local_to_import.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     module.convert_local_fn_to_import(
         FunctionID(3),
@@ -489,7 +489,7 @@ fn test_some_local_to_import() {
 fn test_all_local_to_import_all_import_to_local() {
     let file = "tests/test_inputs/instr_testing/modules/function_modification/all_local_to_import_all_import_to_local.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     // Convert all to local
     let mut first_builder = FunctionBuilder::new(&[DataType::I32, DataType::I32], &[]);
@@ -544,7 +544,7 @@ fn test_all_local_to_import_all_import_to_local() {
 fn test_add_fns_init_exprs() {
     let file = "tests/test_inputs/instr_testing/modules/init-exprs.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     // add first import func
     let (..) = module.add_import_func("test0".to_string(), "func0".to_string(), TypeID(4));
@@ -576,7 +576,7 @@ fn test_add_fns_init_exprs() {
 fn test_add_imports_and_local_fns() {
     let file = "tests/test_inputs/instr_testing/modules/function_modification/add_imported_and_local_funcs.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     // add first import func
     let (fid, ..) = module.add_import_func("test0".to_string(), "func0".to_string(), TypeID(2));
@@ -610,7 +610,7 @@ fn add_global_with_import() {
     let file = "tests/test_inputs/instr_testing/modules/function_modification/add_global.wat";
 
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
+    let mut module = Module::parse(&buff, false, false, false).expect("Unable to parse module");
 
     // add new global
     let gid = module.add_global(
@@ -637,7 +637,7 @@ fn parse_start_module() -> Module<'static> {
     let file = "tests/test_inputs/handwritten/modules/_start.wat";
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
     let buff: &'static [u8] = Box::leak(buff.into_boxed_slice());
-    Module::parse(buff, false, false).expect("Unable to parse module")
+    Module::parse(buff, false, false, false).expect("Unable to parse module")
 }
 
 fn encoded_wat(module: &Module) -> String {
@@ -790,7 +790,7 @@ fn test_elem_reindexing() {
             )
         )"#;
     let buff = wat::parse_str(wat).unwrap();
-    let mut module = Module::parse(&buff, false, false).unwrap();
+    let mut module = Module::parse(&buff, false, false, false).unwrap();
 
     // Add an import of a different type. Then the table will have entries of
     // the wrong type unless the element section is reindexed.

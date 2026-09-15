@@ -13,7 +13,7 @@ fn whamm_side_effects() {
     let file = "tests/test_inputs/spin/hello_world.wat";
     let output_wasm_path = format!("{TEST_DEBUG_DIR}/whamm_side_effects.wasm");
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
-    let mut component = Component::parse(&buff, false, false).expect("Unable to parse");
+    let mut component = Component::parse(&buff, false, false, false).expect("Unable to parse");
 
     let lib_path = "tests/test_inputs/whamm/whamm_core.wasm";
     let lib_buff = wat::parse_file(lib_path).expect("couldn't convert the input wat to Wasm");
@@ -68,7 +68,7 @@ pub fn configure_component_libraries<'a>(
         lib_bytes: &'a [u8],
     ) {
         let wasi_name = "wasi_snapshot_preview1";
-        let lib_wasm = Component::parse(lib_bytes, false, true).unwrap();
+        let lib_wasm = Component::parse(lib_bytes, false, true, false).unwrap();
 
         // Create an instance type that defines the library
         let mut decls = vec![];

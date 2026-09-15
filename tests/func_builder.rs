@@ -33,7 +33,7 @@ fn func_builder_set_name_is_retained_after_round_trip() {
 
     // Round-trip the module and confirm the name section preserves the name.
     let bytes = module.encode().expect("encode failed");
-    let reparsed = Module::parse(&bytes, false, false).expect("reparse failed");
+    let reparsed = Module::parse(&bytes, false, false, false).expect("reparse failed");
     assert_eq!(
         reparsed
             .functions
@@ -51,7 +51,7 @@ fn func_builder_set_name_is_retained_after_round_trip() {
 fn func_builder_set_name_is_retained_when_appended_to_parsed_module() {
     let file_name = "tests/test_inputs/handwritten/modules/_start.wat";
     let wasm = wat::parse_file(file_name).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&wasm, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&wasm, false, false, false).expect("Unable to parse");
 
     let expected = "appended_via_builder";
     let mut builder = FunctionBuilder::new(&[], &[]);
@@ -61,7 +61,7 @@ fn func_builder_set_name_is_retained_when_appended_to_parsed_module() {
     let fid = builder.finish_module(&mut module);
 
     let bytes = module.encode().expect("encode failed");
-    let reparsed = Module::parse(&bytes, false, false).expect("reparse failed");
+    let reparsed = Module::parse(&bytes, false, false, false).expect("reparse failed");
     assert_eq!(
         reparsed
             .functions
@@ -99,7 +99,7 @@ fn run_fac_wirm() {
 fn run_start_wirm() {
     let file_name = "tests/test_inputs/handwritten/modules/start.wat";
     let wasm = wat::parse_file(file_name).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&wasm, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&wasm, false, false, false).expect("Unable to parse");
 
     let start_fun_id = module.start.unwrap();
     let mut function_builder = module.functions.get_fn_modifier(start_fun_id).unwrap();
@@ -122,7 +122,7 @@ fn run_start_wirm() {
 fn run_start_wirm_default() {
     let file_name = "tests/test_inputs/handwritten/modules/start.wat";
     let wasm = wat::parse_file(file_name).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&wasm, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&wasm, false, false, false).expect("Unable to parse");
 
     let start_fun_id = module.start.unwrap();
     let mut function_builder = module.functions.get_fn_modifier(start_fun_id).unwrap();
@@ -138,7 +138,7 @@ fn run_start_wirm_default() {
 fn add_import_and_local_fn_then_iterate() {
     let file_name = "tests/test_inputs/handwritten/modules/_start.wat";
     let wasm = wat::parse_file(file_name).expect("couldn't convert the input wat to Wasm");
-    let mut module = Module::parse(&wasm, false, false).expect("Unable to parse");
+    let mut module = Module::parse(&wasm, false, false, false).expect("Unable to parse");
     // add an imported function AND THEN a new local function
     module.add_import_func("new".to_string(), "import".to_string(), TypeID(0));
     assert_eq!(module.num_import_func(), 1);
