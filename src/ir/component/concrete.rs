@@ -355,9 +355,23 @@ fn resolved_is_resource<'a>(
 ) -> bool {
     match resolved {
         ResolvedItem::CompType(_, ComponentType::Resource { .. }) => true,
-        ResolvedItem::Import(_, imp) => {
-            matches!(imp.ty, ComponentTypeRef::Type(TypeBounds::SubResource))
-        }
+        ResolvedItem::Import(_, imp) => match &imp.ty {
+            ComponentTypeRef::Type(TypeBounds::SubResource) => true,
+            // Follow Eq chains: `(import "headers" (type (eq N)))` is a resource
+            // alias if type N ultimately resolves to a sub-resource.
+            ComponentTypeRef::Type(TypeBounds::Eq(n)) => {
+                let next = IndexedRef {
+                    depth: Depth::default(),
+                    space: Space::CompType,
+                    index: *n,
+                };
+                if !visited.insert(next) {
+                    return false;
+                }
+                resolved_is_resource(cx.resolve(&next), cx, visited)
+            }
+            _ => false,
+        },
         ResolvedItem::Alias(_, alias) => {
             let next = alias.get_item_ref().ref_;
             if !visited.insert(next) {
