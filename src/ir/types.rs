@@ -1,6 +1,5 @@
 //! Intermediate representation of sections in a wasm module.
 
-use log::error;
 use std::borrow::Cow;
 use std::cmp::PartialEq;
 use std::collections::HashMap;
@@ -1282,7 +1281,7 @@ impl<'a> InstrumentationFlag<'a> {
             || !block_alt.is_none() // Some(vec![]) means block removal!
     }
 
-    pub(crate) fn check_special_is_resolved(&self) {
+    pub(crate) fn check_special_is_resolved(&self) -> Result<()> {
         let Self {
             semantic_after,
             block_entry,
@@ -1291,21 +1290,35 @@ impl<'a> InstrumentationFlag<'a> {
             ..
         } = self;
 
-        // Check if special instrumentation modes have been resolved!
+        // Check if special instrumentation modes have been resolved! An unresolved special
+        // mode at encode time means the resolver left the body in an inconsistent state, so
+        // fail hard rather than emit a structurally malformed module.
         if !semantic_after.instrs.is_empty() {
-            error!(
+            return Err(InstrumentationError(
                 "BUG: Semantic after instrumentation should be resolved already, please report."
-            );
+                    .to_string(),
+            ));
         }
         if !block_entry.instrs.is_empty() {
-            error!("BUG: Block entry instrumentation should be resolved already, please report.");
+            return Err(InstrumentationError(
+                "BUG: Block entry instrumentation should be resolved already, please report."
+                    .to_string(),
+            ));
         }
         if !block_exit.instrs.is_empty() {
-            error!("BUG: Block exit instrumentation should be resolved already, please report.");
+            return Err(InstrumentationError(
+                "BUG: Block exit instrumentation should be resolved already, please report."
+                    .to_string(),
+            ));
         }
         if !block_alt.is_none() {
-            error!("BUG: Block alt instrumentation should be resolved already, please report.");
+            return Err(InstrumentationError(
+                "BUG: Block alt instrumentation should be resolved already, please report."
+                    .to_string(),
+            ));
         }
+
+        Ok(())
     }
 
     pub(crate) fn add_injections(

@@ -860,7 +860,11 @@ impl<'a> Module<'a> {
 
                     // resolve instruction-level instrumentation
                     match op {
-                        Operator::Block { .. } | Operator::Loop { .. } | Operator::If { .. } => {
+                        Operator::Block { .. }
+                        | Operator::Loop { .. }
+                        | Operator::If { .. }
+                        | Operator::TryTable { .. }
+                        | Operator::Try { .. } => {
                             // The block ID will just be the curr len of the stack!
                             block_stack.push(block_stack.len() as u32);
 
@@ -1242,7 +1246,7 @@ impl<'a> Module<'a> {
                 encode(&op.clone(), &mut function, &mut reencode);
                 continue;
             } else {
-                instrument.check_special_is_resolved();
+                instrument.check_special_is_resolved()?;
 
                 // this instruction has instrumentation, handle it!
                 let InstrumentationFlag {
