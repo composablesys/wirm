@@ -99,7 +99,6 @@ pub struct Module<'a> {
     pub(crate) num_local_memories: u32,
 
     // just a placeholder for round-trip
-    pub(crate) local_names: wasm_encoder::IndirectNameMap,
     pub(crate) label_names: wasm_encoder::IndirectNameMap,
     pub(crate) type_names: wasm_encoder::NameMap,
     pub(crate) table_names: wasm_encoder::NameMap,
@@ -205,6 +204,7 @@ impl<'a> Module<'a> {
             num_instructions: instructions.len(),
             instructions,
             name: None,
+            local_names: None,
         })
     }
 
@@ -235,7 +235,6 @@ impl<'a> Module<'a> {
 
         let mut module_name: Option<String> = None;
         // for the other names, we directly encode it without passing them into the IR
-        let mut local_names = wasm_encoder::IndirectNameMap::new();
         let mut label_names = wasm_encoder::IndirectNameMap::new();
         let mut type_names = wasm_encoder::NameMap::new();
         let mut table_names = wasm_encoder::NameMap::new();
@@ -420,7 +419,7 @@ impl<'a> Module<'a> {
                     code_section_count = count as usize;
                 }
                 Payload::CodeSectionEntry(body) => {
-                    bodies_and_names.push((body, None));
+                    bodies_and_names.push((body, None, None));
                 }
                 Payload::TagSection(tag_section_reader) => {
                     for tag in tag_section_reader.into_iter() {
@@ -462,7 +461,20 @@ impl<'a> Module<'a> {
                                         module_name = Some(name.to_string());
                                     }
                                     wasmparser::Name::Local(names) => {
-                                        local_names = indirect_namemap_parser2encoder(names);
+                                        // Attach each function's local names to its body,
+                                        // keyed by function index, so they follow the
+                                        // function through any later reindexing.
+                                        for indirect in names {
+                                            let indirect = indirect?;
+                                            let abs_idx = indirect.index;
+                                            if abs_idx < imports.num_funcs {
+                                                // imported functions have no locals
+                                                continue;
+                                            }
+                                            let rel_idx = (abs_idx - imports.num_funcs) as usize;
+                                            bodies_and_names[rel_idx].2 =
+                                                Some(namemap_parser2encoder(indirect.names));
+                                        }
                                     }
                                     wasmparser::Name::Label(names) => {
                                         label_names = indirect_namemap_parser2encoder(names);
@@ -554,11 +566,12 @@ impl<'a> Module<'a> {
         #[cfg(feature = "parallel")]
         let code_sections = bodies_and_names
             .into_par_iter()
-            .map(|(body, name)| {
+            .map(|(body, name, local_names)| {
                 let mut body = Self::parse_body(body, enable_multi_memory, with_offsets)?;
                 if let Some(name) = name {
                     body.name = Some(name);
                 }
+                body.local_names = local_names;
                 Ok::<_, Error>(body)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -566,11 +579,12 @@ impl<'a> Module<'a> {
         #[cfg(not(feature = "parallel"))]
         let code_sections = bodies_and_names
             .into_iter()
-            .map(|(body, name)| {
+            .map(|(body, name, local_names)| {
                 let mut body = Self::parse_body(body, enable_multi_memory, with_offsets)?;
                 if let Some(name) = name {
                     body.name = Some(name);
                 }
+                body.local_names = local_names;
                 Ok::<_, Error>(body)
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -674,7 +688,6 @@ impl<'a> Module<'a> {
             num_local_tables: num_tables,
             num_local_memories: num_memories,
             module_name,
-            local_names,
             type_names,
             table_names,
             elem_names,
@@ -1409,6 +1422,7 @@ impl<'a> Module<'a> {
 
         // initialize function name section
         let mut function_names = wasm_encoder::NameMap::new();
+        let mut local_names = wasm_encoder::IndirectNameMap::new();
         if !tmp.imports.is_empty() {
             let mut imports = wasm_encoder::ImportSection::new();
             let mut import_func_idx = 0;
@@ -1778,6 +1792,9 @@ impl<'a> Module<'a> {
                 if let Some(name) = &original_func.body.name {
                     function_names.append(idx as u32, name.as_str());
                 }
+                if let Some(local_map) = &original_func.body.local_names {
+                    local_names.append(idx as u32, local_map);
+                }
                 code.function(&function?);
             }
             module.section(&code);
@@ -1850,7 +1867,7 @@ impl<'a> Module<'a> {
             names.module(module_name);
         }
         names.functions(&function_names);
-        names.locals(&tmp.local_names);
+        names.locals(&local_names);
         names.labels(&tmp.label_names);
         names.types(&tmp.type_names);
         names.tables(&tmp.table_names);

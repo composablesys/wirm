@@ -1716,6 +1716,8 @@ pub struct Body<'a> {
     pub instructions: Instructions<'a>,
     pub num_instructions: usize,
     pub name: Option<String>,
+    /// Debug names for this function's locals, keyed by local index.
+    pub local_names: Option<wasm_encoder::NameMap>,
 }
 
 // 'b should outlive 'a
