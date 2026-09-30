@@ -15,7 +15,8 @@ use wirm::{Component, Location, Module};
 
 use crate::common::{
     check_instrumentation_encoding, inject_function_entry, inject_function_exit,
-    run_block_injection, run_component_instr_test, run_module_instr_test, SupportedOperators,
+    run_block_injection, run_component_instr_test, run_module_instr_test,
+    run_module_instr_validate, SupportedOperators,
 };
 
 #[test]
@@ -448,6 +449,51 @@ fn test_block_alt_replace_nested_block() {
             );
         },
     );
+}
+
+#[test]
+fn test_block_alt_remove_block_with_try_table() {
+    run_module_instr_validate("(module (func block try_table nop end end))", |mod_it| {
+        run_block_injection(
+            mod_it,
+            &vec![(
+                SupportedOperators::Block,
+                (InstrumentationMode::BlockAlt, vec![]),
+            )],
+        );
+    });
+}
+
+#[test]
+fn test_block_alt_replace_block_with_try_table() {
+    run_module_instr_validate(
+        "(module (func (result i32) block (result i32) try_table (result i32) i32.const 1 end end))",
+        |mod_it| {
+            run_block_injection(
+                mod_it,
+                &vec![(
+                    SupportedOperators::Block,
+                    (
+                        InstrumentationMode::BlockAlt,
+                        vec![Operator::I32Const { value: 12 }],
+                    ),
+                )],
+            );
+        },
+    );
+}
+
+#[test]
+fn test_block_alt_remove_block_with_legacy_try() {
+    run_module_instr_validate("(module (func block try catch_all end end))", |mod_it| {
+        run_block_injection(
+            mod_it,
+            &vec![(
+                SupportedOperators::Block,
+                (InstrumentationMode::BlockAlt, vec![]),
+            )],
+        );
+    });
 }
 
 // ==== BLOCK ENTRY ====

@@ -141,6 +141,20 @@ where
     check_instrumentation_encoding(&out, file).expect("instrumentation encoding mismatch");
 }
 
+pub fn run_module_instr_validate<F>(wat_src: &str, instrument: F)
+where
+    F: for<'a, 'b> FnOnce(&mut ModuleIterator<'a, 'b>),
+{
+    let buff = wat::parse_str(wat_src).expect("couldn't convert the input wat to Wasm");
+    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+    {
+        let mut mod_it = ModuleIterator::new(&mut module, &vec![]);
+        instrument(&mut mod_it);
+    }
+    let result = module.encode().expect("error encoding");
+    validate::validate_bytes(&result).expect("wasm validation failed");
+}
+
 /// Parse a WAT file, run `instrument` with a `ComponentIterator`, encode, and assert the encoding
 /// matches the WAT file's inline annotations. Panics on mismatch.
 pub fn run_component_instr_test<F>(file: &str, instrument: F)
