@@ -52,7 +52,11 @@ impl ModuleSubIterator {
     }
 
     pub fn get_curr_func(&self) -> (FunctionID, usize) {
-        self.metadata[self.curr_idx]
+        self.metadata
+            .get(self.curr_idx)
+            .copied()
+            // contains no functions, nothing to point at...return a default val
+            .unwrap_or((FunctionID(0), 0))
     }
 
     /// Returns the current Location in the Module as a Location
