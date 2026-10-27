@@ -465,6 +465,48 @@ fn test_block_alt_remove_block_with_try_table() {
 }
 
 #[test]
+fn test_block_alt_nested_both_blocks_match_remove() {
+    run_module_instr_validate("(module (func block block nop end end))", |mod_it| {
+        run_block_injection(
+            mod_it,
+            &vec![(
+                SupportedOperators::Block,
+                (InstrumentationMode::BlockAlt, vec![]),
+            )],
+        );
+    });
+}
+
+#[test]
+fn test_block_alt_nested_both_blocks_match_replace() {
+    run_module_instr_validate("(module (func block block nop end end))", |mod_it| {
+        run_block_injection(
+            mod_it,
+            &vec![(
+                SupportedOperators::Block,
+                (
+                    InstrumentationMode::BlockAlt,
+                    vec![Operator::I32Const { value: 12 }, Operator::Drop],
+                ),
+            )],
+        );
+    });
+}
+
+#[test]
+fn test_block_alt_nested_both_loops_match_remove() {
+    run_module_instr_validate("(module (func loop loop nop end end))", |mod_it| {
+        run_block_injection(
+            mod_it,
+            &vec![(
+                SupportedOperators::Loop,
+                (InstrumentationMode::BlockAlt, vec![]),
+            )],
+        );
+    });
+}
+
+#[test]
 fn test_block_alt_replace_block_with_try_table() {
     run_module_instr_validate(
         "(module (func (result i32) block (result i32) try_table (result i32) i32.const 1 end end))",

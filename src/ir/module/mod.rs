@@ -887,13 +887,8 @@ impl<'a> Module<'a> {
                                         idx,
                                     )
                                 {
-                                    builder.clear_instr_at(
-                                        Location::Module {
-                                            func_idx: FunctionID(0), // not used
-                                            instr_idx: idx,
-                                        },
-                                        BlockAlt,
-                                    );
+                                    // clear any special instr at this location (alt is prioritized)
+                                    clear_special_instr_at(&mut builder, idx);
                                     // we've got a match, which injected the alt body. continue to the next instruction
                                     delete_block = Some(*block_stack.last().unwrap());
                                     continue;
@@ -902,6 +897,7 @@ impl<'a> Module<'a> {
 
                             if delete_block.is_some() {
                                 // delete this block and skip all instrumentation handling (like below)
+                                clear_special_instr_at(&mut builder, idx);
                                 builder.empty_alternate_at(Location::Module {
                                     func_idx: FunctionID(0), // not used
                                     instr_idx: idx,
@@ -929,13 +925,8 @@ impl<'a> Module<'a> {
                                         idx,
                                     )
                                 {
-                                    builder.clear_instr_at(
-                                        Location::Module {
-                                            func_idx: FunctionID(0), // not used
-                                            instr_idx: idx,
-                                        },
-                                        BlockAlt,
-                                    );
+                                    // clear any special instr at this location (alt is prioritized)
+                                    clear_special_instr_at(&mut builder, idx);
                                     // we've got a match, which injected the alt body. continue to the next instruction
                                     delete_block = Some(*block_stack.last().unwrap());
                                     continue;
@@ -944,6 +935,7 @@ impl<'a> Module<'a> {
 
                             if delete_block.is_some() {
                                 // delete this block and skip all instrumentation handling (like below)
+                                clear_special_instr_at(&mut builder, idx);
                                 builder.empty_alternate_at(Location::Module {
                                     func_idx: FunctionID(0), // not used
                                     instr_idx: idx,
@@ -963,6 +955,7 @@ impl<'a> Module<'a> {
                                         delete_block = None;
                                         if !retain_end {
                                             // delete this end and skip all instrumentation handling (like below)
+                                            clear_special_instr_at(&mut builder, idx);
                                             builder.empty_alternate_at(Location::Module {
                                                 func_idx: FunctionID(0), // not used
                                                 instr_idx: idx,
@@ -974,6 +967,7 @@ impl<'a> Module<'a> {
                                         retain_end = true;
                                     } else {
                                         // delete this instruction and skip all instrumentation handling (like below)
+                                        clear_special_instr_at(&mut builder, idx);
                                         builder.empty_alternate_at(Location::Module {
                                             func_idx: FunctionID(0), // not used
                                             instr_idx: idx,
@@ -1003,6 +997,7 @@ impl<'a> Module<'a> {
                             // non block-structured opcodes
                             if delete_block.is_some() {
                                 // delete this instruction and skip all instrumentation handling (like below)
+                                clear_special_instr_at(&mut builder, idx);
                                 builder.empty_alternate_at(Location::Module {
                                     func_idx: FunctionID(0), // not used
                                     instr_idx: idx,
@@ -2530,6 +2525,17 @@ fn plan_resolution_block_exit<'a, 'b, 'c>(
         }
         _ => {} // skip all other opcodes
     }
+}
+
+fn clear_special_instr_at<'a, 'b>(builder: &mut FunctionModifier<'a, 'b>, idx: usize) {
+    let loc = Location::Module {
+        func_idx: FunctionID(0), // not used
+        instr_idx: idx,
+    };
+    builder.clear_instr_at(loc, BlockAlt);
+    builder.clear_instr_at(loc, BlockEntry);
+    builder.clear_instr_at(loc, BlockExit);
+    builder.clear_instr_at(loc, SemanticAfter);
 }
 
 fn plan_resolution_block_alt<'a, 'b, 'c>(
