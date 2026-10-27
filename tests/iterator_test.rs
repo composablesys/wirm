@@ -48,9 +48,11 @@ fn test_mod_iterator_no_local_functions() {
         let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
         {
             let mut mod_it = ModuleIterator::new(&mut module, &vec![]);
+            assert!(mod_it.curr_loc().1); // should be at the end (no funcs)
             assert!(mod_it.curr_op().is_none());
             assert!(mod_it.next().is_none());
             mod_it.reset();
+            assert!(mod_it.curr_loc().1); // should be at the end (no funcs)
             assert!(mod_it.curr_op().is_none());
         }
         module.encode().expect("error encoding");
