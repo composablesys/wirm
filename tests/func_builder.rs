@@ -1,11 +1,10 @@
 use std::process::Command;
 use wirm::ir::function::FunctionBuilder;
-use wirm::ir::id::{FunctionID, TypeID};
+use wirm::ir::id::TypeID;
 use wirm::iterator::iterator_trait::Iterator;
 use wirm::iterator::module_iterator::ModuleIterator;
 use wirm::opcode::Instrumenter;
-use wirm::{DataType, Opcode};
-use wirm::{Location, Module};
+use wirm::{DataType, Module, Opcode};
 
 /// Regression test for https://github.com/composablesys/wirm/issues/158
 ///
@@ -104,12 +103,7 @@ fn run_start_wirm() {
     let start_fun_id = module.start.unwrap();
     let mut function_builder = module.functions.get_fn_modifier(start_fun_id).unwrap();
 
-    function_builder
-        .before_at(Location::Module {
-            func_idx: FunctionID(0), // not used
-            instr_idx: 0,
-        })
-        .i32_const(1);
+    function_builder.before_at(0).i32_const(1);
 
     let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result.clone()).expect("couldn't translate Wasm to wat");

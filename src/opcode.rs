@@ -7,7 +7,6 @@
 
 use crate::ir::module::module_types::HeapType;
 use crate::ir::types::{BlockType, FuncInstrMode, InstrumentationMode};
-use crate::Location;
 use wasmparser::Operator;
 
 // ── Type-substitution helpers ─────────────────────────────────────────────────
@@ -242,13 +241,16 @@ macro_rules! define_opcode_methods {
 
 /// Defines instrumentation behavior.
 pub trait Instrumenter<'a> {
+    /// How this instrumenter addresses an instruction
+    type Pos;
+
     /// Can be called after finishing some instrumentation to reset the mode.
     fn finish_instr(&mut self);
     /// Get the InstrumentType of the current location
     fn curr_instrument_mode(&self) -> Option<InstrumentationMode>;
 
     /// Sets the type of Instrumentation Type of the specified location
-    fn set_instrument_mode_at(&mut self, mode: InstrumentationMode, loc: Location);
+    fn set_instrument_mode_at(&mut self, mode: InstrumentationMode, pos: Self::Pos);
 
     /// Get the InstrumentType of the current function
     fn curr_func_instrument_mode(&self) -> &Option<FuncInstrMode>;
@@ -274,66 +276,66 @@ pub trait Instrumenter<'a> {
 
     // ==== INSTR INJECTION ====
     /// Clears the instruction at a given Location
-    fn clear_instr_at(&mut self, loc: Location, mode: InstrumentationMode);
+    fn clear_instr_at(&mut self, pos: Self::Pos, mode: InstrumentationMode);
 
     /// Splice a new instruction into a specific location
-    fn add_instr_at(&mut self, loc: Location, instr: Operator<'a>);
+    fn add_instr_at(&mut self, pos: Self::Pos, instr: Operator<'a>);
 
     /// Injects an Instruction with InstrumentationMode `Before` at a given location
-    fn before_at(&mut self, loc: Location) -> &mut Self {
-        self.set_instrument_mode_at(InstrumentationMode::Before, loc);
+    fn before_at(&mut self, pos: Self::Pos) -> &mut Self {
+        self.set_instrument_mode_at(InstrumentationMode::Before, pos);
         self
     }
 
     /// Injects an Instruction with InstrumentationMode `After` at a given location
-    fn after_at(&mut self, loc: Location) -> &mut Self {
-        self.set_instrument_mode_at(InstrumentationMode::After, loc);
+    fn after_at(&mut self, pos: Self::Pos) -> &mut Self {
+        self.set_instrument_mode_at(InstrumentationMode::After, pos);
         self
     }
 
     /// Injects an Instruction with InstrumentationMode `Alternate` at a given location
-    fn alternate_at(&mut self, loc: Location) -> &mut Self {
-        self.set_instrument_mode_at(InstrumentationMode::Alternate, loc);
+    fn alternate_at(&mut self, pos: Self::Pos) -> &mut Self {
+        self.set_instrument_mode_at(InstrumentationMode::Alternate, pos);
         self
     }
 
     /// Injects an empty InstrumentationMode `Alternate` at a given location
-    fn empty_alternate_at(&mut self, loc: Location) -> &mut Self;
+    fn empty_alternate_at(&mut self, pos: Self::Pos) -> &mut Self;
 
     /// Injects a Semantic After at a given location
-    fn semantic_after_at(&mut self, loc: Location) -> &mut Self {
-        self.set_instrument_mode_at(InstrumentationMode::SemanticAfter, loc);
+    fn semantic_after_at(&mut self, pos: Self::Pos) -> &mut Self {
+        self.set_instrument_mode_at(InstrumentationMode::SemanticAfter, pos);
         self
     }
 
     /// Injects a block entry at a given location
-    fn block_entry_at(&mut self, loc: Location) -> &mut Self {
-        self.set_instrument_mode_at(InstrumentationMode::BlockEntry, loc);
+    fn block_entry_at(&mut self, pos: Self::Pos) -> &mut Self {
+        self.set_instrument_mode_at(InstrumentationMode::BlockEntry, pos);
         self
     }
 
     /// Injects a block exit at a given location
-    fn block_exit_at(&mut self, loc: Location) -> &mut Self {
-        self.set_instrument_mode_at(InstrumentationMode::BlockExit, loc);
+    fn block_exit_at(&mut self, pos: Self::Pos) -> &mut Self {
+        self.set_instrument_mode_at(InstrumentationMode::BlockExit, pos);
         self
     }
 
     /// Injects a block alternate at a given location
-    fn block_alt_at(&mut self, loc: Location) -> &mut Self {
-        self.set_instrument_mode_at(InstrumentationMode::BlockAlt, loc);
+    fn block_alt_at(&mut self, pos: Self::Pos) -> &mut Self {
+        self.set_instrument_mode_at(InstrumentationMode::BlockAlt, pos);
         self
     }
 
     /// Injects back edge instrumentation at a given location (must be a `loop`)
-    fn back_edge_at(&mut self, loc: Location) -> &mut Self {
-        self.set_instrument_mode_at(InstrumentationMode::BackEdge, loc);
+    fn back_edge_at(&mut self, pos: Self::Pos) -> &mut Self {
+        self.set_instrument_mode_at(InstrumentationMode::BackEdge, pos);
         self
     }
 
     /// Injects an empty block alternate at a given location
-    fn empty_block_alt_at(&mut self, loc: Location) -> &mut Self;
+    fn empty_block_alt_at(&mut self, pos: Self::Pos) -> &mut Self;
 
-    fn append_tag_at(&mut self, data: Vec<u8>, loc: Location) -> &mut Self;
+    fn append_tag_at(&mut self, data: Vec<u8>, pos: Self::Pos) -> &mut Self;
 }
 
 /// Defines Injection behavior at the current location of the Iterator

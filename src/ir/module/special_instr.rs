@@ -9,7 +9,7 @@ use crate::ir::types::InstrumentationMode::{
 };
 use crate::ir::types::{BlockType, InjectedInstrs, InstrumentationFlag, InstrumentationMode};
 use crate::opcode::{Inject, Instrumenter};
-use crate::{DataType, Location, Module, Opcode};
+use crate::{DataType, Module, Opcode};
 use std::collections::HashMap;
 use wasmparser::Operator;
 
@@ -171,10 +171,7 @@ impl<'a> Module<'a> {
                             if delete_block.is_some() {
                                 // delete this block and skip all instrumentation handling (like below)
                                 clear_special_instr_at(&mut builder, idx);
-                                builder.empty_alternate_at(Location::Module {
-                                    func_idx: FunctionID(0), // not used
-                                    instr_idx: idx,
-                                });
+                                builder.empty_alternate_at(idx);
                                 continue;
                             }
 
@@ -184,13 +181,7 @@ impl<'a> Module<'a> {
                                         *block_stack.last().unwrap(),
                                         instrumentation.back_edge.instrs.clone(),
                                     );
-                                    builder.clear_instr_at(
-                                        Location::Module {
-                                            func_idx: FunctionID(0), // not used
-                                            instr_idx: idx,
-                                        },
-                                        BackEdge,
-                                    );
+                                    builder.clear_instr_at(idx, BackEdge);
                                 }
                             }
                         }
@@ -225,10 +216,7 @@ impl<'a> Module<'a> {
                             if delete_block.is_some() {
                                 // delete this block and skip all instrumentation handling (like below)
                                 clear_special_instr_at(&mut builder, idx);
-                                builder.empty_alternate_at(Location::Module {
-                                    func_idx: FunctionID(0), // not used
-                                    instr_idx: idx,
-                                });
+                                builder.empty_alternate_at(idx);
                                 continue;
                             }
                         }
@@ -245,10 +233,7 @@ impl<'a> Module<'a> {
                                         if !retain_end {
                                             // delete this end and skip all instrumentation handling (like below)
                                             clear_special_instr_at(&mut builder, idx);
-                                            builder.empty_alternate_at(Location::Module {
-                                                func_idx: FunctionID(0), // not used
-                                                instr_idx: idx,
-                                            });
+                                            builder.empty_alternate_at(idx);
                                             retain_end = true;
                                             continue;
                                         }
@@ -257,10 +242,7 @@ impl<'a> Module<'a> {
                                     } else {
                                         // delete this instruction and skip all instrumentation handling (like below)
                                         clear_special_instr_at(&mut builder, idx);
-                                        builder.empty_alternate_at(Location::Module {
-                                            func_idx: FunctionID(0), // not used
-                                            instr_idx: idx,
-                                        });
+                                        builder.empty_alternate_at(idx);
                                         continue;
                                     }
                                 }
@@ -300,10 +282,7 @@ impl<'a> Module<'a> {
                             if delete_block.is_some() {
                                 // delete this instruction and skip all instrumentation handling (like below)
                                 clear_special_instr_at(&mut builder, idx);
-                                builder.empty_alternate_at(Location::Module {
-                                    func_idx: FunctionID(0), // not used
-                                    instr_idx: idx,
-                                });
+                                builder.empty_alternate_at(idx);
                                 continue;
                             }
 
@@ -323,10 +302,7 @@ impl<'a> Module<'a> {
                             if delete_block.is_some() {
                                 // delete this instruction and skip all instrumentation handling (like below)
                                 clear_special_instr_at(&mut builder, idx);
-                                builder.empty_alternate_at(Location::Module {
-                                    func_idx: FunctionID(0), // not used
-                                    instr_idx: idx,
-                                });
+                                builder.empty_alternate_at(idx);
                                 continue;
                             }
                         }
@@ -352,13 +328,7 @@ impl<'a> Module<'a> {
                         // Handle block entry
                         if !block_entry.instrs.is_empty() {
                             resolve_block_entry(&block_entry.instrs, &mut builder, &op, idx);
-                            builder.clear_instr_at(
-                                Location::Module {
-                                    func_idx: FunctionID(0), // not used
-                                    instr_idx: idx,
-                                },
-                                BlockEntry,
-                            );
+                            builder.clear_instr_at(idx, BlockEntry);
                         }
 
                         // Handle block exit
@@ -370,13 +340,7 @@ impl<'a> Module<'a> {
                                 &mut resolve_on_end,
                                 &op,
                             );
-                            builder.clear_instr_at(
-                                Location::Module {
-                                    func_idx: FunctionID(0), // not used
-                                    instr_idx: idx,
-                                },
-                                BlockExit,
-                            );
+                            builder.clear_instr_at(idx, BlockExit);
                         }
 
                         // Handle semantic_after!
@@ -390,13 +354,7 @@ impl<'a> Module<'a> {
                                 &op,
                                 idx,
                             )?;
-                            builder.clear_instr_at(
-                                Location::Module {
-                                    func_idx: FunctionID(0), // not used
-                                    instr_idx: idx,
-                                },
-                                SemanticAfter,
-                            );
+                            builder.clear_instr_at(idx, SemanticAfter);
                         }
                     }
                 }
@@ -493,10 +451,7 @@ fn resolve_function_entry<'a, 'b, 'c>(
 {
     if idx == 0 {
         // we're at the function entry!
-        builder.before_at(Location::Module {
-            func_idx: FunctionID(0), // not used
-            instr_idx: idx,
-        });
+        builder.before_at(idx);
         builder.inject_all(instr_func_on_entry);
 
         // remove the contents of the body now that it's been resolved
@@ -557,10 +512,7 @@ fn resolve_function_exit<'a, 'b, 'c>(
         Operator::ThrowRef |
         Operator::ResumeThrow {..} => {
             // just inject immediately before the instruction
-            builder.before_at(Location::Module {
-                func_idx: FunctionID(0), // not used
-                instr_idx: idx,
-            });
+            builder.before_at(idx);
             builder.inject_all(instr_func_on_exit);
 
             // no need to do next part if we've injected!
@@ -573,10 +525,7 @@ fn resolve_function_exit<'a, 'b, 'c>(
     // and places instr block afterward!
     if idx == builder.body.instructions.len() - 1 {
         // we're at the end of the function!
-        builder.before_at(Location::Module {
-            func_idx: FunctionID(0), // not used
-            instr_idx: idx,
-        });
+        builder.before_at(idx);
         builder.end(); // end the added wrapper block!
         builder.inject_all(instr_func_on_exit);
 
@@ -601,10 +550,7 @@ fn resolve_block_entry<'a, 'b, 'c>(
         | Operator::Else { .. }
         | Operator::TryTable { .. } => {
             // just inject immediately after the start of the block
-            builder.after_at(Location::Module {
-                func_idx: FunctionID(0), // not used
-                instr_idx: idx,
-            });
+            builder.after_at(idx);
             builder.inject_all(block_entry);
 
             // no need to remove the contents of block_entry since we're actually
@@ -652,16 +598,12 @@ fn plan_resolution_block_exit<'a, 'b, 'c>(
     }
 }
 
-fn clear_special_instr_at<'a, 'b>(builder: &mut FunctionModifier<'a, 'b>, idx: usize) {
-    let loc = Location::Module {
-        func_idx: FunctionID(0), // not used
-        instr_idx: idx,
-    };
-    builder.clear_instr_at(loc, BlockAlt);
-    builder.clear_instr_at(loc, BlockEntry);
-    builder.clear_instr_at(loc, BlockExit);
-    builder.clear_instr_at(loc, SemanticAfter);
-    builder.clear_instr_at(loc, BackEdge);
+fn clear_special_instr_at(builder: &mut FunctionModifier, idx: usize) {
+    builder.clear_instr_at(idx, BlockAlt);
+    builder.clear_instr_at(idx, BlockEntry);
+    builder.clear_instr_at(idx, BlockExit);
+    builder.clear_instr_at(idx, SemanticAfter);
+    builder.clear_instr_at(idx, BackEdge);
 }
 
 fn plan_resolution_block_alt<'a, 'b, 'c>(
@@ -682,17 +624,13 @@ where
         | Operator::If { .. }
         | Operator::Else { .. }
         | Operator::TryTable { .. } => {
-            let loc = Location::Module {
-                func_idx: FunctionID(0), // not used
-                instr_idx: idx,
-            };
             if !block_alt.is_empty() {
                 // just inject immediately after the start of the block
-                builder.alternate_at(loc);
+                builder.alternate_at(idx);
                 builder.inject_all(block_alt);
             } else {
                 // remove the instruction!
-                builder.empty_alternate_at(loc);
+                builder.empty_alternate_at(idx);
             }
 
             // no need to remove the contents of block_alt since we're actually
@@ -764,10 +702,7 @@ where
         }
         Operator::Br { .. } => {
             // Branch is always taken, just put the body before the `br`
-            builder.before_at(Location::Module {
-                func_idx: FunctionID(0), // not used
-                instr_idx: idx,
-            });
+            builder.before_at(idx);
             builder.inject_all(semantic_after.as_slice());
         }
         Operator::BrIf { relative_depth }
@@ -804,22 +739,10 @@ where
     let bool_flag_id = scratch_locals.acquire(builder, DataType::I32);
 
     // set flag to true before the opcode
-    builder
-        .before_at(Location::Module {
-            func_idx: FunctionID(0), // not used
-            instr_idx: idx,
-        })
-        .i32_const(1)
-        .local_set(bool_flag_id);
+    builder.before_at(idx).i32_const(1).local_set(bool_flag_id);
 
     // set flag to false after the opcode
-    builder
-        .after_at(Location::Module {
-            func_idx: FunctionID(0), // not used
-            instr_idx: idx,
-        })
-        .i32_const(0)
-        .local_set(bool_flag_id);
+    builder.after_at(idx).i32_const(0).local_set(bool_flag_id);
 
     // BrIf, BrOnCast, BrOnNonNull, BrOnNull
     // the bodies should be inserted immediately after too!
@@ -850,16 +773,12 @@ fn plan_resolution_back_edge<'a, 'b, 'c>(
     'c: 'b,
 {
     let curr_block = *block_stack.last().unwrap(); // should always have something (e.g. func block)
-    let loc = Location::Module {
-        func_idx: FunctionID(0), // not used
-        instr_idx: idx,
-    };
 
     match op {
         Operator::Br { relative_depth } => {
             if let Some(body) = backedge_loops.get(&(curr_block - *relative_depth)) {
                 // back edge unconditionally taken
-                builder.before_at(loc);
+                builder.before_at(idx);
                 builder.inject_all(body.as_slice());
             }
         }
@@ -867,7 +786,7 @@ fn plan_resolution_back_edge<'a, 'b, 'c>(
             if let Some(body) = backedge_loops.get(&(curr_block - *relative_depth)) {
                 // back edge taken if ToS is non-zero
                 let scratch = scratch_locals.acquire(builder, DataType::I32);
-                builder.before_at(loc);
+                builder.before_at(idx);
                 builder.local_tee(scratch);
                 inject_if_body(builder, body.as_slice());
                 builder.local_get(scratch);
@@ -883,7 +802,7 @@ fn plan_resolution_back_edge<'a, 'b, 'c>(
                 .any(|rel| backedge_loops.contains_key(&(curr_block - rel)));
             if targets_a_back_edge {
                 let scratch = scratch_locals.acquire(builder, DataType::I32);
-                builder.before_at(loc);
+                builder.before_at(idx);
                 builder.local_set(scratch);
                 // one guard per table slot that targets a back-edge loop
                 for (slot, t) in targets.targets().enumerate() {
@@ -916,7 +835,7 @@ fn plan_resolution_back_edge<'a, 'b, 'c>(
                 inject_ref_backedge(
                     builder,
                     scratch_locals,
-                    loc,
+                    idx,
                     body.as_slice(),
                     from_ref_type,
                     to_ref_type,
@@ -934,7 +853,7 @@ fn plan_resolution_back_edge<'a, 'b, 'c>(
                 inject_ref_backedge(
                     builder,
                     scratch_locals,
-                    loc,
+                    idx,
                     body.as_slice(),
                     from_ref_type,
                     to_ref_type,
@@ -952,7 +871,7 @@ fn plan_resolution_back_edge<'a, 'b, 'c>(
 fn inject_ref_backedge<'a, 'b, 'c>(
     builder: &mut FunctionModifier<'a, 'b>,
     scratch_locals: &mut ScratchLocals,
-    loc: Location,
+    idx: usize,
     body: &[Operator<'c>],
     from: &wasmparser::RefType,
     to: &wasmparser::RefType,
@@ -961,7 +880,7 @@ fn inject_ref_backedge<'a, 'b, 'c>(
     'c: 'b,
 {
     let scratch = scratch_locals.acquire(builder, DataType::from(wasmparser::ValType::Ref(*from)));
-    builder.before_at(loc);
+    builder.before_at(idx);
     builder.local_tee(scratch);
     if to.is_nullable() {
         builder.ref_test_null(to.heap_type().into());
@@ -1072,15 +991,7 @@ fn resolve_bodies<'a, 'b, 'c>(
     // inject the bodies predicated with the flag
     for InstrBodyFlagged { body, bool_flag } in flagged.iter() {
         // Inject the bodies in the correct mode at the current END opcode
-        let loc = Location::Module {
-            func_idx: FunctionID(0), // not used
-            instr_idx: idx,
-        };
-        match mode {
-            InstrumentationMode::Before => builder.before_at(loc),
-            InstrumentationMode::After => builder.after_at(loc),
-            _ => unreachable!(),
-        };
+        position_at(builder, mode, idx);
 
         if !is_first {
             // injecting multiple, already have an if statement
@@ -1102,17 +1013,17 @@ fn resolve_bodies<'a, 'b, 'c>(
 
     // handle non-flagged bodies
     // Inject the bodies AFTER the current END opcode
-    let loc = Location::Module {
-        func_idx: FunctionID(0), // not used
-        instr_idx: idx,
-    };
-    match mode {
-        InstrumentationMode::Before => builder.before_at(loc),
-        InstrumentationMode::After => builder.after_at(loc),
-        _ => unreachable!(),
-    };
+    position_at(builder, mode, idx);
     for body in not_flagged.iter() {
         // inject body
         builder.inject_all(body);
     }
+}
+
+fn position_at(builder: &mut FunctionModifier, mode: &InstrumentationMode, idx: usize) {
+    match mode {
+        InstrumentationMode::Before => builder.before_at(idx),
+        InstrumentationMode::After => builder.after_at(idx),
+        other => unreachable!("resolve_bodies only injects Before/After, got {other:?}"),
+    };
 }

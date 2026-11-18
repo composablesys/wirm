@@ -29,7 +29,7 @@ pub trait Iterator {
 /// Instructions as defined [here].
 ///
 /// [here]: https://webassembly.github.io/spec/core/binary/instructions.html
-pub trait IteratingInstrumenter<'a>: Instrumenter<'a> + Iterator {
+pub trait IteratingInstrumenter<'a>: Instrumenter<'a, Pos = Location> + Iterator {
     // ==== MODES ====
 
     /// Sets the type of Instrumentation Type of the current location

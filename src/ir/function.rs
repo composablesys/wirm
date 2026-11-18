@@ -10,7 +10,7 @@ use crate::ir::types::{DataType, InjectedInstrs};
 use crate::ir::types::{HasInjectTag, InstrumentationMode};
 use crate::module_builder::AddLocal;
 use crate::opcode::{Inject, InjectAt, Instrumenter, MacroOpcode, Opcode};
-use crate::{Component, Location};
+use crate::Component;
 use wasmparser::{Operator, TypeRef};
 
 // TODO: probably need better reasoning with lifetime here
@@ -205,10 +205,7 @@ impl<'a, 'b> FunctionModifier<'a, 'b> {
             args,
             instr_idx: None,
         };
-        func_modifier.before_at(Location::Module {
-            func_idx: FunctionID(0), // not used
-            instr_idx,
-        });
+        func_modifier.before_at(instr_idx);
         func_modifier
     }
 
@@ -252,18 +249,17 @@ impl<'b> Inject<'b> for FunctionModifier<'_, 'b> {
 }
 impl<'b> InjectAt<'b> for FunctionModifier<'_, 'b> {
     fn inject_at(&mut self, idx: usize, mode: InstrumentationMode, instr: Operator<'b>) {
-        let loc = Location::Module {
-            func_idx: FunctionID(0), // not used
-            instr_idx: idx,
-        };
-        self.set_instrument_mode_at(mode, loc);
-        self.add_instr_at(loc, instr);
+        self.set_instrument_mode_at(mode, idx);
+        self.add_instr_at(idx, instr);
     }
 }
 impl<'b> Opcode<'b> for FunctionModifier<'_, 'b> {}
 impl<'b> MacroOpcode<'b> for FunctionModifier<'_, 'b> {}
 
 impl<'b> Instrumenter<'b> for FunctionModifier<'_, 'b> {
+    // Just address an instruction by its function offset
+    type Pos = usize;
+
     ///Can be called after finishing some instrumentation to reset the mode.
     fn finish_instr(&mut self) {
         self.instr_flag.finish_instr();
@@ -275,14 +271,9 @@ impl<'b> Instrumenter<'b> for FunctionModifier<'_, 'b> {
         self.body.instructions.current_mode(idx)
     }
 
-    fn set_instrument_mode_at(&mut self, mode: InstrumentationMode, loc: Location) {
-        match loc {
-            Location::Module { instr_idx, .. } => {
-                self.instr_idx = Some(instr_idx);
-                self.body.instructions.set_current_mode(instr_idx, mode);
-            }
-            other => panic!("Internal error: Should have gotten module location, got: {other:?}"),
-        }
+    fn set_instrument_mode_at(&mut self, mode: InstrumentationMode, instr_idx: usize) {
+        self.instr_idx = Some(instr_idx);
+        self.body.instructions.set_current_mode(instr_idx, mode);
     }
 
     fn curr_func_instrument_mode(&self) -> &Option<FuncInstrMode> {
@@ -307,64 +298,37 @@ impl<'b> Instrumenter<'b> for FunctionModifier<'_, 'b> {
         }
     }
 
-    fn clear_instr_at(&mut self, loc: Location, mode: InstrumentationMode) {
-        match loc {
-            Location::Module { instr_idx, .. } => {
-                self.body.instructions.clear_instr(instr_idx, mode)
-            }
-            other => {
-                panic!("Internal error: clear_instr_at called with non-module location: {other:?}")
-            }
-        }
+    fn clear_instr_at(&mut self, instr_idx: usize, mode: InstrumentationMode) {
+        self.body.instructions.clear_instr(instr_idx, mode)
     }
 
-    fn add_instr_at(&mut self, loc: Location, instr: Operator<'b>) {
-        match loc {
-            Location::Module { instr_idx, .. } => {
-                self.body.instructions.add_instr(instr_idx, instr)
-            }
-            other => {
-                panic!("Internal error: add_instr_at called with non-module location: {other:?}")
-            }
-        };
+    fn add_instr_at(&mut self, instr_idx: usize, instr: Operator<'b>) {
+        self.body.instructions.add_instr(instr_idx, instr);
     }
 
-    fn empty_alternate_at(&mut self, loc: Location) -> &mut Self {
-        match loc {
-            Location::Module { instr_idx, .. } => self
-                .body
-                .instructions
-                .set_alternate(instr_idx, InjectedInstrs::default()),
-            other => panic!(
-                "Internal error: empty_alternate_at called with non-module location: {other:?}"
-            ),
-        };
+    fn empty_alternate_at(&mut self, instr_idx: usize) -> &mut Self {
+        self.body
+            .instructions
+            .set_alternate(instr_idx, InjectedInstrs::default());
         self
     }
 
-    fn empty_block_alt_at(&mut self, loc: Location) -> &mut Self {
-        match loc {
-            Location::Module { instr_idx, .. } => self
-                .body
-                .instructions
-                .set_block_alt(instr_idx, InjectedInstrs::default()),
-            other => panic!(
-                "Internal error: empty_block_alt_at called with non-module location: {other:?}"
-            ),
-        };
+    fn empty_block_alt_at(&mut self, instr_idx: usize) -> &mut Self {
+        self.body
+            .instructions
+            .set_block_alt(instr_idx, InjectedInstrs::default());
         self
     }
 
-    /// Append data to a tag at the specified location. If a function-level instrumentation
+    /// Append data to a tag at the specified instruction. If a function-level instrumentation
     /// mode is active, this tag will instead be applied to that instrumentation flag
-    /// (meaning the location will be ignored).
-    fn append_tag_at(&mut self, data: Vec<u8>, loc: Location) -> &mut Self {
+    /// (meaning the index will be ignored).
+    fn append_tag_at(&mut self, data: Vec<u8>, instr_idx: usize) -> &mut Self {
         if self.instr_flag.current_mode.is_some() {
             // append at function level
             self.instr_flag.append_to_tag(data);
         } else {
             // append at instruction level
-            let (Location::Component { instr_idx, .. } | Location::Module { instr_idx, .. }) = loc;
             self.body.instructions.append_to_tag(instr_idx, data);
         }
         self
