@@ -148,30 +148,15 @@ impl<'a> Module<'a> {
                             // The block ID will just be the curr len of the stack!
                             block_stack.push(block_stack.len() as u32);
 
-                            // Handle block alt
-                            if let Some(block_alt) = &instrumentation.block_alt {
-                                // only plan to handle if we're not already removing the block this instr is in
-                                if delete_block.is_none()
-                                    && plan_resolution_block_alt(
-                                        &block_alt.instrs,
-                                        &mut builder,
-                                        &mut retain_end,
-                                        &op,
-                                        idx,
-                                    )
-                                {
-                                    // clear any special instr at this location (alt is prioritized)
-                                    clear_special_instr_at(&mut builder, idx);
-                                    // we've got a match, which injected the alt body. continue to the next instruction
-                                    delete_block = Some(*block_stack.last().unwrap());
-                                    continue;
-                                }
-                            }
-
-                            if delete_block.is_some() {
-                                // delete this block and skip all instrumentation handling (like below)
-                                clear_special_instr_at(&mut builder, idx);
-                                builder.empty_alternate_at(idx);
+                            if handle_block_alt_or_deletion(
+                                &mut builder,
+                                instrumentation.block_alt.as_ref(),
+                                &mut delete_block,
+                                &mut retain_end,
+                                &block_stack,
+                                &op,
+                                idx,
+                            ) {
                                 continue;
                             }
 
@@ -193,30 +178,15 @@ impl<'a> Module<'a> {
                             }
                             resolve_on_else_or_end.clear();
 
-                            // Handle block alt
-                            if let Some(block_alt) = &instrumentation.block_alt {
-                                // only plan to handle if we're not already removing the block this instr is in
-                                if delete_block.is_none()
-                                    && plan_resolution_block_alt(
-                                        &block_alt.instrs,
-                                        &mut builder,
-                                        &mut retain_end,
-                                        &op,
-                                        idx,
-                                    )
-                                {
-                                    // clear any special instr at this location (alt is prioritized)
-                                    clear_special_instr_at(&mut builder, idx);
-                                    // we've got a match, which injected the alt body. continue to the next instruction
-                                    delete_block = Some(*block_stack.last().unwrap());
-                                    continue;
-                                }
-                            }
-
-                            if delete_block.is_some() {
-                                // delete this block and skip all instrumentation handling (like below)
-                                clear_special_instr_at(&mut builder, idx);
-                                builder.empty_alternate_at(idx);
+                            if handle_block_alt_or_deletion(
+                                &mut builder,
+                                instrumentation.block_alt.as_ref(),
+                                &mut delete_block,
+                                &mut retain_end,
+                                &block_stack,
+                                &op,
+                                idx,
+                            ) {
                                 continue;
                             }
                         }
@@ -648,6 +618,40 @@ where
     matched
 }
 
+fn handle_block_alt_or_deletion<'a, 'b, 'c>(
+    builder: &mut FunctionModifier<'a, 'b>,
+    block_alt: Option<&InjectedInstrs<'c>>,
+    delete_block: &mut Option<BlockID>,
+    retain_end: &mut bool,
+    block_stack: &[BlockID],
+    op: &Operator,
+    idx: usize,
+) -> bool
+where
+    'c: 'b,
+{
+    // Handle block alt -- only if we're not already removing the block this instr is in.
+    if let Some(block_alt) = block_alt {
+        if delete_block.is_none()
+            && plan_resolution_block_alt(&block_alt.instrs, builder, retain_end, op, idx)
+        {
+            // clear any special instr at this location (alt is prioritized), then skip the rest
+            clear_special_instr_at(builder, idx);
+            *delete_block = Some(*block_stack.last().unwrap());
+            return true;
+        }
+    }
+
+    // Already deleting this block: drop the instruction and skip all instrumentation handling.
+    if delete_block.is_some() {
+        clear_special_instr_at(builder, idx);
+        builder.empty_alternate_at(idx);
+        return true;
+    }
+
+    false
+}
+
 fn plan_resolution_semantic_after<'a, 'b, 'c>(
     semantic_after: &InstrBody<'c>,
     builder: &mut FunctionModifier<'a, 'b>,
@@ -991,7 +995,7 @@ fn resolve_bodies<'a, 'b, 'c>(
     // inject the bodies predicated with the flag
     for InstrBodyFlagged { body, bool_flag } in flagged.iter() {
         // Inject the bodies in the correct mode at the current END opcode
-        position_at(builder, mode, idx);
+        builder.set_instrument_mode_at(*mode, idx);
 
         if !is_first {
             // injecting multiple, already have an if statement
@@ -1012,18 +1016,9 @@ fn resolve_bodies<'a, 'b, 'c>(
     }
 
     // handle non-flagged bodies
-    // Inject the bodies AFTER the current END opcode
-    position_at(builder, mode, idx);
+    builder.set_instrument_mode_at(*mode, idx);
     for body in not_flagged.iter() {
         // inject body
         builder.inject_all(body);
     }
-}
-
-fn position_at(builder: &mut FunctionModifier, mode: &InstrumentationMode, idx: usize) {
-    match mode {
-        InstrumentationMode::Before => builder.before_at(idx),
-        InstrumentationMode::After => builder.after_at(idx),
-        other => unreachable!("resolve_bodies only injects Before/After, got {other:?}"),
-    };
 }
