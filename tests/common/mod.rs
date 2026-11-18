@@ -138,6 +138,8 @@ where
         instrument(&mut mod_it);
     }
     let result = module.encode().expect("error encoding");
+    validate::validate_bytes(&result)
+        .unwrap_or_else(|e| panic!("instrumented {file} failed to validate: {e:?}"));
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     check_instrumentation_encoding(&out, file).expect("instrumentation encoding mismatch");
 }

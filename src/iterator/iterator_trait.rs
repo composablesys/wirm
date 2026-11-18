@@ -29,7 +29,7 @@ pub trait Iterator {
 /// Instructions as defined [here].
 ///
 /// [here]: https://webassembly.github.io/spec/core/binary/instructions.html
-pub trait IteratingInstrumenter<'a>: Instrumenter<'a> + Iterator {
+pub trait IteratingInstrumenter<'a>: Instrumenter<'a, Pos = Location> + Iterator {
     // ==== MODES ====
 
     /// Sets the type of Instrumentation Type of the current location
@@ -88,6 +88,12 @@ pub trait IteratingInstrumenter<'a>: Instrumenter<'a> + Iterator {
     /// Mark the current location to InstrumentBlockAlt
     fn block_alt(&mut self) -> &mut Self {
         self.set_instrument_mode(InstrumentationMode::BlockAlt);
+        self
+    }
+
+    /// Mark the current location (must be a `loop`) to InstrumentBackEdge.
+    fn back_edge(&mut self) -> &mut Self {
+        self.set_instrument_mode(InstrumentationMode::BackEdge);
         self
     }
 

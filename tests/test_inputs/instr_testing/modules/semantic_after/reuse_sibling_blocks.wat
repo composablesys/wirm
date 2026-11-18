@@ -1,0 +1,51 @@
+(module
+  (type (;0;) (func (param i32)))
+  (func (;0;) (type 0) (param i32)
+    ;; << (local i32)
+    block ;; label = @1
+      local.get 0
+      ;; << i32.const 1
+      ;; << local.set 1
+      br_if 0 (;@1;)
+      ;; << i32.const 0
+      ;; << local.set 1
+      ;; << i32.const 1234
+      ;; << drop
+    end
+    ;; << local.get 1
+    ;; << if ;; label = @1
+      ;; << i32.const 1234
+      ;; << drop
+    ;; << end
+    block ;; label = @1
+      local.get 0
+      ;; << i32.const 1
+      ;; << local.set 1
+      br_if 0 (;@1;)
+      ;; << i32.const 0
+      ;; << local.set 1
+      ;; << i32.const 1234
+      ;; << drop
+    end
+    ;; << local.get 1
+    ;; << if ;; label = @1
+      ;; << i32.const 1234
+      ;; << drop
+    ;; << end
+    block ;; label = @1
+      local.get 0
+      ;; << i32.const 1
+      ;; << local.set 1
+      br_if 0 (;@1;)
+      ;; << i32.const 0
+      ;; << local.set 1
+      ;; << i32.const 1234
+      ;; << drop
+    end
+    ;; << local.get 1
+    ;; << if ;; label = @1
+      ;; << i32.const 1234
+      ;; << drop
+    ;; << end
+  )
+)

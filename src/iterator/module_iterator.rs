@@ -136,6 +136,8 @@ impl<'a> InjectAt<'a> for ModuleIterator<'_, 'a> {
 impl<'a> Opcode<'a> for ModuleIterator<'_, 'a> {}
 impl<'a> MacroOpcode<'a> for ModuleIterator<'_, 'a> {}
 impl<'a> Instrumenter<'a> for ModuleIterator<'_, 'a> {
+    type Pos = Location;
+
     ///Can be called after finishing some instrumentation to reset the mode.
     fn finish_instr(&mut self) {
         if let (

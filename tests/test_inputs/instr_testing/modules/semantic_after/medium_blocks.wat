@@ -10,23 +10,21 @@
         br_table 0 (;@2;) $hi
         ;; << i32.const 0
         ;; << local.set 0
-        i32.const 1
       end
       ;; << local.get 0
       ;; << if ;; label = @2
-      ;; <<   i32.const 34
-      ;; <<   drop
+        ;; << i32.const 34
+        ;; << drop
       ;; << end
       ;; << i32.const 12
       ;; << drop
     end
     ;; << local.get 0
     ;; << if ;; label = @1
-    ;; <<   i32.const 34
-    ;; <<   drop
+      ;; << i32.const 34
+      ;; << drop
     ;; << end
     ;; << i32.const 12
     ;; << drop
   )
-  (memory (;0;) 1)
 )

@@ -70,6 +70,30 @@ fn test_semantic_after_supported_ops() {
     run_check_works(BRANCHING_OPERATORS, InstrumentationMode::SemanticAfter);
 }
 
+#[test]
+fn test_back_edge_unsupported_ops() {
+    run_check_panics(
+        NON_SPECIAL_OPERATORS,
+        InstrumentationMode::BackEdge,
+        "back edge",
+    );
+    run_check_panics(
+        BRANCHING_OPERATORS,
+        InstrumentationMode::BackEdge,
+        "back edge",
+    );
+    // only `loop` is a valid target; other block-style ops are not
+    run_check_panics(
+        NON_LOOP_BLOCK_STYLE_OPERATORS,
+        InstrumentationMode::BackEdge,
+        "back edge",
+    );
+}
+#[test]
+fn test_back_edge_supported_ops() {
+    run_check_works(LOOP_OPERATORS, InstrumentationMode::BackEdge);
+}
+
 // ==== HELPER FUNCTIONS ====
 
 pub fn run_check_works(operators: &[Operator], mode: InstrumentationMode) {
@@ -155,6 +179,21 @@ const BLOCK_STYLE_OPERATORS: &[Operator] = &[
         blockty: BlockType::Empty,
     },
     Operator::Loop {
+        blockty: BlockType::Empty,
+    },
+    Operator::If {
+        blockty: BlockType::Empty,
+    },
+    Operator::Else,
+];
+
+// `back_edge` is only valid on `loop`.
+const LOOP_OPERATORS: &[Operator] = &[Operator::Loop {
+    blockty: BlockType::Empty,
+}];
+
+const NON_LOOP_BLOCK_STYLE_OPERATORS: &[Operator] = &[
+    Operator::Block {
         blockty: BlockType::Empty,
     },
     Operator::If {

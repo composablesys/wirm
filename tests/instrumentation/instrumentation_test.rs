@@ -367,7 +367,7 @@ fn test_block_alt_remove_if_with_else() {
                 mod_it,
                 &vec![(
                     SupportedOperators::If,
-                    (InstrumentationMode::BlockAlt, vec![]),
+                    (InstrumentationMode::BlockAlt, vec![Operator::Drop]),
                 )],
             );
         },
@@ -1456,6 +1456,53 @@ fn test_semantic_after_simple_1br() {
 }
 
 #[test]
+fn test_semantic_after_reuse_sibling_blocks() {
+    run_module_instr_test(
+        "tests/test_inputs/instr_testing/modules/semantic_after/reuse_sibling_blocks.wat",
+        |mod_it| {
+            run_block_injection(
+                mod_it,
+                &vec![(
+                    SupportedOperators::BrIf,
+                    (
+                        InstrumentationMode::SemanticAfter,
+                        vec![Operator::I32Const { value: 1234 }, Operator::Drop],
+                    ),
+                )],
+            );
+        },
+    );
+}
+
+#[test]
+fn test_semantic_after_reuse_br_table() {
+    run_module_instr_test(
+        "tests/test_inputs/instr_testing/modules/semantic_after/reuse_br_table.wat",
+        |mod_it| {
+            run_block_injection(
+                mod_it,
+                &vec![
+                    (
+                        SupportedOperators::BrIf,
+                        (
+                            InstrumentationMode::SemanticAfter,
+                            vec![Operator::I32Const { value: 1234 }, Operator::Drop],
+                        ),
+                    ),
+                    (
+                        SupportedOperators::BrTable,
+                        (
+                            InstrumentationMode::SemanticAfter,
+                            vec![Operator::I32Const { value: 1234 }, Operator::Drop],
+                        ),
+                    ),
+                ],
+            );
+        },
+    );
+}
+
+#[test]
 fn test_semantic_after_simple_1br_if() {
     run_module_instr_test(
         "tests/test_inputs/instr_testing/modules/semantic_after/simple_1br_if.wat",
@@ -1588,4 +1635,112 @@ fn add_imports_when_has_start_func() {
     let result = module.encode().expect("error");
     let out = wasmprinter::print_bytes(result).expect("couldn't translate wasm to wat");
     check_instrumentation_encoding(&out, file).expect("instrumentation encoding mismatch");
+}
+
+// ==== BACK EDGE ====
+
+/// Attach `BackEdge` instrumentation to every `loop` in the module.
+fn inject_back_edge(mod_it: &mut wirm::iterator::module_iterator::ModuleIterator<'_, '_>) {
+    run_block_injection(
+        mod_it,
+        &vec![(
+            SupportedOperators::Loop,
+            (
+                InstrumentationMode::BackEdge,
+                vec![Operator::I32Const { value: 1234 }, Operator::Drop],
+            ),
+        )],
+    );
+}
+
+#[test]
+fn test_back_edge_simple_1br() {
+    run_module_instr_test(
+        "tests/test_inputs/instr_testing/modules/back_edge/simple_1br.wat",
+        inject_back_edge,
+    );
+}
+
+#[test]
+fn test_back_edge_simple_1br_if() {
+    run_module_instr_test(
+        "tests/test_inputs/instr_testing/modules/back_edge/simple_1br_if.wat",
+        inject_back_edge,
+    );
+}
+
+#[test]
+fn test_back_edge_simple_1br_table() {
+    run_module_instr_test(
+        "tests/test_inputs/instr_testing/modules/back_edge/simple_1br_table.wat",
+        inject_back_edge,
+    );
+}
+
+#[test]
+fn test_back_edge_br_table_default() {
+    run_module_instr_test(
+        "tests/test_inputs/instr_testing/modules/back_edge/br_table_default_backedge.wat",
+        inject_back_edge,
+    );
+}
+
+#[test]
+fn test_back_edge_nested_outer_loop() {
+    run_module_instr_test(
+        "tests/test_inputs/instr_testing/modules/back_edge/nested_outer_loop.wat",
+        inject_back_edge,
+    );
+}
+
+#[test]
+fn test_back_edge_non_backedge_ignored() {
+    run_module_instr_test(
+        "tests/test_inputs/instr_testing/modules/back_edge/non_backedge_ignored.wat",
+        inject_back_edge,
+    );
+}
+
+#[test]
+fn test_back_edge_reuse_two_br_if() {
+    run_module_instr_test(
+        "tests/test_inputs/instr_testing/modules/back_edge/reuse_two_br_if.wat",
+        inject_back_edge,
+    );
+}
+
+#[test]
+fn test_back_edge_gc_br_on_cast() {
+    run_module_instr_test(
+        "tests/test_inputs/instr_testing/modules/back_edge/gc_br_on_cast.wat",
+        inject_back_edge,
+    );
+}
+
+#[test]
+fn test_back_edge_gc_br_on_cast_fail() {
+    run_module_instr_test(
+        "tests/test_inputs/instr_testing/modules/back_edge/gc_br_on_cast_fail.wat",
+        inject_back_edge,
+    );
+}
+
+#[test]
+fn test_back_edge_encodings_validate() {
+    for src in [
+        "(module (func block loop br 0 end end))",
+        "(module (func (param i32) block loop local.get 0 br_if 0 end end))",
+        "(module (func (param i32) block loop local.get 0 br_table 0 1 end end))",
+        // br_table with two slots targeting the same loop (exercises per-entry guards)
+        "(module (func (param i32) block loop local.get 0 br_table 0 0 1 end end))",
+        "(module (func loop block loop br 2 end end end))",
+        "(module (func block loop br 1 end end))",
+        // GC cast back edges
+        "(module (type (;0;) (struct)) (func (param (ref 0)) local.get 0 \
+         loop (param (ref 0)) br_on_cast 0 (ref 0) (ref 0) drop end))",
+        "(module (type (;0;) (struct)) (func (param (ref null 0)) local.get 0 \
+         loop (param (ref null 0)) br_on_cast_fail 0 (ref null 0) (ref 0) drop end))",
+    ] {
+        run_module_instr_validate(src, inject_back_edge);
+    }
 }

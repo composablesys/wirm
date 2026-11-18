@@ -174,6 +174,8 @@ impl<'b> InjectAt<'b> for ComponentIterator<'_, 'b> {
 impl<'b> Opcode<'b> for ComponentIterator<'_, 'b> {}
 impl<'b> MacroOpcode<'b> for ComponentIterator<'_, 'b> {}
 impl<'b> Instrumenter<'b> for ComponentIterator<'_, 'b> {
+    type Pos = Location;
+
     ///Can be called after finishing some instrumentation to reset the mode.
     fn finish_instr(&mut self) {
         let (mod_idx, func_idx, instr_idx) = self.comp_iterator.curr_loc_indices();

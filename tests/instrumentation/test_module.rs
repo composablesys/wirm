@@ -6,7 +6,7 @@ use wirm::ir::module::module_functions::FuncKind::{Import, Local};
 use wirm::ir::module::module_functions::{ImportedFunction, LocalFunction};
 use wirm::ir::types::{Body, InitExpr, Value};
 use wirm::opcode::Instrumenter;
-use wirm::{DataType, InitInstr, Location, Module, Opcode};
+use wirm::{DataType, InitInstr, Module, Opcode};
 
 use crate::common::check_instrumentation_encoding;
 
@@ -689,10 +689,7 @@ fn before_at_non_zero_idx_on_added_local_fn() {
     let new_fn_id = builder.finish_module(&mut module);
 
     let mut new_fn_mod = module.functions.get_fn_modifier(new_fn_id).unwrap();
-    new_fn_mod.before_at(Location::Module {
-        func_idx: FunctionID(0),
-        instr_idx: 1,
-    });
+    new_fn_mod.before_at(1);
     new_fn_mod.i32_const(77);
     new_fn_mod.drop();
 
@@ -713,10 +710,7 @@ fn alternate_at_on_added_local_fn() {
     let new_fn_id = builder.finish_module(&mut module);
 
     let mut new_fn_mod = module.functions.get_fn_modifier(new_fn_id).unwrap();
-    new_fn_mod.alternate_at(Location::Module {
-        func_idx: FunctionID(0),
-        instr_idx: 0,
-    });
+    new_fn_mod.alternate_at(0);
     new_fn_mod.i32_const(88);
 
     let printed = encoded_wat(&module);
