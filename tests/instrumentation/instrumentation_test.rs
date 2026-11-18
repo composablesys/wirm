@@ -367,7 +367,9 @@ fn test_block_alt_remove_if_with_else() {
                 mod_it,
                 &vec![(
                     SupportedOperators::If,
-                    (InstrumentationMode::BlockAlt, vec![]),
+                    (InstrumentationMode::BlockAlt, vec![
+                        Operator::Drop
+                    ]),
                 )],
             );
         },
@@ -1463,7 +1465,7 @@ fn test_semantic_after_reuse_sibling_blocks() {
             run_block_injection(
                 mod_it,
                 &vec![(
-                    SupportedOperators::Br,
+                    SupportedOperators::BrIf,
                     (
                         InstrumentationMode::SemanticAfter,
                         vec![Operator::I32Const { value: 1234 }, Operator::Drop],
@@ -1483,7 +1485,7 @@ fn test_semantic_after_reuse_br_table() {
                 mod_it,
                 &vec![
                     (
-                        SupportedOperators::Br,
+                        SupportedOperators::BrIf,
                         (
                             InstrumentationMode::SemanticAfter,
                             vec![Operator::I32Const { value: 1234 }, Operator::Drop],
@@ -1673,6 +1675,14 @@ fn test_back_edge_simple_1br_if() {
 fn test_back_edge_simple_1br_table() {
     run_module_instr_test(
         "tests/test_inputs/instr_testing/modules/back_edge/simple_1br_table.wat",
+        inject_back_edge,
+    );
+}
+
+#[test]
+fn test_back_edge_br_table_default() {
+    run_module_instr_test(
+        "tests/test_inputs/instr_testing/modules/back_edge/br_table_default_backedge.wat",
         inject_back_edge,
     );
 }

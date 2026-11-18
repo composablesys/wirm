@@ -1,7 +1,8 @@
 (module
   (type (;0;) (func))
+  (memory (;0;) 1)
   (func (;0;) (type 0)
-    ;; << (local i32 i32 i32 i32)
+    ;; << (local i32 i32 i32)
     block ;; label = @1
       block ;; label = @2
         i32.const 0
@@ -50,30 +51,23 @@
           end
           ;; << local.get 1
           ;; << if ;; label = @4
-          ;; <<   i32.const 78
-          ;; <<   drop
+            ;; << i32.const 78
+            ;; << drop
           ;; << else
-          ;; <<   local.get 2
-          ;; <<   if ;; label = @5
-          ;; <<     i32.const 78
-          ;; <<     drop
-          ;; <<   end
+            ;; << local.get 2
+            ;; << if ;; label = @5
+              ;; << i32.const 78
+              ;; << drop
+            ;; << end
           ;; << end
           ;; << i32.const 12
           ;; << drop
           loop ;; label = @4
             i32.const 0
-            ;; << i32.const 1
-            ;; << local.set 3
+            ;; << i32.const 56
+            ;; << drop
             br 0 (;@4;)
-            ;; << i32.const 0
-            ;; << local.set 3
           end
-          ;; << local.get 3
-          ;; << if ;; label = @4
-          ;; <<   i32.const 56
-          ;; <<   drop
-          ;; << end
           ;; << i32.const 23
           ;; << drop
         end
@@ -82,31 +76,30 @@
       end
       ;; << local.get 1
       ;; << if ;; label = @2
-      ;; <<   i32.const 78
-      ;; <<   drop
+        ;; << i32.const 78
+        ;; << drop
       ;; << end
       ;; << i32.const 12
       ;; << drop
     end
     ;; << local.get 0
     ;; << if ;; label = @1
-    ;; <<   i32.const 67
-    ;; <<   drop
+      ;; << i32.const 67
+      ;; << drop
     ;; << else
-    ;; <<   local.get 1
-    ;; <<   if ;; label = @2
-    ;; <<     i32.const 78
-    ;; <<     drop
-    ;; <<   else
-    ;; <<     local.get 2
-    ;; <<     if ;; label = @2
-    ;; <<       i32.const 78
-    ;; <<       drop
-    ;; <<     end
-    ;; <<   end
+      ;; << local.get 1
+      ;; << if ;; label = @2
+        ;; << i32.const 78
+        ;; << drop
+      ;; << else
+        ;; << local.get 2
+        ;; << if ;; label = @3
+          ;; << i32.const 78
+          ;; << drop
+        ;; << end
+      ;; << end
     ;; << end
     ;; << i32.const 12
     ;; << drop
   )
-  (memory (;0;) 1)
 )

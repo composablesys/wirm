@@ -1,12 +1,12 @@
 (module
   (type (;0;) (func))
+  (memory (;0;) 1)
   (func (;0;) (type 0)
     i32.const 0
     if
-      i32.const 0
-      i32.const 1
       block
         block
+          i32.const 1
           if
             i32.const 0
             drop
@@ -20,5 +20,4 @@
       end
     end
   )
-  (memory (;0;) 1)
 )

@@ -9,6 +9,7 @@
       i32.const 1 ;; rm
       drop ;; rm
     end ;; rm
+    ;; << drop
   )
   (memory (;0;) 1)
 )
