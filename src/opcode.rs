@@ -324,6 +324,12 @@ pub trait Instrumenter<'a> {
         self
     }
 
+    /// Injects back edge instrumentation at a given location (must be a `loop`)
+    fn back_edge_at(&mut self, loc: Location) -> &mut Self {
+        self.set_instrument_mode_at(InstrumentationMode::BackEdge, loc);
+        self
+    }
+
     /// Injects an empty block alternate at a given location
     fn empty_block_alt_at(&mut self, loc: Location) -> &mut Self;
 

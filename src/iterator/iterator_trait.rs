@@ -91,6 +91,12 @@ pub trait IteratingInstrumenter<'a>: Instrumenter<'a> + Iterator {
         self
     }
 
+    /// Mark the current location (must be a `loop`) to InstrumentBackEdge.
+    fn back_edge(&mut self) -> &mut Self {
+        self.set_instrument_mode(InstrumentationMode::BackEdge);
+        self
+    }
+
     /// Insert an empty alt block at the current location
     /// Effectively removes the block
     fn empty_block_alt(&mut self) -> &mut Self {

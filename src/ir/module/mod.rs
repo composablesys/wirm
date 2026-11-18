@@ -24,7 +24,9 @@ use crate::ir::module::names::{indirect_namemap_parser2encoder, namemap_parser2e
 use crate::ir::module::reindex::fix_op_id_mapping;
 use crate::ir::module::side_effects::{InjectType, Injection};
 use crate::ir::types;
-use crate::ir::types::InstrumentationMode::{BlockAlt, BlockEntry, BlockExit, SemanticAfter};
+use crate::ir::types::InstrumentationMode::{
+    BackEdge, BlockAlt, BlockEntry, BlockExit, SemanticAfter,
+};
 use crate::ir::types::{
     BlockType, Body, CustomSections, DataSegment, DataSegmentKind, ElementItems, ElementKind,
     Instructions, InstrumentationFlag,
@@ -810,6 +812,8 @@ impl<'a> Module<'a> {
                     BlockID,
                     HashMap<InstrumentationMode, InstrToInject>,
                 > = HashMap::new();
+                let mut backedge_loops: HashMap<BlockID, Vec<Operator>> = HashMap::new();
+
                 if let Some(on_exit) = &mut instr_func_on_exit {
                     if !on_exit.instrs.is_empty() {
                         let on_entry = instr_func_on_entry.get_or_insert_with(|| {
@@ -852,6 +856,8 @@ impl<'a> Module<'a> {
                     .to_vec()
                     .into_iter()
                     .zip(flags);
+
+                let mut scratch_locals = ScratchLocals::default();
                 for (idx, (op, instrumentation)) in readable_copy_of_body.enumerate() {
                     // resolve function-level instrumentation
                     if let Some(on_entry) = &mut instr_func_on_entry {
@@ -903,6 +909,22 @@ impl<'a> Module<'a> {
                                     instr_idx: idx,
                                 });
                                 continue;
+                            }
+
+                            if let Operator::Loop { .. } = op {
+                                if !instrumentation.back_edge.instrs.is_empty() {
+                                    backedge_loops.insert(
+                                        *block_stack.last().unwrap(),
+                                        instrumentation.back_edge.instrs.clone(),
+                                    );
+                                    builder.clear_instr_at(
+                                        Location::Module {
+                                            func_idx: FunctionID(0), // not used
+                                            instr_idx: idx,
+                                        },
+                                        BackEdge,
+                                    );
+                                }
                             }
                         }
                         Operator::Else => {
@@ -990,7 +1012,43 @@ impl<'a> Module<'a> {
                                         // resolve bodies at the end
                                         resolve_bodies(&mut builder, mode, instr_to_inject, idx);
                                     }
+                                    for instr_to_inject in to_resolve.values() {
+                                        for flagged in &instr_to_inject.flagged {
+                                            // we've finished this flag's read now, release it
+                                            scratch_locals.release_read(flagged.bool_flag);
+                                        }
+                                    }
                                 }
+
+                                backedge_loops.remove(&block_id);
+                            }
+                        }
+                        Operator::Br { .. }
+                        | Operator::BrIf { .. }
+                        | Operator::BrTable { .. }
+                        | Operator::BrOnCast { .. }
+                        | Operator::BrOnCastFail { .. }
+                        | Operator::BrOnNull { .. }
+                        | Operator::BrOnNonNull { .. } => {
+                            if delete_block.is_some() {
+                                // delete this instruction and skip all instrumentation handling (like below)
+                                clear_special_instr_at(&mut builder, idx);
+                                builder.empty_alternate_at(Location::Module {
+                                    func_idx: FunctionID(0), // not used
+                                    instr_idx: idx,
+                                });
+                                continue;
+                            }
+
+                            if !backedge_loops.is_empty() {
+                                plan_resolution_back_edge(
+                                    &mut builder,
+                                    &mut scratch_locals,
+                                    &backedge_loops,
+                                    &block_stack,
+                                    &op,
+                                    idx,
+                                );
                             }
                         }
                         _ => {
@@ -1015,7 +1073,8 @@ impl<'a> Module<'a> {
                             semantic_after,
                             block_entry,
                             block_exit,
-                            block_alt: _, // handled before here!
+                            block_alt: _,  // handled before here!
+                            back_edge: _,  // handled before here!
                             before: _,
                             after: _,
                             alternate: _,
@@ -1058,6 +1117,7 @@ impl<'a> Module<'a> {
                             plan_resolution_semantic_after(
                                 &semantic_after.instrs,
                                 &mut builder,
+                                &mut scratch_locals,
                                 &block_stack,
                                 &mut resolve_on_end,
                                 &op,
@@ -2344,9 +2404,9 @@ pub trait LocalOrImport {
     fn is_deleted(&self) -> bool;
 }
 
-// ================================
-// ==== Semantic After Helpers ====
-// ================================
+// =========================================
+// ==== Special Instrumentation Helpers ====
+// =========================================
 
 type BlockID = u32;
 type InstrBody<'a> = Vec<Operator<'a>>;
@@ -2357,6 +2417,69 @@ struct InstrBodyFlagged<'a> {
 struct InstrToInject<'a> {
     flagged: Vec<InstrBodyFlagged<'a>>,
     not_flagged: Vec<InstrBody<'a>>,
+}
+
+#[derive(Default)]
+struct ScratchLocals {
+    /// locals available for reuse
+    free: HashMap<DataType, Vec<LocalID>>,
+    /// Type of each currently-acquired local, so release only needs the id.
+    ty_of: HashMap<LocalID, DataType>,
+    /// Locals that still have outstanding reads
+    pending_reads: HashMap<LocalID, usize>,
+}
+
+impl ScratchLocals {
+    fn acquire(&mut self, builder: &mut FunctionModifier, ty: DataType) -> LocalID {
+        let id = match self.free.get_mut(&ty).and_then(Vec::pop) {
+            Some(id) => id,
+            None => Self::alloc(builder, ty),
+        };
+        self.ty_of.insert(id, ty);
+        id
+    }
+
+    /// Return a local to the pool for reuse. Call only once its final read has been emitted.
+    fn release(&mut self, id: LocalID) {
+        if let Some(ty) = self.ty_of.remove(&id) {
+            self.free.entry(ty).or_default().push(id);
+        }
+    }
+
+    /// `id` will be read once more before it can be released
+    fn add_read(&mut self, id: LocalID) {
+        *self.pending_reads.entry(id).or_insert(0) += 1;
+    }
+
+    /// One of the reads has been done, release it once none remain.
+    fn release_read(&mut self, id: LocalID) {
+        if let Some(remaining) = self.pending_reads.get_mut(&id) {
+            *remaining -= 1;
+            if *remaining == 0 {
+                self.pending_reads.remove(&id);
+                self.release(id);
+            }
+        }
+    }
+
+    /// Allocate a brand-new local of the given type.
+    fn alloc(builder: &mut FunctionModifier, ty: DataType) -> LocalID {
+        add_local(
+            ty,
+            builder.args.len(),
+            &mut builder.body.num_locals,
+            &mut builder.body.locals,
+        )
+    }
+}
+
+fn inject_if_body<'a, 'b, 'c>(builder: &mut FunctionModifier<'a, 'b>, body: &[Operator<'c>])
+where
+    'c: 'b,
+{
+    builder.if_stmt(BlockType::Empty); // TODO -- breaks for instrumentation that returns stuff
+    builder.inject_all(body);
+    builder.end();
 }
 
 fn resolve_function_entry<'a, 'b, 'c>(
@@ -2536,6 +2659,7 @@ fn clear_special_instr_at<'a, 'b>(builder: &mut FunctionModifier<'a, 'b>, idx: u
     builder.clear_instr_at(loc, BlockEntry);
     builder.clear_instr_at(loc, BlockExit);
     builder.clear_instr_at(loc, SemanticAfter);
+    builder.clear_instr_at(loc, BackEdge);
 }
 
 fn plan_resolution_block_alt<'a, 'b, 'c>(
@@ -2587,6 +2711,7 @@ where
 fn plan_resolution_semantic_after<'a, 'b, 'c>(
     semantic_after: &InstrBody<'c>,
     builder: &mut FunctionModifier<'a, 'b>,
+    scratch_locals: &mut ScratchLocals,
     block_stack: &[BlockID],
     resolve_on_end: &mut HashMap<BlockID, HashMap<InstrumentationMode, InstrToInject<'c>>>,
     op: &Operator,
@@ -2612,22 +2737,22 @@ where
             );
         }
         Operator::BrTable { targets } => {
-            let bool_flag_id = create_bool_flag(builder, idx, op, semantic_after)?;
-            targets.targets().for_each(|target| {
-                if let Ok(relative_depth) = target {
-                    save_flagged_body_to_resolve(
-                        resolve_on_end,
-                        InstrumentationMode::After,
-                        semantic_after,
-                        bool_flag_id,
-                        relative_depth,
-                        *block_stack.last().unwrap(),
-                    );
-                }
-            });
+            let bool_flag_id = create_bool_flag(builder, scratch_locals, idx, op, semantic_after)?;
+            for relative_depth in targets.targets().flatten() {
+                save_flagged_body_to_resolve(
+                    resolve_on_end,
+                    scratch_locals,
+                    InstrumentationMode::After,
+                    semantic_after,
+                    bool_flag_id,
+                    relative_depth,
+                    *block_stack.last().unwrap(),
+                );
+            }
             // handle the default as well
             save_flagged_body_to_resolve(
                 resolve_on_end,
+                scratch_locals,
                 InstrumentationMode::After,
                 semantic_after,
                 bool_flag_id,
@@ -2635,15 +2760,23 @@ where
                 *block_stack.last().unwrap(),
             );
         }
-        Operator::Br { relative_depth }
-        | Operator::BrIf { relative_depth }
+        Operator::Br { .. } => {
+            // Branch is always taken, just put the body before the `br`
+            builder.before_at(Location::Module {
+                func_idx: FunctionID(0), // not used
+                instr_idx: idx,
+            });
+            builder.inject_all(semantic_after.as_slice());
+        }
+        Operator::BrIf { relative_depth }
         | Operator::BrOnCast { relative_depth, .. }
         | Operator::BrOnCastFail { relative_depth, .. }
         | Operator::BrOnNonNull { relative_depth }
         | Operator::BrOnNull { relative_depth } => {
-            let bool_flag_id = create_bool_flag(builder, idx, op, semantic_after)?;
+            let bool_flag_id = create_bool_flag(builder, scratch_locals, idx, op, semantic_after)?;
             save_flagged_body_to_resolve(
                 resolve_on_end,
+                scratch_locals,
                 InstrumentationMode::After,
                 semantic_after,
                 bool_flag_id,
@@ -2658,6 +2791,7 @@ where
 
 fn create_bool_flag<'a, 'b, 'c>(
     builder: &mut FunctionModifier<'a, 'b>,
+    scratch_locals: &mut ScratchLocals,
     idx: usize,
     op: &Operator,
     semantic_after: &Vec<Operator<'c>>,
@@ -2665,13 +2799,7 @@ fn create_bool_flag<'a, 'b, 'c>(
 where
     'c: 'b,
 {
-    // add body-to-inject as flagged
-    let bool_flag_id = add_local(
-        DataType::I32,
-        builder.args.len(),
-        &mut builder.body.num_locals,
-        &mut builder.body.locals,
-    );
+    let bool_flag_id = scratch_locals.acquire(builder, DataType::I32);
 
     // set flag to true before the opcode
     builder
@@ -2707,6 +2835,127 @@ where
         _ => {}
     }
     Ok(bool_flag_id)
+}
+
+fn plan_resolution_back_edge<'a, 'b, 'c>(
+    builder: &mut FunctionModifier<'a, 'b>,
+    scratch_locals: &mut ScratchLocals,
+    backedge_loops: &HashMap<BlockID, Vec<Operator<'c>>>,
+    block_stack: &[BlockID],
+    op: &Operator,
+    idx: usize,
+) where
+    'c: 'b,
+{
+    let curr_block = *block_stack.last().unwrap(); // should always have something (e.g. func block)
+    let loc = Location::Module {
+        func_idx: FunctionID(0), // not used
+        instr_idx: idx,
+    };
+
+    match op {
+        Operator::Br { relative_depth } => {
+            if let Some(body) = backedge_loops.get(&(curr_block - *relative_depth)) {
+                // back edge unconditionally taken
+                builder.before_at(loc);
+                builder.inject_all(body.as_slice());
+            }
+        }
+        Operator::BrIf { relative_depth } => {
+            if let Some(body) = backedge_loops.get(&(curr_block - *relative_depth)) {
+                // back edge taken if ToS is non-zero
+                let scratch = scratch_locals.acquire(builder, DataType::I32);
+                builder.before_at(loc);
+                builder.local_tee(scratch);
+                inject_if_body(builder, body.as_slice());
+                builder.local_get(scratch);
+                scratch_locals.release(scratch);
+            }
+        }
+        Operator::BrTable { targets } => {
+            // back edge taken if ToS points to a loop ID target
+            let targets_a_back_edge = targets
+                .targets()
+                .flatten()
+                .chain(std::iter::once(targets.default()))
+                .any(|rel| backedge_loops.contains_key(&(curr_block - rel)));
+            if targets_a_back_edge {
+                let scratch = scratch_locals.acquire(builder, DataType::I32);
+                builder.before_at(loc);
+                builder.local_set(scratch);
+                // one guard per table slot that targets a back-edge loop
+                for (slot, t) in targets.targets().enumerate() {
+                    if let Ok(relative_depth) = t {
+                        if let Some(body) = backedge_loops.get(&(curr_block - relative_depth)) {
+                            builder.local_get(scratch);
+                            builder.i32_const(slot as i32);
+                            builder.i32_eq();
+                            inject_if_body(builder, body.as_slice());
+                        }
+                    }
+                }
+                // ...and one for the default target
+                if let Some(body) = backedge_loops.get(&(curr_block - targets.default())) {
+                    builder.local_get(scratch);
+                    builder.i32_const(targets.len() as i32);
+                    builder.i32_ge_u();
+                    inject_if_body(builder, body.as_slice());
+                }
+                builder.local_get(scratch);
+                scratch_locals.release(scratch);
+            }
+        }
+        Operator::BrOnCast {
+            relative_depth,
+            from_ref_type,
+            to_ref_type,
+        } => {
+            if let Some(body) = backedge_loops.get(&(curr_block - *relative_depth)) {
+                inject_ref_backedge(builder, scratch_locals, loc, body.as_slice(), from_ref_type, to_ref_type, false);
+            }
+        }
+        Operator::BrOnCastFail {
+            relative_depth,
+            from_ref_type,
+            to_ref_type,
+        } => {
+            // Taken if the cast FAILS, so negate the ref.test result.
+            if let Some(body) = backedge_loops.get(&(curr_block - *relative_depth)) {
+                inject_ref_backedge(builder, scratch_locals, loc, body.as_slice(), from_ref_type, to_ref_type, true);
+            }
+        }
+        // NOTE: br_on_null / br_on_non_null use the same local scheme, but their operand's
+        // reference type is not carried by the opcode (so we can't declare the scratch local's
+        // type without tracking the value stack). They are left uninstrumented for now.
+        _ => {}
+    }
+}
+
+fn inject_ref_backedge<'a, 'b, 'c>(
+    builder: &mut FunctionModifier<'a, 'b>,
+    scratch_locals: &mut ScratchLocals,
+    loc: Location,
+    body: &[Operator<'c>],
+    from: &wasmparser::RefType,
+    to: &wasmparser::RefType,
+    on_fail: bool,
+) where
+    'c: 'b,
+{
+    let scratch = scratch_locals.acquire(builder, DataType::from(wasmparser::ValType::Ref(*from)));
+    builder.before_at(loc);
+    builder.local_tee(scratch);
+    if to.is_nullable() {
+        builder.ref_test_null(to.heap_type().into());
+    } else {
+        builder.ref_test(to.heap_type().into());
+    }
+    if on_fail {
+        builder.i32_eqz();
+    }
+    inject_if_body(builder, body);
+    builder.local_get(scratch);
+    scratch_locals.release(scratch);
 }
 
 fn save_not_flagged_body_to_resolve<'a>(
@@ -2747,12 +2996,15 @@ fn save_not_flagged_body_to_resolve_inner<'a>(
 
 fn save_flagged_body_to_resolve<'a>(
     to_resolve: &mut HashMap<BlockID, HashMap<InstrumentationMode, InstrToInject<'a>>>,
+    scratch_locals: &mut ScratchLocals,
     mode: InstrumentationMode,
     body: &Vec<Operator<'a>>,
     bool_flag_id: LocalID,
     relative_depth: u32,
     curr_block: BlockID,
 ) {
+    // one more block `end` will read this flag
+    scratch_locals.add_read(bool_flag_id);
     let block_id = curr_block - relative_depth;
     to_resolve
         .entry(block_id)

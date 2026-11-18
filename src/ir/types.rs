@@ -1125,6 +1125,7 @@ pub enum InstrumentationMode {
     BlockEntry,
     BlockExit,
     BlockAlt,
+    BackEdge,
 }
 
 #[derive(Default, Debug, Clone)]
@@ -1146,6 +1147,7 @@ pub struct InstrumentationFlag<'a> {
     /// Some(vec) means to replace with the vec of instructions
     /// Some(empty vec) means there is no alt instrumentation
     pub block_alt: Option<InjectedInstrs<'a>>,
+    pub back_edge: InjectedInstrs<'a>,
 }
 impl TagUtils for InstrumentationFlag<'_> {
     fn get_or_create_tag(&mut self) -> &mut Tag {
@@ -1164,6 +1166,7 @@ impl TagUtils for InstrumentationFlag<'_> {
             Some(InstrumentationMode::BlockAlt) => {
                 self.block_alt.get_or_insert_default().get_or_create_tag()
             }
+            Some(InstrumentationMode::BackEdge) => self.back_edge.get_or_create_tag(),
         }
     }
 
@@ -1191,6 +1194,7 @@ impl TagUtils for InstrumentationFlag<'_> {
                     &None
                 }
             }
+            Some(InstrumentationMode::BackEdge) => self.back_edge.get_tag(),
         }
     }
 }
@@ -1206,6 +1210,7 @@ impl fmt::Display for InstrumentationFlag<'_> {
             block_entry,
             block_exit,
             block_alt,
+            back_edge,
             current_mode: _,
         } = self;
         if !self.has_instr() {
@@ -1219,14 +1224,16 @@ impl fmt::Display for InstrumentationFlag<'_> {
                    Semantic After: {:?} instructions\n \
                    Block Entry: {:?} instructions\n \
                    Block Exit: {:?} instructions\n \
-                   Block Alt: {:?} instructions",
+                   Block Alt: {:?} instructions\n \
+                   Back Edge: {:?} instructions",
             before.instrs.len(),
             after.instrs.len(),
             alternate.as_ref().unwrap().instrs.len(),
             semantic_after.instrs.len(),
             block_entry.instrs.len(),
             block_exit.instrs.len(),
-            block_alt.as_ref().unwrap().instrs.len()
+            block_alt.as_ref().unwrap().instrs.len(),
+            back_edge.instrs.len()
         )
     }
 }
@@ -1242,6 +1249,7 @@ impl PartialEq for InstrumentationFlag<'_> {
             block_entry,
             block_exit,
             block_alt,
+            back_edge,
             current_mode,
         } = self;
         let mut result = before.eq(&other.before);
@@ -1251,6 +1259,7 @@ impl PartialEq for InstrumentationFlag<'_> {
         result &= block_entry.eq(&other.block_entry);
         result &= block_exit.eq(&other.block_exit);
         result &= block_alt.eq(&other.block_alt);
+        result &= back_edge.eq(&other.back_edge);
         result &= *current_mode == other.current_mode;
 
         result
@@ -1270,6 +1279,7 @@ impl<'a> InstrumentationFlag<'a> {
             block_entry,
             block_exit,
             block_alt,
+            back_edge,
             current_mode: _,
         } = self;
         !before.instrs.is_empty()
@@ -1279,6 +1289,7 @@ impl<'a> InstrumentationFlag<'a> {
             || !block_entry.instrs.is_empty()
             || !block_exit.instrs.is_empty()
             || !block_alt.is_none() // Some(vec![]) means block removal!
+            || !back_edge.instrs.is_empty()
     }
 
     pub(crate) fn check_special_is_resolved(&self) -> Result<()> {
@@ -1287,6 +1298,7 @@ impl<'a> InstrumentationFlag<'a> {
             block_entry,
             block_exit,
             block_alt,
+            back_edge,
             ..
         } = self;
 
@@ -1314,6 +1326,12 @@ impl<'a> InstrumentationFlag<'a> {
         if !block_alt.is_none() {
             return Err(InstrumentationError(
                 "BUG: Block alt instrumentation should be resolved already, please report."
+                    .to_string(),
+            ));
+        }
+        if !back_edge.instrs.is_empty() {
+            return Err(InstrumentationError(
+                "BUG: Back edge instrumentation should be resolved already, please report."
                     .to_string(),
             ));
         }
@@ -1441,6 +1459,18 @@ impl<'a> InstrumentationFlag<'a> {
                     );
                 }
             }
+            Some(InstrumentationMode::BackEdge) => {
+                if matches!(op, Operator::Loop { .. }) {
+                    self.back_edge.instrs.push(val);
+                    true
+                } else {
+                    // instrumentation type not applicable!
+                    panic!(
+                        "Cannot apply back edge instrumentation mode to op type: {:?}",
+                        op
+                    );
+                }
+            }
         }
     }
 
@@ -1462,6 +1492,7 @@ impl<'a> InstrumentationFlag<'a> {
                 None => 0,
                 Some(block_alt) => block_alt.instrs.len(),
             },
+            Some(InstrumentationMode::BackEdge) => self.back_edge.instrs.len(),
         }
     }
 
@@ -1480,6 +1511,7 @@ impl<'a> InstrumentationFlag<'a> {
             InstrumentationMode::BlockAlt => {
                 self.block_alt = None;
             }
+            InstrumentationMode::BackEdge => self.back_edge.instrs.clear(),
         }
     }
 
@@ -1532,6 +1564,7 @@ impl<'a> InstrumentationFlag<'a> {
                 ))),
                 Some(block_alt) => Ok(&block_alt.instrs[idx]),
             },
+            Some(InstrumentationMode::BackEdge) => Ok(&self.back_edge.instrs[idx]),
         }
     }
 
