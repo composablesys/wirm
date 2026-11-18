@@ -1,6 +1,5 @@
 (module
   (type (;0;) (func))
-  (memory (;0;) 1)
   (func (;0;) (type 0)
     ;; << (local i32)
     block $hi

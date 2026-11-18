@@ -1,6 +1,5 @@
 (module
   (type (;0;) (func))
-  (memory (;0;) 1)
   (func (;0;) (type 0)
     block $hi
       block ;; label = @2
