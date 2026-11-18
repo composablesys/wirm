@@ -367,9 +367,7 @@ fn test_block_alt_remove_if_with_else() {
                 mod_it,
                 &vec![(
                     SupportedOperators::If,
-                    (InstrumentationMode::BlockAlt, vec![
-                        Operator::Drop
-                    ]),
+                    (InstrumentationMode::BlockAlt, vec![Operator::Drop]),
                 )],
             );
         },
