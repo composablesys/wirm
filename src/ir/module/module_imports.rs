@@ -175,11 +175,13 @@ impl<'a> ModuleImports<'a> {
     /// the module has non-function imports! (It is more efficient to
     /// do this operation using the ImportsID.)
     pub fn set_fn_name(&mut self, name: String, func_id: FunctionID) {
-        for (curr_fn_id, import) in (0_u32..).zip(self.imports.iter_mut()) {
-            if import.is_function() && curr_fn_id == *func_id {
-                import.custom_name = Some(name);
-                return;
-            }
+        if let Some(import) = self
+            .imports
+            .iter_mut()
+            .filter(|import| import.is_function())
+            .nth(*func_id as usize)
+        {
+            import.custom_name = Some(name);
         }
     }
 
