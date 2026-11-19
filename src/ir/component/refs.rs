@@ -976,13 +976,11 @@ impl GetTypeRefs for CanonicalFunction {
             | CanonicalFunction::FutureCancelRead { ty, .. }
             | CanonicalFunction::FutureCancelWrite { ty, .. }
             | CanonicalFunction::StreamForward { ty }
-            | CanonicalFunction::FutureForward { ty } => {
-                refs.push(RefKind::new(IndexedRef {
-                    depth: Depth::default(),
-                    space: Space::CompType,
-                    index: *ty,
-                }))
-            }
+            | CanonicalFunction::FutureForward { ty } => refs.push(RefKind::new(IndexedRef {
+                depth: Depth::default(),
+                space: Space::CompType,
+                index: *ty,
+            })),
             CanonicalFunction::StreamRead { ty, options }
             | CanonicalFunction::StreamWrite { ty, options }
             | CanonicalFunction::FutureRead { ty, options }
@@ -1003,10 +1001,9 @@ impl GetTypeRefs for CanonicalFunction {
                     refs.extend(opt.get_type_refs());
                 }
             }
-            CanonicalFunction::ContextGet { ty, .. }
-            | CanonicalFunction::ContextSet { ty, .. } => {
+            CanonicalFunction::ContextGet { ty, .. } | CanonicalFunction::ContextSet { ty, .. } => {
                 refs.extend(ty.get_type_refs());
-            },
+            }
             CanonicalFunction::ThreadSpawnRef { .. }
             | CanonicalFunction::ThreadAvailableParallelism
             | CanonicalFunction::BackpressureInc

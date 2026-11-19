@@ -32,9 +32,9 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use wasmparser::{
     CanonicalFunction, ComponentAlias, ComponentExport, ComponentExternName, ComponentExternalKind,
-    ComponentImport, ComponentInstance, ComponentOuterAliasKind,
-    ComponentStartFunction, ComponentType, ComponentTypeRef, ComponentValType, CoreType, Encoding,
-    ExternalKind, Instance, NameMap, Parser, Payload, TypeBounds,
+    ComponentImport, ComponentInstance, ComponentOuterAliasKind, ComponentStartFunction,
+    ComponentType, ComponentTypeRef, ComponentValType, CoreType, Encoding, ExternalKind, Instance,
+    NameMap, Parser, Payload, TypeBounds,
 };
 
 pub mod concrete;
@@ -993,7 +993,8 @@ impl<'a> Component<'a> {
                     // Indicating the start of a new module
                     stack.push(Encoding::Module);
                     let m = Module::parse_internal(
-                        &wasm[(unchecked_range.start - start) as usize..(unchecked_range.end - start) as usize],
+                        &wasm[(unchecked_range.start - start) as usize
+                            ..(unchecked_range.end - start) as usize],
                         enable_multi_memory,
                         with_offsets,
                         parser,
@@ -1022,7 +1023,8 @@ impl<'a> Component<'a> {
 
                     stack.push(Encoding::Component);
                     let cmp = Component::parse_comp(
-                        &wasm[(unchecked_range.start - start) as usize..(unchecked_range.end - start) as usize],
+                        &wasm[(unchecked_range.start - start) as usize
+                            ..(unchecked_range.end - start) as usize],
                         enable_multi_memory,
                         with_offsets,
                         parser,

@@ -90,16 +90,15 @@ pub fn configure_component_libraries<'a>(
         let inst_ty_id = wasm.add_component_type(ComponentType::Instance(decls.into_boxed_slice()));
 
         // Import the library from an external provider
-        let inst_id =
-            wasm.add_import_component_instance(
-                ComponentExternName {
-                    name: "whamm-core",
-                    implements: None,
-                    version_suffix: None,
-                    external_id: None,
-                },
-                *inst_ty_id,
-            );
+        let inst_id = wasm.add_import_component_instance(
+            ComponentExternName {
+                name: "whamm-core",
+                implements: None,
+                version_suffix: None,
+                external_id: None,
+            },
+            *inst_ty_id,
+        );
 
         // Lower the exported functions using aliases
         let mut exports = vec![];

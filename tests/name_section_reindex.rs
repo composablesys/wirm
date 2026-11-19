@@ -37,7 +37,7 @@ fn local_name_entries(wasm: &[u8]) -> Vec<(u32, u32)> {
                     if let Name::Local(map) = sub.unwrap() {
                         for indirect in map {
                             let indirect = indirect.unwrap();
-                            let count = indirect.names.into_iter().count() as u32;
+                            let count = indirect.names.count() as u32;
                             entries.push((indirect.index, count));
                         }
                     }

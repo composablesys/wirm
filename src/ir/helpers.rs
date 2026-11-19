@@ -106,7 +106,9 @@ pub fn print_component_type_declaration(ty: &ComponentTypeDeclaration) {
         ComponentTypeDeclaration::CoreType(cty) => print_core_type(cty),
         ComponentTypeDeclaration::Type(comp_ty) => print_component_type(comp_ty),
         ComponentTypeDeclaration::Alias(a) => print_alias(a),
-        ComponentTypeDeclaration::Export { name, ty: _ty } => eprintln!("Export: {:?}", name.full_name()),
+        ComponentTypeDeclaration::Export { name, ty: _ty } => {
+            eprintln!("Export: {:?}", name.full_name())
+        }
         ComponentTypeDeclaration::Import(imp) => eprintln!("Import: {:?}", imp.name.full_name()),
     }
 }
@@ -118,7 +120,9 @@ pub fn print_instance_type_declaration(ty: &InstanceTypeDeclaration) {
         InstanceTypeDeclaration::CoreType(cty) => print_core_type(cty),
         InstanceTypeDeclaration::Type(comp_ty) => print_component_type(comp_ty),
         InstanceTypeDeclaration::Alias(a) => print_alias(a),
-        InstanceTypeDeclaration::Export { name, ty: _ty } => eprintln!("Export: {:?}", name.full_name()),
+        InstanceTypeDeclaration::Export { name, ty: _ty } => {
+            eprintln!("Export: {:?}", name.full_name())
+        }
     }
 }
 

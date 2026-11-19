@@ -773,7 +773,9 @@ impl IndexSpaceOf for CanonicalFunction {
             | CanonicalFunction::SubtaskCancel { .. } => Space::CoreFunc,
 
             // Context access
-            CanonicalFunction::ContextGet { .. } | CanonicalFunction::ContextSet { .. } => Space::CoreFunc,
+            CanonicalFunction::ContextGet { .. } | CanonicalFunction::ContextSet { .. } => {
+                Space::CoreFunc
+            }
 
             // Stream / Future functions operate on types
             CanonicalFunction::StreamCancelRead { .. }

@@ -30,7 +30,10 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use wasm_encoder::reencode::{Reencode, RoundtripReencoder};
 use wasm_encoder::TagSection;
-use wasmparser::{CompositeInnerType, ExternalKind, GlobalType, MemoryType, Operator, PackedIndex, Parser, Payload, TagType, TypeRef};
+use wasmparser::{
+    CompositeInnerType, ExternalKind, GlobalType, MemoryType, Operator, PackedIndex, Parser,
+    Payload, TagType, TypeRef,
+};
 
 pub mod module_exports;
 pub mod module_functions;

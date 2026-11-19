@@ -8,7 +8,8 @@ use wirm::Component;
 const TEST_INPUTS: &str = "tests/test_inputs";
 
 fn collect_wat_under(dir: &Path, kind: &str, out: &mut Vec<PathBuf>) {
-    for entry in std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
+    for entry in
+        std::fs::read_dir(dir).unwrap_or_else(|e| panic!("read_dir {}: {e}", dir.display()))
     {
         let path = entry.unwrap().path();
         if path.is_dir() {
@@ -41,9 +42,18 @@ fn round_trip(path: &Path, reencode: impl Fn(&Path, &[u8]) -> Vec<u8>) {
     let out = wasmprinter::print_bytes(&result).expect("couldn't translate Wasm to wat");
 
     if out != original {
-        let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("unknown");
-        write_to_file(original.as_bytes(), format!("{WAT_OUTPUT_DIR}/{name}_original.wat"));
-        write_to_file(out.as_bytes(), format!("{WAT_OUTPUT_DIR}/{name}_reencoded.wat"));
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unknown");
+        write_to_file(
+            original.as_bytes(),
+            format!("{WAT_OUTPUT_DIR}/{name}_original.wat"),
+        );
+        write_to_file(
+            out.as_bytes(),
+            format!("{WAT_OUTPUT_DIR}/{name}_reencoded.wat"),
+        );
     }
     assert_eq!(out, original, "round-trip mismatch for {}", path.display());
 }
@@ -73,4 +83,3 @@ fn round_trip_modules() {
         });
     }
 }
-

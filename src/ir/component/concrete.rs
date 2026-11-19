@@ -409,7 +409,8 @@ fn concretize_instance_decls<'a>(
                     // Not a function export — check if it's a type export.
                     match ty {
                         ComponentTypeRef::Type(TypeBounds::SubResource) => {
-                            type_exports.push((name.name, ConcreteValType::NamedResource(name.name)));
+                            type_exports
+                                .push((name.name, ConcreteValType::NamedResource(name.name)));
                         }
                         ComponentTypeRef::Type(TypeBounds::Eq(_)) => {
                             // Re-resolve (first resolve was consumed by resolve_and_concretize_func).
@@ -873,8 +874,10 @@ fn concretize_comp_func_exports<'a>(comp: &'a Component<'a>) -> Option<ConcreteT
                 let resolved = cx.resolve(&type_ref);
                 if resolved_is_resource(cx.resolve(&type_ref), &cx, &mut HashSet::new()) {
                     // Use NamedResource so the vid matches function param resource vids.
-                    type_exports
-                        .push((export.name.name, ConcreteValType::NamedResource(export.name.name)));
+                    type_exports.push((
+                        export.name.name,
+                        ConcreteValType::NamedResource(export.name.name),
+                    ));
                 } else if let Some(cvt) =
                     concretize_from_resolved_to_val(resolved, comp, &cx, &resource_map)
                 {
