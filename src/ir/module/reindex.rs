@@ -186,14 +186,16 @@ macro_rules! update_memory_match {
         update_memory_match!(@scan $op_expr, $mapping, $op_name [$($args)*])
     };
     (@scan $op_expr:ident, $mapping:ident, $op_name:ident []) => {};
-    // memarg-bearing ops (loads, stores, atomic rmw, etc.) — remap memarg.memory.
+    // memarg-bearing ops (loads, stores, atomic rmw, etc.)
     (@scan $op_expr:ident, $mapping:ident, $op_name:ident [memarg $($_rest:ident)*]) => {
         if let Operator::$op_name { memarg, .. } = $op_expr {
-            match $mapping.get(&memarg.memory) {
-                Some(new_index) => memarg.memory = *new_index,
-                None => return Err(InstrumentationError(format!(
-                    "Attempting to reference a deleted memory, ID: {}", memarg.memory
-                ))),
+            if let wasmparser::MemArgTarget::Memory(mem) = &mut memarg.target {
+                match $mapping.get(mem) {
+                    Some(new_index) => *mem = *new_index,
+                    None => return Err(InstrumentationError(format!(
+                        "Attempting to reference a deleted memory, ID: {}", mem
+                    ))),
+                }
             }
             return Ok(());
         }

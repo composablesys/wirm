@@ -759,7 +759,6 @@ impl IndexSpaceOf for CanonicalFunction {
             // Resource-related functions reference a resource type
             CanonicalFunction::ResourceNew { .. }
             | CanonicalFunction::ResourceDrop { .. }
-            | CanonicalFunction::ResourceDropAsync { .. }
             | CanonicalFunction::ResourceRep { .. } => Space::CoreFunc,
 
             // Thread spawn / new indirect → function type
@@ -774,7 +773,9 @@ impl IndexSpaceOf for CanonicalFunction {
             | CanonicalFunction::SubtaskCancel { .. } => Space::CoreFunc,
 
             // Context access
-            CanonicalFunction::ContextGet(_) | CanonicalFunction::ContextSet(_) => Space::CoreFunc,
+            CanonicalFunction::ContextGet { .. } | CanonicalFunction::ContextSet { .. } => {
+                Space::CoreFunc
+            }
 
             // Stream / Future functions operate on types
             CanonicalFunction::StreamCancelRead { .. }
@@ -790,6 +791,8 @@ impl IndexSpaceOf for CanonicalFunction {
             | CanonicalFunction::StreamRead { .. }
             | CanonicalFunction::StreamWrite { .. }
             | CanonicalFunction::StreamDropReadable { .. }
+            | CanonicalFunction::StreamForward { .. }
+            | CanonicalFunction::FutureForward { .. }
             | CanonicalFunction::StreamDropWritable { .. } => Space::CoreFunc,
 
             // Error context → operate on values
@@ -806,12 +809,13 @@ impl IndexSpaceOf for CanonicalFunction {
 
             // Thread functions
             CanonicalFunction::ThreadIndex
-            | CanonicalFunction::ThreadSuspend { .. }
-            | CanonicalFunction::ThreadSuspendToSuspended { .. }
-            | CanonicalFunction::ThreadSuspendTo { .. }
-            | CanonicalFunction::ThreadUnsuspend
-            | CanonicalFunction::ThreadYieldToSuspended { .. }
-            | CanonicalFunction::ThreadYield { .. }
+            | CanonicalFunction::ThreadSuspend
+            | CanonicalFunction::ThreadSuspendThenResume
+            | CanonicalFunction::ThreadYieldThenResume
+            | CanonicalFunction::ThreadSuspendThenPromote
+            | CanonicalFunction::ThreadYieldThenPromote
+            | CanonicalFunction::ThreadResumeLater
+            | CanonicalFunction::ThreadYield
             | CanonicalFunction::ThreadAvailableParallelism => Space::CoreFunc,
 
             CanonicalFunction::BackpressureInc | CanonicalFunction::BackpressureDec => {

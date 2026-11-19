@@ -3,8 +3,8 @@
   (func (;0;) (type 0)
     block $hi
       block ;; label = @2
-        br_on_cast 0
-        br_on_cast_fail 0
+        br_on_cast 0 (ref 0) (ref 0)
+        br_on_cast_fail 0 (ref 0) (ref 0)
         br_on_null 0
         br_on_non_null 0
       end

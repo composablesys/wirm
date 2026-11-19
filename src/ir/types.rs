@@ -1608,7 +1608,7 @@ pub enum Location {
 #[derive(Debug, Default, Clone)]
 pub struct Instructions<'a> {
     instructions: Vec<Operator<'a>>,
-    offsets: Option<Vec<usize>>,
+    offsets: Option<Vec<u64>>,
     flags: Option<Vec<InstrumentationFlag<'a>>>,
 }
 
@@ -1623,8 +1623,8 @@ impl<'a> Instructions<'a> {
     }
 
     pub fn new(
-        instructions: Vec<(Operator<'a>, usize)>,
-        locals_start: usize,
+        instructions: Vec<(Operator<'a>, u64)>,
+        locals_start: u64,
         save_offsets: bool,
     ) -> Self {
         let mut instrs = vec![];
@@ -1741,7 +1741,7 @@ impl<'a> Instructions<'a> {
         }
     }
 
-    pub fn lookup_pc_offset_for(&self, instr_idx: usize) -> Option<usize> {
+    pub fn lookup_pc_offset_for(&self, instr_idx: usize) -> Option<u64> {
         if let Some(offsets) = self.offsets.as_ref() {
             offsets.get(instr_idx).copied()
         } else {

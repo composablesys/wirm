@@ -31,7 +31,7 @@
     (import "" "future.read" (func $future-read (param i32 i32) (result i32)))
   )
   (type $future-type (future u8))
-  (core func $future-read (canon future.read $future-type async (memory $libc "memory")))
+  (core func $future-read (canon future.read $future-type async (memory (core memory $libc "memory"))))
   (core instance $i (instantiate $m (with "" (instance (export "future.read" (func $future-read))))))
 )
 
@@ -56,7 +56,7 @@
     (import "" "future.read" (func $future-read (param i32 i32) (result i32)))
   )
   (type $future-type (future string))
-  (core func $future-read (canon future.read $future-type async (memory $libc "memory") (realloc (func $libc "realloc"))))
+  (core func $future-read (canon future.read $future-type async (memory (core memory $libc "memory")) (realloc (core func $libc "realloc"))))
   (core instance $i (instantiate $m (with "" (instance (export "future.read" (func $future-read))))))
 )
 
@@ -69,7 +69,7 @@
       (import "" "future.read" (func $future-read (param i32) (result i32)))
     )
     (type $future-type (future u8))
-    (core func $future-read (canon future.read $future-type async (memory $libc "memory")))
+    (core func $future-read (canon future.read $future-type async (memory (core memory $libc "memory"))))
     (core instance $i (instantiate $m (with "" (instance (export "future.read" (func $future-read))))))
   )
   "type mismatch for export `future.read` of module instantiation argument ``"
@@ -84,7 +84,7 @@
       (import "" "future.read" (func $future-read (param i32 i32) (result i32)))
     )
     (type $string-type string)
-    (core func $future-read (canon future.read $string-type async (memory $libc "memory")))
+    (core func $future-read (canon future.read $string-type async (memory (core memory $libc "memory"))))
     (core instance $i (instantiate $m (with "" (instance (export "future.read" (func $future-read))))))
   )
   "`future.read` requires a future type"
@@ -99,7 +99,7 @@
       (import "" "future.read" (func $future-read (param i32 i32) (result i32)))
     )
     (type $future-type (future string))
-    (core func $future-read (canon future.read $future-type async (memory $libc "memory")))
+    (core func $future-read (canon future.read $future-type async (memory (core memory $libc "memory"))))
     (core instance $i (instantiate $m (with "" (instance (export "future.read" (func $future-read))))))
   )
   "canonical option `realloc` is required"
@@ -113,7 +113,7 @@
     (import "" "future.write" (func $future-write (param i32 i32) (result i32)))
   )
   (type $future-type (future u8))
-  (core func $future-write (canon future.write $future-type async (memory $libc "memory")))
+  (core func $future-write (canon future.write $future-type async (memory (core memory $libc "memory"))))
   (core instance $i (instantiate $m (with "" (instance (export "future.write" (func $future-write))))))
 )
 
@@ -136,7 +136,7 @@
       (import "" "future.write" (func $future-write (param i32) (result i32)))
     )
     (type $future-type (future u8))
-    (core func $future-write (canon future.write $future-type async (memory $libc "memory")))
+    (core func $future-write (canon future.write $future-type async (memory (core memory $libc "memory"))))
     (core instance $i (instantiate $m (with "" (instance (export "future.write" (func $future-write))))))
   )
   "type mismatch for export `future.write` of module instantiation argument ``"
@@ -161,7 +161,7 @@
     (core func $future-cancel-read (canon future.cancel-read $future-type async))
     (core instance $i (instantiate $m (with "" (instance (export "future.cancel-read" (func $future-cancel-read))))))
   )
-  "requires the component model async builtins feature")
+  "requires the component model more async builtins feature")
 
 ;; future.cancel-read; incorrect type
 (assert_invalid
@@ -195,7 +195,7 @@
     (core func $future-cancel-write (canon future.cancel-write $future-type async))
     (core instance $i (instantiate $m (with "" (instance (export "future.cancel-write" (func $future-cancel-write))))))
   )
-  "requires the component model async builtins feature"
+  "requires the component model more async builtins feature"
 )
 
 ;; future.cancel-write; incorrect type
@@ -256,3 +256,22 @@
   )
   "type mismatch for export `future.drop-writable` of module instantiation argument ``"
 )
+
+;; future payloads cannot transitively contain a `borrow`
+(assert_invalid
+  (component
+    (type $r (resource (rep i32)))
+    (type $b (borrow $r))
+    (type (future $b)))
+  "`future` payload cannot contain a `borrow` type")
+(assert_invalid
+  (component
+    (type $r (resource (rep i32)))
+    (type $b (borrow $r))
+    (type $t (tuple $b u32))
+    (type (future $t)))
+  "`future` payload cannot contain a `borrow` type")
+(component
+  (type $r (resource (rep i32)))
+  (type $o (own $r))
+  (type (future $o)))

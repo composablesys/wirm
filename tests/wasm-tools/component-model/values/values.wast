@@ -129,11 +129,42 @@
   (alias core export $main "start" (core func $main_func))
   (func $start (param "p1" string) (result string)
     (canon lift (core func $main_func)
-      (memory $libc "memory")
-      (realloc (func $libc "canonical_abi_realloc"))
-      (post-return (func $main "start-post-return"))
+      (memory (core memory $libc "memory"))
+      (realloc (core func $libc "canonical_abi_realloc"))
+      (post-return (core func $main "start-post-return"))
     )
   )
   (start $start (value $name) (result (value $greeting)))
   (export "greeting" (value $greeting))
 )
+
+;; exported value types cannot transitively contain a `borrow`
+(assert_invalid
+  (component
+    (type (component
+      (export "r" (type $r (sub resource)))
+      (type $b (borrow $r))
+      (export "v" (value (type $b))))))
+  "exported value type cannot contain a `borrow` type")
+(assert_invalid
+  (component
+    (type (instance
+      (export "r" (type $r (sub resource)))
+      (type $b (borrow $r))
+      (type $t (tuple $b))
+      (export "v" (value (type $t))))))
+  "exported value type cannot contain a `borrow` type")
+(assert_invalid
+  (component
+    (import "r" (type $r (sub resource)))
+    (type $b (borrow $r))
+    (import "v" (value $v (type $b)))
+    (export "v2" (value $v)))
+  "exported value type cannot contain a `borrow` type")
+(assert_invalid
+  (component
+    (import "r" (type $r (sub resource)))
+    (type $b (borrow $r))
+    (import "v" (value $v (type $b)))
+    (instance (export "v" (value $v))))
+  "exported value type cannot contain a `borrow` type")

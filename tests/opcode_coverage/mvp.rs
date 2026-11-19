@@ -6,7 +6,7 @@
 //! 3. Validates the encoded module and asserts the target function body starts with exactly
 //!    the recorded operators (so a silent no-op or wrong variant fails the test).
 
-use wasmparser::MemArg;
+use wasmparser::{MemArg, MemArgTarget};
 use wirm::ir::id::{FunctionID, GlobalID, LocalID, MemoryID, TableID, TypeID};
 use wirm::ir::types::BlockType;
 
@@ -33,19 +33,22 @@ const MEM0: MemArg = MemArg {
     align: 0,
     max_align: 0,
     offset: 0,
-    memory: 0,
+    target: MemArgTarget::Memory(0),
+    ordering: None,
 };
 const MEM2: MemArg = MemArg {
     align: 2,
     max_align: 2,
     offset: 0,
-    memory: 0,
+    target: MemArgTarget::Memory(0),
+    ordering: None,
 };
 const MEM3: MemArg = MemArg {
     align: 3,
     max_align: 3,
     offset: 0,
-    memory: 0,
+    target: MemArgTarget::Memory(0),
+    ordering: None,
 };
 
 opcode_test!(i32_arithmetic, BASE_WAT, TARGET,

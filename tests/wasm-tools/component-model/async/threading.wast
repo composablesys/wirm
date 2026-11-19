@@ -54,14 +54,14 @@
   (core type $start (func (param $context i32)))
   (core module $libc (table (export "start-table") 1 (ref null func)))
   (core instance $libc (instantiate $libc))
-  (core func $new-indirect (canon thread.new-indirect $start (table $libc "start-table")))
+  (core func $new-indirect (canon thread.new-indirect $start (core table $libc "start-table")))
 )
 
 (component
   (core type $start (func (param $context i32)))
   (core module $libc (table (export "start-table") 1 (ref null func)))
   (core instance $libc (instantiate $libc))
-  (core func $new-indirect (canon thread.new-indirect $start (table $libc "start-table")))
+  (core func $new-indirect (canon thread.new-indirect $start (core table $libc "start-table")))
 
   (core module $m
     (type $new-indirect-ty (func (param i32) (param i32) (result i32)))
@@ -80,7 +80,7 @@
     (core type $start (func (param i32)))
     ;; Refer to a non-existent table type (i.e., 0); validation
     ;; for `thread.new-indirect` happens first.
-    (core func $new-indirect (canon thread.new-indirect $start (table 0)))
+    (core func $new-indirect (canon thread.new-indirect $start (core table 0)))
   )
   "unknown table 0: table index out of bounds"
 )
@@ -90,7 +90,7 @@
     (core type $start (func))
     (core module $libc (table (export "start-table") 1 (ref null func)))
     (core instance $libc (instantiate $libc))
-    (core func $new-indirect (canon thread.new-indirect $start (table $libc "start-table")))
+    (core func $new-indirect (canon thread.new-indirect $start (core table $libc "start-table")))
   )
   "start function must take a single `i32` argument"
 )
@@ -116,46 +116,114 @@
   "type mismatch for export `thread.index` of module instantiation argument ``"
 )
 
-;; thread.suspend-to-suspended
+;; thead.resume-later
 (component
   (core module $m
-    (import "" "thread.suspend-to-suspended" (func $thread.suspend-to-suspended (param i32) (result i32)))
+    (import "" "thread.resume-later" (func $thread.resume-later (param i32)))
   )
-  (core func $thread.suspend-to-suspended (canon thread.suspend-to-suspended cancellable))
-  (core instance $i (instantiate $m (with "" (instance (export "thread.suspend-to-suspended" (func $thread.suspend-to-suspended))))))
+  (core func $thread.resume-later (canon thread.resume-later))
+  (core instance $i (instantiate $m (with "" (instance (export "thread.resume-later" (func $thread.resume-later))))))
 )
 
-;; thread.suspend-to-suspended; incorrect type
+;; thread.resume-later; incorrect type
 (assert_invalid
   (component
     (core module $m
-      (import "" "thread.suspend-to-suspended" (func $thread.suspend-to-suspended (param i32)))
+      (import "" "thread.resume-later" (func $thread.resume-later (param i32) (result i32)))
     )
-    (core func $thread.suspend-to-suspended (canon thread.suspend-to-suspended cancellable))
-    (core instance $i (instantiate $m (with "" (instance (export "thread.suspend-to-suspended" (func $thread.suspend-to-suspended))))))
+    (core func $thread.resume-later (canon thread.resume-later))
+    (core instance $i (instantiate $m (with "" (instance (export "thread.resume-later" (func $thread.resume-later))))))
   )
-  "type mismatch for export `thread.suspend-to-suspended` of module instantiation argument ``"
+  "type mismatch for export `thread.resume-later` of module instantiation argument ``"
 )
 
-;; thread.suspend-to
+;; thead.suspend
 (component
   (core module $m
-    (import "" "thread.suspend-to" (func $thread.suspend-to (param i32) (result i32)))
+    (import "" "thread.suspend" (func $thread.suspend (result i32)))
   )
-  (core func $thread.suspend-to (canon thread.suspend-to cancellable))
-  (core instance $i (instantiate $m (with "" (instance (export "thread.suspend-to" (func $thread.suspend-to))))))
+  (core func $thread.suspend (canon thread.suspend))
+  (core instance $i (instantiate $m (with "" (instance (export "thread.suspend" (func $thread.suspend))))))
 )
 
-;; thread.suspend-to; incorrect type
+;; thread.suspend; incorrect type
 (assert_invalid
   (component
     (core module $m
-      (import "" "thread.suspend-to" (func $thread.suspend-to (param i32)))
+      (import "" "thread.suspend" (func $thread.suspend (param i32) (result i32)))
     )
-    (core func $thread.suspend-to (canon thread.suspend-to cancellable))
-    (core instance $i (instantiate $m (with "" (instance (export "thread.suspend-to" (func $thread.suspend-to))))))
+    (core func $thread.suspend (canon thread.suspend))
+    (core instance $i (instantiate $m (with "" (instance (export "thread.suspend" (func $thread.suspend))))))
   )
-  "type mismatch for export `thread.suspend-to` of module instantiation argument ``"
+  "type mismatch for export `thread.suspend` of module instantiation argument ``"
+)
+
+;; thead.suspend-then-resume
+(component
+  (core module $m (import "" "" (func (param i32) (result i32))))
+  (core func $f (canon thread.suspend-then-resume))
+  (core instance (instantiate $m (with "" (instance (export "" (func $f))))))
+)
+
+;; thread.suspend-then-resume; incorrect type
+(assert_invalid
+  (component
+    (core module $m (import "" "" (func (param i32))))
+    (core func $f (canon thread.suspend))
+    (core instance (instantiate $m (with "" (instance (export "" (func $f))))))
+  )
+  "type mismatch for export `` of module instantiation argument ``"
+)
+
+;; thead.yield-then-resume
+(component
+  (core module $m (import "" "" (func (param i32) (result i32))))
+  (core func $f (canon thread.yield-then-resume))
+  (core instance (instantiate $m (with "" (instance (export "" (func $f))))))
+)
+
+;; thread.yield-then-resume; incorrect type
+(assert_invalid
+  (component
+    (core module $m (import "" "" (func (param i32))))
+    (core func $f (canon thread.yield))
+    (core instance (instantiate $m (with "" (instance (export "" (func $f))))))
+  )
+  "type mismatch for export `` of module instantiation argument ``"
+)
+
+;; thead.suspend-then-promote
+(component
+  (core module $m (import "" "" (func (param i32) (result i32))))
+  (core func $f (canon thread.suspend-then-promote))
+  (core instance (instantiate $m (with "" (instance (export "" (func $f))))))
+)
+
+;; thread.suspend-then-promote; incorrect type
+(assert_invalid
+  (component
+    (core module $m (import "" "" (func (param i32))))
+    (core func $f (canon thread.suspend))
+    (core instance (instantiate $m (with "" (instance (export "" (func $f))))))
+  )
+  "type mismatch for export `` of module instantiation argument ``"
+)
+
+;; thead.yield-then-promote
+(component
+  (core module $m (import "" "" (func (param i32) (result i32))))
+  (core func $f (canon thread.yield-then-promote))
+  (core instance (instantiate $m (with "" (instance (export "" (func $f))))))
+)
+
+;; thread.yield-then-promote; incorrect type
+(assert_invalid
+  (component
+    (core module $m (import "" "" (func (param i32))))
+    (core func $f (canon thread.yield))
+    (core instance (instantiate $m (with "" (instance (export "" (func $f))))))
+  )
+  "type mismatch for export `` of module instantiation argument ``"
 )
 
 ;; different forms of canonical intrinsics
@@ -173,28 +241,50 @@
   (canon context.set i32 1 (core func))
 
   (core type $start (func (param i32)))
-  (core func (canon thread.new-indirect $start (table $start-table)))
-  (canon thread.new-indirect $start (table $start-table) (core func))
-  (core func (canon thread.suspend-to-suspended))
-  (canon thread.suspend-to-suspended (core func))
-  (core func (canon thread.suspend-to-suspended cancellable))
-  (canon thread.suspend-to-suspended cancellable (core func))
+  (core func (canon thread.new-indirect $start (core table $start-table)))
+  (canon thread.new-indirect $start (core table $start-table) (core func))
+
+  (core func (canon thread.resume-later))
+  (canon thread.resume-later (core func))
+
   (core func (canon thread.suspend))
   (canon thread.suspend (core func))
-  (core func (canon thread.suspend cancellable))
-  (canon thread.suspend cancellable (core func))
-  (core func (canon thread.suspend-to))
-  (canon thread.suspend-to (core func))
-  (core func (canon thread.suspend-to cancellable))
-  (canon thread.suspend-to cancellable (core func))
-  (core func (canon thread.unsuspend))
-  (canon thread.unsuspend (core func))
-  (core func (canon thread.yield-to-suspended))
-  (canon thread.yield-to-suspended (core func))
-  (core func (canon thread.yield-to-suspended cancellable))
-  (canon thread.yield-to-suspended cancellable (core func))
+
+  (core func (canon thread.suspend-then-resume))
+  (canon thread.suspend-then-resume (core func))
+
+  (core func (canon thread.yield-then-resume))
+  (canon thread.yield-then-resume (core func))
+
+  (core func (canon thread.suspend-then-promote))
+  (canon thread.suspend-then-promote (core func))
+
+  (core func (canon thread.yield-then-promote))
+  (canon thread.yield-then-promote (core func))
 )
 
 (component
   (canon task.return (result (stream u8)) (core func))
+)
+
+;; 64-bit closure parameters require cm64
+(assert_invalid
+  (component
+    (core type $start (func (param i64)))
+    (core module $libc (table (export "t") 1 funcref))
+    (core instance $libc (instantiate $libc))
+    (core func (canon thread.new-indirect $start (core table $libc "t")))
+  )
+  "start function must take a single `i32` argument"
+)
+
+;; 64-bit tables require cm64
+(assert_invalid
+  (component
+    (core type $start (func (param i32)))
+    (core module $libc (table (export "t") i64 1 funcref))
+    (core instance $libc (instantiate $libc))
+    (core func (canon thread.new-indirect $start (core table $libc "t")))
+  )
+  "64-bit tables require the component model 64-bit feature"
 )

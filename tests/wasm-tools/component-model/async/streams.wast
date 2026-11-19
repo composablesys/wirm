@@ -31,7 +31,7 @@
     (import "" "stream.read" (func $stream-read (param i32 i32 i32) (result i32)))
   )
   (type $stream-type (stream u8))
-  (core func $stream-read (canon stream.read $stream-type async (memory $libc "memory")))
+  (core func $stream-read (canon stream.read $stream-type async (memory (core memory $libc "memory"))))
   (core instance $i (instantiate $m (with "" (instance (export "stream.read" (func $stream-read))))))
 )
 
@@ -56,7 +56,7 @@
     (import "" "stream.read" (func $stream-read (param i32 i32 i32) (result i32)))
   )
   (type $stream-type (stream string))
-  (core func $stream-read (canon stream.read $stream-type async (memory $libc "memory") (realloc (func $libc "realloc"))))
+  (core func $stream-read (canon stream.read $stream-type async (memory (core memory $libc "memory")) (realloc (core func $libc "realloc"))))
   (core instance $i (instantiate $m (with "" (instance (export "stream.read" (func $stream-read))))))
 )
 
@@ -69,7 +69,7 @@
       (import "" "stream.read" (func $stream-read (param i32) (result i32)))
     )
     (type $stream-type (stream u8))
-    (core func $stream-read (canon stream.read $stream-type async (memory $libc "memory")))
+    (core func $stream-read (canon stream.read $stream-type async (memory (core memory $libc "memory"))))
     (core instance $i (instantiate $m (with "" (instance (export "stream.read" (func $stream-read))))))
   )
   "type mismatch for export `stream.read` of module instantiation argument ``"
@@ -84,7 +84,7 @@
       (import "" "stream.read" (func $stream-read (param i32 i32 i32) (result i32)))
     )
     (type $string-type string)
-    (core func $stream-read (canon stream.read $string-type async (memory $libc "memory")))
+    (core func $stream-read (canon stream.read $string-type async (memory (core memory $libc "memory"))))
     (core instance $i (instantiate $m (with "" (instance (export "stream.read" (func $stream-read))))))
   )
   "`stream.read` requires a stream type"
@@ -99,7 +99,7 @@
       (import "" "stream.read" (func $stream-read (param i32 i32 i32) (result i32)))
     )
     (type $stream-type (stream string))
-    (core func $stream-read (canon stream.read $stream-type async (memory $libc "memory")))
+    (core func $stream-read (canon stream.read $stream-type async (memory (core memory $libc "memory"))))
     (core instance $i (instantiate $m (with "" (instance (export "stream.read" (func $stream-read))))))
   )
   "canonical option `realloc` is required"
@@ -113,7 +113,7 @@
     (import "" "stream.write" (func $stream-write (param i32 i32 i32) (result i32)))
   )
   (type $stream-type (stream u8))
-  (core func $stream-write (canon stream.write $stream-type async (memory $libc "memory")))
+  (core func $stream-write (canon stream.write $stream-type async (memory (core memory $libc "memory"))))
   (core instance $i (instantiate $m (with "" (instance (export "stream.write" (func $stream-write))))))
 )
 
@@ -136,7 +136,7 @@
       (import "" "stream.write" (func $stream-write (param i32) (result i32)))
     )
     (type $stream-type (stream u8))
-    (core func $stream-write (canon stream.write $stream-type async (memory $libc "memory")))
+    (core func $stream-write (canon stream.write $stream-type async (memory (core memory $libc "memory"))))
     (core instance $i (instantiate $m (with "" (instance (export "stream.write" (func $stream-write))))))
   )
   "type mismatch for export `stream.write` of module instantiation argument ``"
@@ -152,7 +152,7 @@
     (core func $stream-cancel-read (canon stream.cancel-read $stream-type async))
     (core instance $i (instantiate $m (with "" (instance (export "stream.cancel-read" (func $stream-cancel-read))))))
   )
-  "requires the component model async builtins feature")
+  "requires the component model more async builtins feature")
 
 ;; stream.drop-readable
 (component
@@ -187,7 +187,7 @@
     (core func $stream-cancel-write (canon stream.cancel-write $stream-type async))
     (core instance $i (instantiate $m (with "" (instance (export "stream.cancel-write" (func $stream-cancel-write))))))
   )
-  "requires the component model async builtins feature")
+  "requires the component model more async builtins feature")
 
 ;; stream.drop-writable
 (component
@@ -225,3 +225,22 @@
   (component (type (func (param "x" (stream char)))))
   "`stream<char>` is not valid at this time, use `stream<u8>` with a defined by encoding instead for now"
 )
+
+;; stream payloads cannot transitively contain a `borrow`
+(assert_invalid
+  (component
+    (type $r (resource (rep i32)))
+    (type $b (borrow $r))
+    (type (stream $b)))
+  "`stream` payload cannot contain a `borrow` type")
+(assert_invalid
+  (component
+    (type $r (resource (rep i32)))
+    (type $b (borrow $r))
+    (type $l (list $b))
+    (type (stream $l)))
+  "`stream` payload cannot contain a `borrow` type")
+(component
+  (type $r (resource (rep i32)))
+  (type $o (own $r))
+  (type (stream $o)))

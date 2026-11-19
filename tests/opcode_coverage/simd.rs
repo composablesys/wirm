@@ -5,7 +5,7 @@
 //! `i32.const X; i8x16.splat` since that's simpler than building a lane-wise constant.
 
 use crate::opcode_test;
-use wasmparser::MemArg;
+use wasmparser::{MemArg, MemArgTarget};
 
 const BASE_WAT: &str = r#"
     (module
@@ -19,31 +19,36 @@ const M0: MemArg = MemArg {
     align: 0,
     max_align: 0,
     offset: 0,
-    memory: 0,
+    target: MemArgTarget::Memory(0),
+    ordering: None,
 };
 const M1: MemArg = MemArg {
     align: 1,
     max_align: 1,
     offset: 0,
-    memory: 0,
+    target: MemArgTarget::Memory(0),
+    ordering: None,
 };
 const M2: MemArg = MemArg {
     align: 2,
     max_align: 2,
     offset: 0,
-    memory: 0,
+    target: MemArgTarget::Memory(0),
+    ordering: None,
 };
 const M3: MemArg = MemArg {
     align: 3,
     max_align: 3,
     offset: 0,
-    memory: 0,
+    target: MemArgTarget::Memory(0),
+    ordering: None,
 };
 const M4: MemArg = MemArg {
     align: 4,
     max_align: 4,
     offset: 0,
-    memory: 0,
+    target: MemArgTarget::Memory(0),
+    ordering: None,
 };
 
 opcode_test!(v128_const_op, BASE_WAT, TARGET,

@@ -153,7 +153,7 @@ pub trait GetDescribesRefs {
 /// - A descriptor
 ///
 /// The role is orthogonal to the index space itself.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum RefRole {
     Comp,
     Module,
@@ -571,7 +571,7 @@ impl ReferencedIndices for SubType {
 impl GetTypeRefs for SubType {
     fn get_type_refs(&self) -> Vec<RefKind> {
         let mut refs = vec![];
-        if let Some(packed) = self.supertype_idx {
+        for packed in self.supertype_idxs.iter() {
             refs.push(RefKind::new(IndexedRef {
                 depth: Depth::default(),
                 space: Space::CoreType,
@@ -603,14 +603,14 @@ impl GetTypeRefs for CompositeType {
         if let Some(descriptor) = self.descriptor_idx {
             refs.push(RefKind::descriptor(IndexedRef {
                 depth: Depth::default(),
-                space: Space::CompType,
+                space: Space::CoreType,
                 index: descriptor.unpack().as_module_index().unwrap(),
             }))
         }
         if let Some(describes) = self.describes_idx {
             refs.push(RefKind::describes(IndexedRef {
                 depth: Depth::default(),
-                space: Space::CompType,
+                space: Space::CoreType,
                 index: describes.unpack().as_module_index().unwrap(),
             }))
         }
@@ -876,16 +876,15 @@ impl GetFuncRefs for CanonicalFunction {
             }
             CanonicalFunction::ResourceNew { .. }
             | CanonicalFunction::ResourceDrop { .. }
-            | CanonicalFunction::ResourceDropAsync { .. }
             | CanonicalFunction::ResourceRep { .. }
             | CanonicalFunction::ThreadSpawnIndirect { .. }
             | CanonicalFunction::ThreadAvailableParallelism
             | CanonicalFunction::BackpressureInc
             | CanonicalFunction::BackpressureDec
             | CanonicalFunction::TaskCancel
-            | CanonicalFunction::ContextGet(_)
-            | CanonicalFunction::ContextSet(_)
-            | CanonicalFunction::ThreadYield { .. }
+            | CanonicalFunction::ContextGet { .. }
+            | CanonicalFunction::ContextSet { .. }
+            | CanonicalFunction::ThreadYield
             | CanonicalFunction::SubtaskDrop
             | CanonicalFunction::SubtaskCancel { .. }
             | CanonicalFunction::StreamNew { .. }
@@ -893,11 +892,13 @@ impl GetFuncRefs for CanonicalFunction {
             | CanonicalFunction::StreamCancelWrite { .. }
             | CanonicalFunction::StreamDropReadable { .. }
             | CanonicalFunction::StreamDropWritable { .. }
+            | CanonicalFunction::StreamForward { .. }
             | CanonicalFunction::FutureNew { .. }
             | CanonicalFunction::FutureCancelRead { .. }
             | CanonicalFunction::FutureCancelWrite { .. }
             | CanonicalFunction::FutureDropReadable { .. }
             | CanonicalFunction::FutureDropWritable { .. }
+            | CanonicalFunction::FutureForward { .. }
             | CanonicalFunction::ErrorContextDrop
             | CanonicalFunction::WaitableSetNew
             | CanonicalFunction::WaitableSetWait { .. }
@@ -906,11 +907,12 @@ impl GetFuncRefs for CanonicalFunction {
             | CanonicalFunction::WaitableJoin
             | CanonicalFunction::ThreadIndex
             | CanonicalFunction::ThreadNewIndirect { .. }
-            | CanonicalFunction::ThreadSuspend { .. }
-            | CanonicalFunction::ThreadSuspendToSuspended { .. }
-            | CanonicalFunction::ThreadSuspendTo { .. }
-            | CanonicalFunction::ThreadUnsuspend
-            | CanonicalFunction::ThreadYieldToSuspended { .. } => {}
+            | CanonicalFunction::ThreadSuspend
+            | CanonicalFunction::ThreadSuspendThenResume
+            | CanonicalFunction::ThreadYieldThenResume
+            | CanonicalFunction::ThreadSuspendThenPromote
+            | CanonicalFunction::ThreadYieldThenPromote
+            | CanonicalFunction::ThreadResumeLater => {}
         }
         refs
     }
@@ -941,7 +943,6 @@ impl GetTypeRefs for CanonicalFunction {
             }
             CanonicalFunction::ResourceNew { resource }
             | CanonicalFunction::ResourceDrop { resource }
-            | CanonicalFunction::ResourceDropAsync { resource }
             | CanonicalFunction::ResourceRep { resource } => refs.push(RefKind::new(IndexedRef {
                 depth: Depth::default(),
                 space: Space::CompType,
@@ -973,13 +974,13 @@ impl GetTypeRefs for CanonicalFunction {
             | CanonicalFunction::FutureDropReadable { ty }
             | CanonicalFunction::FutureDropWritable { ty }
             | CanonicalFunction::FutureCancelRead { ty, .. }
-            | CanonicalFunction::FutureCancelWrite { ty, .. } => {
-                refs.push(RefKind::new(IndexedRef {
-                    depth: Depth::default(),
-                    space: Space::CompType,
-                    index: *ty,
-                }))
-            }
+            | CanonicalFunction::FutureCancelWrite { ty, .. }
+            | CanonicalFunction::StreamForward { ty }
+            | CanonicalFunction::FutureForward { ty } => refs.push(RefKind::new(IndexedRef {
+                depth: Depth::default(),
+                space: Space::CompType,
+                index: *ty,
+            })),
             CanonicalFunction::StreamRead { ty, options }
             | CanonicalFunction::StreamWrite { ty, options }
             | CanonicalFunction::FutureRead { ty, options }
@@ -1000,14 +1001,15 @@ impl GetTypeRefs for CanonicalFunction {
                     refs.extend(opt.get_type_refs());
                 }
             }
+            CanonicalFunction::ContextGet { ty, .. } | CanonicalFunction::ContextSet { ty, .. } => {
+                refs.extend(ty.get_type_refs());
+            }
             CanonicalFunction::ThreadSpawnRef { .. }
             | CanonicalFunction::ThreadAvailableParallelism
             | CanonicalFunction::BackpressureInc
             | CanonicalFunction::BackpressureDec
             | CanonicalFunction::TaskCancel
-            | CanonicalFunction::ContextGet(_)
-            | CanonicalFunction::ContextSet(_)
-            | CanonicalFunction::ThreadYield { .. }
+            | CanonicalFunction::ThreadYield
             | CanonicalFunction::SubtaskDrop
             | CanonicalFunction::SubtaskCancel { .. }
             | CanonicalFunction::ErrorContextDrop
@@ -1017,11 +1019,12 @@ impl GetTypeRefs for CanonicalFunction {
             | CanonicalFunction::WaitableSetDrop
             | CanonicalFunction::WaitableJoin
             | CanonicalFunction::ThreadIndex
-            | CanonicalFunction::ThreadSuspend { .. }
-            | CanonicalFunction::ThreadSuspendToSuspended { .. }
-            | CanonicalFunction::ThreadSuspendTo { .. }
-            | CanonicalFunction::ThreadUnsuspend
-            | CanonicalFunction::ThreadYieldToSuspended { .. } => {}
+            | CanonicalFunction::ThreadSuspend
+            | CanonicalFunction::ThreadSuspendThenResume
+            | CanonicalFunction::ThreadYieldThenResume
+            | CanonicalFunction::ThreadSuspendThenPromote
+            | CanonicalFunction::ThreadYieldThenPromote
+            | CanonicalFunction::ThreadResumeLater => {}
         }
 
         refs
@@ -1054,7 +1057,6 @@ impl GetMemRefs for CanonicalFunction {
             }
             CanonicalFunction::ResourceNew { .. }
             | CanonicalFunction::ResourceDrop { .. }
-            | CanonicalFunction::ResourceDropAsync { .. }
             | CanonicalFunction::ResourceRep { .. }
             | CanonicalFunction::ThreadSpawnRef { .. }
             | CanonicalFunction::ThreadSpawnIndirect { .. }
@@ -1062,9 +1064,9 @@ impl GetMemRefs for CanonicalFunction {
             | CanonicalFunction::BackpressureInc
             | CanonicalFunction::BackpressureDec
             | CanonicalFunction::TaskCancel
-            | CanonicalFunction::ContextGet(_)
-            | CanonicalFunction::ContextSet(_)
-            | CanonicalFunction::ThreadYield { .. }
+            | CanonicalFunction::ContextGet { .. }
+            | CanonicalFunction::ContextSet { .. }
+            | CanonicalFunction::ThreadYield
             | CanonicalFunction::SubtaskDrop
             | CanonicalFunction::SubtaskCancel { .. }
             | CanonicalFunction::StreamNew { .. }
@@ -1072,22 +1074,25 @@ impl GetMemRefs for CanonicalFunction {
             | CanonicalFunction::StreamCancelWrite { .. }
             | CanonicalFunction::StreamDropReadable { .. }
             | CanonicalFunction::StreamDropWritable { .. }
+            | CanonicalFunction::StreamForward { .. }
             | CanonicalFunction::FutureNew { .. }
             | CanonicalFunction::FutureCancelRead { .. }
             | CanonicalFunction::FutureCancelWrite { .. }
             | CanonicalFunction::FutureDropReadable { .. }
             | CanonicalFunction::FutureDropWritable { .. }
+            | CanonicalFunction::FutureForward { .. }
             | CanonicalFunction::ErrorContextDrop
             | CanonicalFunction::WaitableSetNew
             | CanonicalFunction::WaitableSetDrop
             | CanonicalFunction::WaitableJoin
             | CanonicalFunction::ThreadIndex
             | CanonicalFunction::ThreadNewIndirect { .. }
-            | CanonicalFunction::ThreadSuspend { .. }
-            | CanonicalFunction::ThreadSuspendToSuspended { .. }
-            | CanonicalFunction::ThreadSuspendTo { .. }
-            | CanonicalFunction::ThreadUnsuspend
-            | CanonicalFunction::ThreadYieldToSuspended { .. } => {}
+            | CanonicalFunction::ThreadSuspend
+            | CanonicalFunction::ThreadSuspendThenResume
+            | CanonicalFunction::ThreadYieldThenResume
+            | CanonicalFunction::ThreadSuspendThenPromote
+            | CanonicalFunction::ThreadYieldThenPromote
+            | CanonicalFunction::ThreadResumeLater => {}
         }
         refs
     }
@@ -1108,7 +1113,6 @@ impl GetTableRefs for CanonicalFunction {
             | CanonicalFunction::Lower { .. }
             | CanonicalFunction::ResourceNew { .. }
             | CanonicalFunction::ResourceDrop { .. }
-            | CanonicalFunction::ResourceDropAsync { .. }
             | CanonicalFunction::ResourceRep { .. }
             | CanonicalFunction::ThreadSpawnRef { .. }
             | CanonicalFunction::ThreadAvailableParallelism
@@ -1116,9 +1120,9 @@ impl GetTableRefs for CanonicalFunction {
             | CanonicalFunction::BackpressureDec
             | CanonicalFunction::TaskReturn { .. }
             | CanonicalFunction::TaskCancel
-            | CanonicalFunction::ContextGet(_)
-            | CanonicalFunction::ContextSet(_)
-            | CanonicalFunction::ThreadYield { .. }
+            | CanonicalFunction::ContextGet { .. }
+            | CanonicalFunction::ContextSet { .. }
+            | CanonicalFunction::ThreadYield
             | CanonicalFunction::SubtaskDrop
             | CanonicalFunction::SubtaskCancel { .. }
             | CanonicalFunction::StreamNew { .. }
@@ -1128,6 +1132,7 @@ impl GetTableRefs for CanonicalFunction {
             | CanonicalFunction::StreamCancelWrite { .. }
             | CanonicalFunction::StreamDropReadable { .. }
             | CanonicalFunction::StreamDropWritable { .. }
+            | CanonicalFunction::StreamForward { .. }
             | CanonicalFunction::FutureNew { .. }
             | CanonicalFunction::FutureRead { .. }
             | CanonicalFunction::FutureWrite { .. }
@@ -1135,6 +1140,7 @@ impl GetTableRefs for CanonicalFunction {
             | CanonicalFunction::FutureCancelWrite { .. }
             | CanonicalFunction::FutureDropReadable { .. }
             | CanonicalFunction::FutureDropWritable { .. }
+            | CanonicalFunction::FutureForward { .. }
             | CanonicalFunction::ErrorContextNew { .. }
             | CanonicalFunction::ErrorContextDebugMessage { .. }
             | CanonicalFunction::ErrorContextDrop
@@ -1144,11 +1150,12 @@ impl GetTableRefs for CanonicalFunction {
             | CanonicalFunction::WaitableSetDrop
             | CanonicalFunction::WaitableJoin
             | CanonicalFunction::ThreadIndex
-            | CanonicalFunction::ThreadSuspend { .. }
-            | CanonicalFunction::ThreadSuspendToSuspended { .. }
-            | CanonicalFunction::ThreadSuspendTo { .. }
-            | CanonicalFunction::ThreadUnsuspend
-            | CanonicalFunction::ThreadYieldToSuspended { .. } => {}
+            | CanonicalFunction::ThreadSuspend
+            | CanonicalFunction::ThreadSuspendThenResume
+            | CanonicalFunction::ThreadYieldThenResume
+            | CanonicalFunction::ThreadSuspendThenPromote
+            | CanonicalFunction::ThreadYieldThenPromote
+            | CanonicalFunction::ThreadResumeLater => {}
         }
         refs
     }
@@ -1434,6 +1441,7 @@ impl GetTypeRefs for TypeRef {
     fn get_type_refs(&self) -> Vec<RefKind> {
         match self {
             TypeRef::Func(ty)
+            | TypeRef::FuncExact(ty)
             | TypeRef::Tag(TagType {
                 kind: _,
                 func_type_idx: ty,
@@ -1442,7 +1450,7 @@ impl GetTypeRefs for TypeRef {
                 space: Space::CoreType,
                 index: *ty,
             })],
-            TypeRef::Table(_) | TypeRef::Memory(_) | TypeRef::Global(_) | TypeRef::FuncExact(_) => {
+            TypeRef::Table(_) | TypeRef::Memory(_) | TypeRef::Global(_) => {
                 vec![]
             }
         }

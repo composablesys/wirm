@@ -31,10 +31,10 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use wasmparser::{
-    CanonicalFunction, ComponentAlias, ComponentExport, ComponentExportName, ComponentExternalKind,
-    ComponentImport, ComponentImportName, ComponentInstance, ComponentOuterAliasKind,
-    ComponentStartFunction, ComponentType, ComponentTypeRef, ComponentValType, CoreType, Encoding,
-    ExternalKind, Instance, NameMap, Parser, Payload, TypeBounds,
+    CanonicalFunction, ComponentAlias, ComponentExport, ComponentExternName, ComponentExternalKind,
+    ComponentImport, ComponentInstance, ComponentOuterAliasKind, ComponentStartFunction,
+    ComponentType, ComponentTypeRef, ComponentValType, CoreType, Encoding, ExternalKind, Instance,
+    NameMap, Parser, Payload, TypeBounds,
 };
 
 pub mod concrete;
@@ -298,7 +298,7 @@ impl<'a> Component<'a> {
     /// Import a core module typed by the component type at `type_idx`.
     pub fn add_import_core_module(
         &mut self,
-        name: ComponentImportName<'a>,
+        name: ComponentExternName<'a>,
         type_idx: u32,
     ) -> ModuleID {
         let id = self.add_import_internal(ComponentImport {
@@ -311,7 +311,7 @@ impl<'a> Component<'a> {
     /// Import a sub-component typed by the component type at `type_idx`.
     pub fn add_import_component(
         &mut self,
-        name: ComponentImportName<'a>,
+        name: ComponentExternName<'a>,
         type_idx: u32,
     ) -> ComponentId {
         let id = self.add_import_internal(ComponentImport {
@@ -324,7 +324,7 @@ impl<'a> Component<'a> {
     /// Import a component instance typed by the component type at `type_idx`.
     pub fn add_import_component_instance(
         &mut self,
-        name: ComponentImportName<'a>,
+        name: ComponentExternName<'a>,
         type_idx: u32,
     ) -> ComponentInstanceId {
         let id = self.add_import_internal(ComponentImport {
@@ -338,7 +338,7 @@ impl<'a> Component<'a> {
     /// `type_idx`.
     pub fn add_import_component_func(
         &mut self,
-        name: ComponentImportName<'a>,
+        name: ComponentExternName<'a>,
         type_idx: u32,
     ) -> ComponentFunctionId {
         let id = self.add_import_internal(ComponentImport {
@@ -351,7 +351,7 @@ impl<'a> Component<'a> {
     /// Import a component value of type `val_ty`.
     pub fn add_import_component_value(
         &mut self,
-        name: ComponentImportName<'a>,
+        name: ComponentExternName<'a>,
         val_ty: ComponentValType,
     ) -> ValueID {
         let id = self.add_import_internal(ComponentImport {
@@ -364,7 +364,7 @@ impl<'a> Component<'a> {
     /// Import a component type subject to `bounds`.
     pub fn add_import_component_type(
         &mut self,
-        name: ComponentImportName<'a>,
+        name: ComponentExternName<'a>,
         bounds: TypeBounds,
     ) -> ComponentTypeId {
         let id = self.add_import_internal(ComponentImport {
@@ -398,7 +398,7 @@ impl<'a> Component<'a> {
     /// Export the core module at `idx` under `name`.
     pub fn add_export_core_module(
         &mut self,
-        name: ComponentExportName<'a>,
+        name: ComponentExternName<'a>,
         idx: ModuleID,
         ty: Option<ComponentTypeRef>,
     ) -> ModuleID {
@@ -414,7 +414,7 @@ impl<'a> Component<'a> {
     /// Export the sub-component at `idx` under `name`.
     pub fn add_export_component(
         &mut self,
-        name: ComponentExportName<'a>,
+        name: ComponentExternName<'a>,
         idx: ComponentId,
         ty: Option<ComponentTypeRef>,
     ) -> ComponentId {
@@ -430,7 +430,7 @@ impl<'a> Component<'a> {
     /// Export the component instance at `idx` under `name`.
     pub fn add_export_component_instance(
         &mut self,
-        name: ComponentExportName<'a>,
+        name: ComponentExternName<'a>,
         idx: ComponentInstanceId,
         ty: Option<ComponentTypeRef>,
     ) -> ComponentInstanceId {
@@ -446,7 +446,7 @@ impl<'a> Component<'a> {
     /// Export the component-level function at `idx` under `name`.
     pub fn add_export_component_func(
         &mut self,
-        name: ComponentExportName<'a>,
+        name: ComponentExternName<'a>,
         idx: ComponentFunctionId,
         ty: Option<ComponentTypeRef>,
     ) -> ComponentFunctionId {
@@ -462,7 +462,7 @@ impl<'a> Component<'a> {
     /// Export the component value at `idx` under `name`.
     pub fn add_export_component_value(
         &mut self,
-        name: ComponentExportName<'a>,
+        name: ComponentExternName<'a>,
         idx: ValueID,
         ty: Option<ComponentTypeRef>,
     ) -> ValueID {
@@ -478,7 +478,7 @@ impl<'a> Component<'a> {
     /// Export the component type at `idx` under `name`.
     pub fn add_export_component_type(
         &mut self,
-        name: ComponentExportName<'a>,
+        name: ComponentExternName<'a>,
         idx: ComponentTypeId,
         ty: Option<ComponentTypeRef>,
     ) -> ComponentTypeId {
@@ -747,7 +747,7 @@ impl<'a> Component<'a> {
         enable_multi_memory: bool,
         with_offsets: bool,
         parser: Parser,
-        start: usize,
+        start: u64,
         space_id: ScopeId,
         my_uid: CompUniqueId,
         registry_handle: RegistryHandle,
@@ -993,7 +993,8 @@ impl<'a> Component<'a> {
                     // Indicating the start of a new module
                     stack.push(Encoding::Module);
                     let m = Module::parse_internal(
-                        &wasm[unchecked_range.start - start..unchecked_range.end - start],
+                        &wasm[(unchecked_range.start - start) as usize
+                            ..(unchecked_range.end - start) as usize],
                         enable_multi_memory,
                         with_offsets,
                         parser,
@@ -1022,7 +1023,8 @@ impl<'a> Component<'a> {
 
                     stack.push(Encoding::Component);
                     let cmp = Component::parse_comp(
-                        &wasm[unchecked_range.start - start..unchecked_range.end - start],
+                        &wasm[(unchecked_range.start - start) as usize
+                            ..(unchecked_range.end - start) as usize],
                         enable_multi_memory,
                         with_offsets,
                         parser,
@@ -1322,7 +1324,7 @@ impl<'a> Component<'a> {
     ///
     /// Returns `None` if no import with that name exists or if the import carries no type ref.
     pub fn resolve_named_import<'s>(&'s self, name: &str) -> Option<ResolvedItem<'s, 'a>> {
-        let import = self.imports.iter().find(|i| i.name.0 == name)?;
+        let import = self.imports.iter().find(|i| i.name.full_name() == name)?;
         let type_ref = import.get_type_refs().into_iter().next()?;
         Some(self.resolve(&type_ref.ref_))
     }
@@ -1334,7 +1336,7 @@ impl<'a> Component<'a> {
     ///
     /// Returns `None` if no export with that name exists.
     pub fn resolve_named_export<'s>(&'s self, name: &str) -> Option<ResolvedItem<'s, 'a>> {
-        let export = self.exports.iter().find(|e| e.name.0 == name)?;
+        let export = self.exports.iter().find(|e| e.name.full_name() == name)?;
         Some(self.resolve(&export.get_item_ref().ref_))
     }
 

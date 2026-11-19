@@ -260,7 +260,7 @@ fn build_instance_resource_map<'a>(
                 name,
                 ty: ComponentTypeRef::Type(TypeBounds::SubResource),
             } => {
-                resource_by_idx.insert(type_count, name.0);
+                resource_by_idx.insert(type_count, name.name);
                 type_count += 1;
             }
             // Other type exports (Eq) also create a new type entry.
@@ -341,7 +341,7 @@ fn build_component_resource_map<'a>(
         }
         let type_ref = export.get_item_ref().ref_;
         if resolved_is_resource(cx.resolve(&type_ref), cx, &mut HashSet::new()) {
-            map.insert(export.index, export.name.0);
+            map.insert(export.index, export.name.name);
         }
     }
     map
@@ -404,12 +404,13 @@ fn concretize_instance_decls<'a>(
             if let Some(type_ref) = decl.get_type_refs().first() {
                 let resolved = cx.resolve(&type_ref.ref_);
                 if let Some(ft) = resolve_and_concretize_func(resolved, comp, cx, &resource_map) {
-                    funcs.push((name.0, ft));
+                    funcs.push((name.name, ft));
                 } else {
                     // Not a function export — check if it's a type export.
                     match ty {
                         ComponentTypeRef::Type(TypeBounds::SubResource) => {
-                            type_exports.push((name.0, ConcreteValType::NamedResource(name.0)));
+                            type_exports
+                                .push((name.name, ConcreteValType::NamedResource(name.name)));
                         }
                         ComponentTypeRef::Type(TypeBounds::Eq(_)) => {
                             // Re-resolve (first resolve was consumed by resolve_and_concretize_func).
@@ -417,7 +418,7 @@ fn concretize_instance_decls<'a>(
                             if let Some(cvt) =
                                 concretize_from_resolved_to_val(resolved2, comp, cx, &resource_map)
                             {
-                                type_exports.push((name.0, cvt));
+                                type_exports.push((name.name, cvt));
                             }
                         }
                         _ => {}
@@ -829,7 +830,7 @@ fn concretize_from_exports_instance<'a>(
         }
         let resolved = comp.resolve(&export.get_item_ref().ref_);
         if let Some(ft) = resolve_and_concretize_func(resolved, comp, &cx, &resource_map) {
-            funcs.push((export.name.0, ft));
+            funcs.push((export.name.name, ft));
         }
     }
 
@@ -865,7 +866,7 @@ fn concretize_comp_func_exports<'a>(comp: &'a Component<'a>) -> Option<ConcreteT
             ComponentExternalKind::Func => {
                 let resolved = comp.resolve(&export.get_item_ref().ref_);
                 if let Some(ft) = resolve_and_concretize_func(resolved, comp, &cx, &resource_map) {
-                    funcs.push((export.name.0, ft));
+                    funcs.push((export.name.name, ft));
                 }
             }
             ComponentExternalKind::Type => {
@@ -873,12 +874,14 @@ fn concretize_comp_func_exports<'a>(comp: &'a Component<'a>) -> Option<ConcreteT
                 let resolved = cx.resolve(&type_ref);
                 if resolved_is_resource(cx.resolve(&type_ref), &cx, &mut HashSet::new()) {
                     // Use NamedResource so the vid matches function param resource vids.
-                    type_exports
-                        .push((export.name.0, ConcreteValType::NamedResource(export.name.0)));
+                    type_exports.push((
+                        export.name.name,
+                        ConcreteValType::NamedResource(export.name.name),
+                    ));
                 } else if let Some(cvt) =
                     concretize_from_resolved_to_val(resolved, comp, &cx, &resource_map)
                 {
-                    type_exports.push((export.name.0, cvt));
+                    type_exports.push((export.name.name, cvt));
                 }
             }
             _ => {}
@@ -962,14 +965,14 @@ fn resolve_handle_resource_name<'a>(
                 name,
                 ty: ComponentTypeRef::Type(TypeBounds::SubResource),
             },
-        ) => Some(name.0),
+        ) => Some(name.name),
         ResolvedItem::InstTyDeclExport(
             _,
             InstanceTypeDeclaration::Export {
                 name,
                 ty: ComponentTypeRef::Type(TypeBounds::Eq(_)),
             },
-        ) => Some(name.0),
+        ) => Some(name.name),
         other => {
             warn!("handle resolve unhandled variant for idx={res_idx}: {other:?}");
             None
@@ -1037,7 +1040,7 @@ fn resolve_type_from_import_instance<'a>(
     let resource_map = build_instance_resource_map(decls, &inner_cx);
     for decl in decls {
         if let InstanceTypeDeclaration::Export { name, .. } = decl {
-            if name.0 != type_name {
+            if name.name != type_name {
                 continue;
             }
             if let Some(tr) = decl.get_type_refs().first() {

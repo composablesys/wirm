@@ -106,8 +106,10 @@ pub fn print_component_type_declaration(ty: &ComponentTypeDeclaration) {
         ComponentTypeDeclaration::CoreType(cty) => print_core_type(cty),
         ComponentTypeDeclaration::Type(comp_ty) => print_component_type(comp_ty),
         ComponentTypeDeclaration::Alias(a) => print_alias(a),
-        ComponentTypeDeclaration::Export { name, ty: _ty } => eprintln!("Export: {:?}", name.0),
-        ComponentTypeDeclaration::Import(imp) => eprintln!("Import: {:?}", imp.name.0),
+        ComponentTypeDeclaration::Export { name, ty: _ty } => {
+            eprintln!("Export: {:?}", name.full_name())
+        }
+        ComponentTypeDeclaration::Import(imp) => eprintln!("Import: {:?}", imp.name.full_name()),
     }
 }
 
@@ -118,7 +120,9 @@ pub fn print_instance_type_declaration(ty: &InstanceTypeDeclaration) {
         InstanceTypeDeclaration::CoreType(cty) => print_core_type(cty),
         InstanceTypeDeclaration::Type(comp_ty) => print_component_type(comp_ty),
         InstanceTypeDeclaration::Alias(a) => print_alias(a),
-        InstanceTypeDeclaration::Export { name, ty: _ty } => eprintln!("Export: {:?}", name.0),
+        InstanceTypeDeclaration::Export { name, ty: _ty } => {
+            eprintln!("Export: {:?}", name.full_name())
+        }
     }
 }
 
@@ -147,10 +151,10 @@ pub fn print_component_type(ty: &ComponentType) {
 
 #[deprecated(note = "use `wasmprinter::print(&component.encode()?)` for a proper WAT dump")]
 pub fn print_component_import(imp: &ComponentImport) {
-    eprintln!("Component Import: {:?}", imp.name.0);
+    eprintln!("Component Import: {:?}", imp.name.full_name());
 }
 
 #[deprecated(note = "use `wasmprinter::print(&component.encode()?)` for a proper WAT dump")]
 pub fn print_component_export(exp: &ComponentExport) {
-    eprintln!("Component Export: {:?}", exp.name.0);
+    eprintln!("Component Export: {:?}", exp.name.full_name());
 }

@@ -1,7 +1,7 @@
 //! Coverage for the threads / atomics proposal.
 
 use crate::opcode_test;
-use wasmparser::MemArg;
+use wasmparser::{MemArg, MemArgTarget, Ordering};
 
 const BASE_WAT: &str = r#"
     (module
@@ -15,25 +15,29 @@ const A0: MemArg = MemArg {
     align: 0,
     max_align: 0,
     offset: 0,
-    memory: 0,
+    target: MemArgTarget::Memory(0),
+    ordering: None,
 };
 const A1: MemArg = MemArg {
     align: 1,
     max_align: 1,
     offset: 0,
-    memory: 0,
+    target: MemArgTarget::Memory(0),
+    ordering: None,
 };
 const A2: MemArg = MemArg {
     align: 2,
     max_align: 2,
     offset: 0,
-    memory: 0,
+    target: MemArgTarget::Memory(0),
+    ordering: None,
 };
 const A3: MemArg = MemArg {
     align: 3,
     max_align: 3,
     offset: 0,
-    memory: 0,
+    target: MemArgTarget::Memory(0),
+    ordering: None,
 };
 
 opcode_test!(atomic_load, BASE_WAT, TARGET,
@@ -121,5 +125,5 @@ opcode_test!(atomic_misc, BASE_WAT, TARGET,
     .i32_const(0).i32_const(0).memory_atomic_notify(A2).drop()
     .i32_const(0).i32_const(0).i64_const(0).memory_atomic_wait32(A2).drop()
     .i32_const(0).i64_const(0).i64_const(0).memory_atomic_wait64(A3).drop()
-    .atomic_fence()
+    .atomic_fence(Ordering::SeqCst)
 );

@@ -8,7 +8,7 @@
   (core instance $i (instantiate $m))
 
   (func (export "ret-list") (result (list u32 4))
-    (canon lift (core func $i "ret-list") (memory $i "memory"))
+    (canon lift (core func $i "ret-list") (memory (core memory $i "memory")))
   )
 )
 
@@ -32,10 +32,25 @@
     (core instance $i (instantiate $m))
 
     (func (export "ret-list") (result (list u32 0))
-      (canon lift (core func $i "ret-list") (memory $i "memory"))
+      (canon lift (core func $i "ret-list") (memory (core memory $i "memory")))
     )
   )
   "Fixed-length lists must have more than zero elements (at offset 0x54)"
+)
+
+(assert_invalid
+  (component
+    (core module $m
+      (memory (export "memory") 1)
+      (func (export "ret-list") (result i32) unreachable)
+    )
+    (core instance $i (instantiate $m))
+
+    (func (export "ret-list") (result (list u32 4294967295))
+      (canon lift (core func $i "ret-list") (memory (core memory $i "memory")))
+    )
+  )
+  "fixed-length list element count exceeds limit of 1073741824 (at offset 0x54)"
 )
 
 (assert_malformed
