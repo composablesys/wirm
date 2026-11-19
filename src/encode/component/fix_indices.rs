@@ -3,7 +3,7 @@
 use crate::encode::component::assign::ActualIds;
 use crate::ir::component::refs::{
     GetArgRefs, GetCompRefs, GetFuncRef, GetFuncRefs, GetItemRef, GetMemRefs, GetModuleRefs,
-    GetTableRefs, GetTypeRefs,
+    GetTableRefs, GetTypeRefs, RefRole,
 };
 use crate::ir::component::scopes::GetScopeKind;
 use crate::ir::component::visitor::utils::VisitCtxInner;
@@ -197,14 +197,6 @@ impl FixIndicesImpl for CanonicalFunction {
 
                 CanonicalFunction::ResourceRep { resource: new_tid as u32}
             }
-            CanonicalFunction::ResourceDropAsync { .. } => {
-                let new_tid = ids.lookup_actual_id_or_panic(
-                    cx,
-                    &self.get_type_refs().first().unwrap().ref_
-                );
-
-                CanonicalFunction::ResourceDropAsync { resource: new_tid as u32}
-            }
             CanonicalFunction::TaskReturn {
                 result,
                 options: options_orig,
@@ -220,25 +212,23 @@ impl FixIndicesImpl for CanonicalFunction {
                     options: fixed_options.into_boxed_slice()
                 }
             }
-            CanonicalFunction::WaitableSetWait { cancellable, .. } => {
+            CanonicalFunction::WaitableSetWait { .. } => {
                 let new_mid = ids.lookup_actual_id_or_panic(
                     cx,
                     &self.get_mem_refs().first().unwrap().ref_
                 );
 
                 CanonicalFunction::WaitableSetWait {
-                    cancellable: *cancellable,
                     memory: new_mid as u32,
                 }
             }
-            CanonicalFunction::WaitableSetPoll { cancellable, .. } => {
+            CanonicalFunction::WaitableSetPoll { .. } => {
                 let new_mid = ids.lookup_actual_id_or_panic(
                     cx,
                     &self.get_mem_refs().first().unwrap().ref_
                 );
 
                 CanonicalFunction::WaitableSetPoll {
-                    cancellable: *cancellable,
                     memory: new_mid as u32,
                 }
             }
@@ -468,6 +458,34 @@ impl FixIndicesImpl for CanonicalFunction {
                     ty: new_tid as u32,
                 }
             }
+            CanonicalFunction::StreamForward{ .. } => {
+                let new_tid = ids.lookup_actual_id_or_panic(
+                    cx,
+                    &self.get_type_refs().first().unwrap().ref_
+                );
+
+                CanonicalFunction::StreamForward {
+                    ty: new_tid as u32,
+                }
+            },
+            CanonicalFunction::FutureForward{ .. } => {
+                let new_tid = ids.lookup_actual_id_or_panic(
+                    cx,
+                    &self.get_type_refs().first().unwrap().ref_
+                );
+
+                CanonicalFunction::FutureForward {
+                    ty: new_tid as u32,
+                }
+            },
+            CanonicalFunction::ContextGet { ty, slot } => CanonicalFunction::ContextGet {
+                ty: ty.fix(ids, cx),
+                slot: *slot
+            },
+            CanonicalFunction::ContextSet { ty, slot } => CanonicalFunction::ContextSet {
+                ty: ty.fix(ids, cx),
+                slot: *slot
+            },
             CanonicalFunction::ThreadAvailableParallelism
             | CanonicalFunction::BackpressureInc
             | CanonicalFunction::BackpressureDec
@@ -476,17 +494,16 @@ impl FixIndicesImpl for CanonicalFunction {
             | CanonicalFunction::WaitableJoin
             | CanonicalFunction::SubtaskDrop
             | CanonicalFunction::TaskCancel
-            | CanonicalFunction::SubtaskCancel { .. }
-            | CanonicalFunction::ContextGet(_)
-            | CanonicalFunction::ContextSet(_)
-            | CanonicalFunction::ThreadYield { .. }
+            | CanonicalFunction::SubtaskCancel { async_: _ }
+            | CanonicalFunction::ThreadYield
             | CanonicalFunction::ThreadIndex
-            | CanonicalFunction::ThreadSuspend { .. }
-            | CanonicalFunction::ThreadSuspendToSuspended { .. }
-            | CanonicalFunction::ThreadSuspendTo { .. }
-            | CanonicalFunction::ThreadUnsuspend
-            | CanonicalFunction::ThreadYieldToSuspended { .. }
-            | CanonicalFunction::ErrorContextDrop => self.clone(),
+            | CanonicalFunction::ThreadSuspend
+            | CanonicalFunction::ErrorContextDrop
+            | CanonicalFunction::ThreadSuspendThenResume
+            | CanonicalFunction::ThreadYieldThenResume
+            | CanonicalFunction::ThreadSuspendThenPromote
+            | CanonicalFunction::ThreadYieldThenPromote
+            | CanonicalFunction::ThreadResumeLater => self.clone(),
         }
     }
 }
@@ -658,17 +675,18 @@ impl sealed::Sealed for SubType {}
 #[rustfmt::skip]
 impl FixIndicesImpl for SubType {
     fn fixme<'a>(&self, ids: &ActualIds, cx: &VisitCtxInner) -> Self {
+        let mut new_idxs = vec![];
+        let type_refs = self.get_type_refs();
+        for (i, _) in self.supertype_idxs.iter().enumerate() {
+            let new_tid = ids.lookup_actual_id_or_panic(
+                cx,
+                &type_refs[i].ref_
+            );
+            new_idxs.push(PackedIndex::from_module_index(new_tid as u32).unwrap());
+        }
         Self {
             is_final: self.is_final,
-            supertype_idx: if self.supertype_idx.is_some() {
-                let new_tid = ids.lookup_actual_id_or_panic(
-                    cx,
-                    &self.get_type_refs().first().unwrap().ref_
-                );
-                Some(PackedIndex::from_module_index(new_tid as u32).unwrap())
-            } else {
-                None
-            },
+            supertype_idxs: new_idxs,
             composite_type: self.composite_type.fix(ids, cx)
         }
     }
@@ -678,11 +696,21 @@ impl sealed::Sealed for CompositeType {}
 #[rustfmt::skip]
 impl FixIndicesImpl for CompositeType {
     fn fixme<'a>(&self, ids: &ActualIds, cx: &VisitCtxInner) -> Self {
+        // Find the descriptor/describes indices and remap them!
+        let remap = |role: RefRole| {
+            self.get_type_refs()
+                .into_iter()
+                .find(|r| r.role == role)
+                .map(|r| {
+                    let new_tid = ids.lookup_actual_id_or_panic(cx, &r.ref_);
+                    PackedIndex::from_module_index(new_tid as u32).unwrap()
+                })
+        };
         Self {
             inner: self.inner.fix(ids, cx),
-            shared: false,
-            descriptor_idx: None,
-            describes_idx: None,
+            shared: self.shared,
+            descriptor_idx: self.descriptor_idx.and_then(|_| remap(RefRole::Descriptor)),
+            describes_idx: self.describes_idx.and_then(|_| remap(RefRole::Describes)),
         }
     }
 }

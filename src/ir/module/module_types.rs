@@ -29,7 +29,7 @@ pub enum Types {
     FuncType {
         params: Box<[DataType]>,
         results: Box<[DataType]>,
-        super_type: Option<PackedIndex>,
+        super_types: Vec<PackedIndex>,
         is_final: bool,
         shared: bool,
         /// Optional descriptor attribute.
@@ -41,7 +41,7 @@ pub enum Types {
     ArrayType {
         fields: DataType,
         mutable: bool,
-        super_type: Option<PackedIndex>,
+        super_types: Vec<PackedIndex>,
         is_final: bool,
         shared: bool,
         /// Optional descriptor attribute.
@@ -53,7 +53,7 @@ pub enum Types {
     StructType {
         fields: Vec<DataType>,
         mutable: Vec<bool>,
-        super_type: Option<PackedIndex>,
+        super_types: Vec<PackedIndex>,
         is_final: bool,
         shared: bool,
         /// Optional descriptor attribute.
@@ -64,7 +64,7 @@ pub enum Types {
     },
     ContType {
         packed_index: PackedIndex,
-        super_type: Option<PackedIndex>,
+        super_types: Vec<PackedIndex>,
         is_final: bool,
         shared: bool,
         /// Optional descriptor attribute.
@@ -82,54 +82,54 @@ impl Hash for Types {
             Types::FuncType {
                 params,
                 results,
-                super_type,
+                super_types,
                 is_final,
                 shared,
                 ..
             } => {
                 params.hash(state);
                 results.hash(state);
-                super_type.hash(state);
+                super_types.hash(state);
                 is_final.hash(state);
                 shared.hash(state);
             }
             Types::ArrayType {
                 fields,
                 mutable,
-                super_type,
+                super_types,
                 is_final,
                 shared,
                 ..
             } => {
                 fields.hash(state);
                 mutable.hash(state);
-                super_type.hash(state);
+                super_types.hash(state);
                 is_final.hash(state);
                 shared.hash(state);
             }
             Types::StructType {
                 fields,
                 mutable,
-                super_type,
+                super_types,
                 is_final,
                 shared,
                 ..
             } => {
                 fields.hash(state);
                 mutable.hash(state);
-                super_type.hash(state);
+                super_types.hash(state);
                 is_final.hash(state);
                 shared.hash(state);
             }
             Types::ContType {
                 packed_index,
-                super_type,
+                super_types,
                 is_final,
                 shared,
                 ..
             } => {
                 packed_index.hash(state);
-                super_type.hash(state);
+                super_types.hash(state);
                 is_final.hash(state);
                 shared.hash(state);
             }
@@ -144,7 +144,7 @@ impl PartialEq for Types {
                 Self::FuncType {
                     params,
                     results,
-                    super_type,
+                    super_types,
                     is_final,
                     shared,
                     ..
@@ -152,7 +152,7 @@ impl PartialEq for Types {
                 Self::FuncType {
                     params: params1,
                     results: results1,
-                    super_type: super_type1,
+                    super_types: super_types1,
                     is_final: is_final1,
                     shared: shared1,
                     ..
@@ -160,7 +160,7 @@ impl PartialEq for Types {
             ) => {
                 params.eq(params1)
                     && results.eq(results1)
-                    && super_type.eq(super_type1)
+                    && super_types == super_types1
                     && *is_final == *is_final1
                     && *shared == *shared1
             }
@@ -168,7 +168,7 @@ impl PartialEq for Types {
                 Self::ArrayType {
                     fields,
                     mutable,
-                    super_type,
+                    super_types,
                     is_final,
                     shared,
                     ..
@@ -176,7 +176,7 @@ impl PartialEq for Types {
                 Self::ArrayType {
                     fields: fields1,
                     mutable: mutable1,
-                    super_type: super_type1,
+                    super_types: super_types1,
                     is_final: is_final1,
                     shared: shared1,
                     ..
@@ -184,7 +184,7 @@ impl PartialEq for Types {
             ) => {
                 fields.eq(fields1)
                     && *mutable == *mutable1
-                    && super_type.eq(super_type1)
+                    && super_types == super_types1
                     && *is_final == *is_final1
                     && *shared == *shared1
             }
@@ -192,7 +192,7 @@ impl PartialEq for Types {
                 Self::StructType {
                     fields,
                     mutable,
-                    super_type,
+                    super_types,
                     is_final,
                     shared,
                     ..
@@ -200,7 +200,7 @@ impl PartialEq for Types {
                 Self::StructType {
                     fields: fields1,
                     mutable: mutable1,
-                    super_type: super_type1,
+                    super_types: super_types1,
                     is_final: is_final1,
                     shared: shared1,
                     ..
@@ -208,28 +208,28 @@ impl PartialEq for Types {
             ) => {
                 fields.eq(fields1)
                     && *mutable == *mutable1
-                    && super_type.eq(super_type1)
+                    && super_types == super_types1
                     && *is_final == *is_final1
                     && *shared == *shared1
             }
             (
                 Self::ContType {
                     packed_index,
-                    super_type,
+                    super_types,
                     is_final,
                     shared,
                     ..
                 },
                 Self::ContType {
                     packed_index: packed_index1,
-                    super_type: super_type1,
+                    super_types: super_types1,
                     is_final: is_final1,
                     shared: shared1,
                     ..
                 },
             ) => {
                 packed_index.eq(packed_index1)
-                    && super_type.eq(super_type1)
+                    && super_types == super_types1
                     && *is_final == *is_final1
                     && *shared == *shared1
             }
@@ -352,7 +352,7 @@ impl ModuleTypes {
         let ty = Types::FuncType {
             params: param.to_vec().into_boxed_slice(),
             results: ret.to_vec().into_boxed_slice(),
-            super_type: None,
+            super_types: vec![],
             is_final: true,
             shared: false,
             descriptor: None,
@@ -421,9 +421,9 @@ impl ModuleTypes {
         let ty = Types::FuncType {
             params: param.to_vec().into_boxed_slice(),
             results: ret.to_vec().into_boxed_slice(),
-            super_type: match super_type {
-                None => None,
-                Some(id) => PackedIndex::from_module_index(*id),
+            super_types: match super_type {
+                None => vec![],
+                Some(id) => PackedIndex::from_module_index(*id).into_iter().collect(),
             },
             descriptor,
             describes,
@@ -466,7 +466,7 @@ impl ModuleTypes {
         let ty = Types::ArrayType {
             fields: field_type,
             mutable,
-            super_type: None,
+            super_types: vec![],
             is_final: true,
             shared: false,
             descriptor,
@@ -535,9 +535,9 @@ impl ModuleTypes {
         let ty = Types::ArrayType {
             fields: field_type,
             mutable,
-            super_type: match super_type {
-                None => None,
-                Some(id) => PackedIndex::from_module_index(*id),
+            super_types: match super_type {
+                None => vec![],
+                Some(id) => PackedIndex::from_module_index(*id).into_iter().collect(),
             },
             is_final,
             shared,
@@ -580,7 +580,7 @@ impl ModuleTypes {
         let ty = Types::StructType {
             fields: field_type,
             mutable,
-            super_type: None,
+            super_types: vec![],
             is_final: true,
             shared: false,
             descriptor,
@@ -649,9 +649,9 @@ impl ModuleTypes {
         let ty = Types::StructType {
             fields: field_type,
             mutable,
-            super_type: match super_type {
-                None => None,
-                Some(id) => PackedIndex::from_module_index(*id),
+            super_types: match super_type {
+                None => vec![],
+                Some(id) => PackedIndex::from_module_index(*id).into_iter().collect(),
             },
             is_final,
             shared,

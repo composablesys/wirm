@@ -84,7 +84,7 @@ impl<'a> From<wasmparser::Import<'a>> for Import<'a> {
 impl Import<'_> {
     /// Check whether this is an import for a function.
     pub fn is_function(&self) -> bool {
-        matches!(self.ty, TypeRef::Func(_))
+        matches!(self.ty, TypeRef::Func(_) | TypeRef::FuncExact(_))
     }
     /// Check whether this is an import for a global.
     pub fn is_global(&self) -> bool {

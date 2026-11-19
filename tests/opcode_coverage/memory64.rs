@@ -1,6 +1,6 @@
 //! Coverage for the memory64 proposal.
 
-use wasmparser::MemArg;
+use wasmparser::{MemArg, MemArgTarget};
 use wirm::ir::id::MemoryID;
 
 use crate::opcode_test;
@@ -17,7 +17,8 @@ const MEM2_64: MemArg = MemArg {
     align: 2,
     max_align: 2,
     offset: 0,
-    memory: 0,
+    target: MemArgTarget::Memory(0),
+    ordering: None,
 };
 
 opcode_test!(memory64_ops, BASE_WAT, TARGET,

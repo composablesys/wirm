@@ -1311,7 +1311,7 @@ fn nested_add_component_produces_unique_uids() {
 #[test]
 fn add_start_section_round_trips() {
     use crate::ir::id::{ComponentFunctionId, ValueID};
-    use wasmparser::ComponentExportName;
+    use wasmparser::ComponentExternName;
 
     // Start from a component that imports a u32 value and a lift func that
     // takes a u32 and produces a u32. We graft on a start section that
@@ -1340,7 +1340,16 @@ fn add_start_section_round_trips() {
 
     // Now export the produced value so the round-trip carries a non-trivial
     // ref into the start-result slot.
-    comp.add_export_component_value(ComponentExportName("greeting"), result_ids[0], None);
+    comp.add_export_component_value(
+        ComponentExternName {
+            name: "greeting",
+            implements: None,
+            version_suffix: None,
+            external_id: None,
+        },
+        result_ids[0],
+        None,
+    );
 
     let bytes = comp.encode().expect("encode");
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
@@ -1353,7 +1362,7 @@ fn add_start_section_round_trips() {
         if let wasmparser::Payload::ComponentExportSection(reader) = payload.unwrap() {
             for export in reader {
                 let export = export.unwrap();
-                if export.name.0 == "greeting" {
+                if export.name.name == "greeting" {
                     export_idx = Some(export.index);
                 }
             }

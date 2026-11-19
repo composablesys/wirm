@@ -51,4 +51,22 @@
     (alias core export $A "m" (core memory $m))
     (core func (canon lower (func $x) (memory $m)))
   )
-  "canonical ABI memory is not a 32-bit linear memory")
+  "64-bit memories require the `cm64` feature to be enabled")
+
+(assert_invalid
+  (component
+    (core module $A (table (export "m") i64 1 funcref))
+    (core instance $A (instantiate $A))
+    (core module $B (import "a" "m" (table 1 funcref)))
+    (core instance (instantiate $B (with "a" (instance $A))))
+  )
+  "mismatch in index type used for tables")
+
+(assert_invalid
+  (component
+    (core module $A (table (export "m") 1 funcref))
+    (core instance $A (instantiate $A))
+    (core module $B (import "a" "m" (table i64 1 funcref)))
+    (core instance (instantiate $B (with "a" (instance $A))))
+  )
+  "mismatch in index type used for tables")

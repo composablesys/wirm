@@ -711,7 +711,7 @@ fn encode_comp_inst_section(
         ComponentInstance::FromExports(export) => {
             instances.export_items(export.iter().map(|value| {
                 (
-                    value.name.0,
+                    value.name,
                     reencode.component_export_kind(value.kind),
                     value.index,
                 )
@@ -775,9 +775,6 @@ fn encode_canon_section(
         CanonicalFunction::ResourceRep { resource } => {
             canon_sec.resource_rep(resource);
         }
-        CanonicalFunction::ResourceDropAsync { resource } => {
-            canon_sec.resource_drop_async(resource);
-        }
         CanonicalFunction::ThreadAvailableParallelism => {
             canon_sec.thread_available_parallelism();
         }
@@ -796,19 +793,11 @@ fn encode_canon_section(
         CanonicalFunction::WaitableSetNew => {
             canon_sec.waitable_set_new();
         }
-        CanonicalFunction::WaitableSetWait {
-            cancellable,
-            memory,
-        } => {
-            // NOTE: There's a discrepancy in naming here. `cancellable` refers to the same bit as `async_`
-            canon_sec.waitable_set_wait(cancellable, memory);
+        CanonicalFunction::WaitableSetWait { memory } => {
+            canon_sec.waitable_set_wait(memory);
         }
-        CanonicalFunction::WaitableSetPoll {
-            cancellable,
-            memory,
-        } => {
-            // NOTE: There's a discrepancy in naming here. `cancellable` refers to the same bit as `async_`
-            canon_sec.waitable_set_poll(cancellable, memory);
+        CanonicalFunction::WaitableSetPoll { memory } => {
+            canon_sec.waitable_set_poll(memory);
         }
         CanonicalFunction::WaitableSetDrop => {
             canon_sec.waitable_set_drop();
@@ -870,11 +859,11 @@ fn encode_canon_section(
         CanonicalFunction::TaskCancel => {
             canon_sec.task_cancel();
         }
-        CanonicalFunction::ContextGet(i) => {
-            canon_sec.context_get(i);
+        CanonicalFunction::ContextGet { ty, slot } => {
+            canon_sec.context_get(reencode.val_type(ty).unwrap(), slot);
         }
-        CanonicalFunction::ContextSet(i) => {
-            canon_sec.context_set(i);
+        CanonicalFunction::ContextSet { ty, slot } => {
+            canon_sec.context_set(reencode.val_type(ty).unwrap(), slot);
         }
         CanonicalFunction::SubtaskCancel { async_ } => {
             canon_sec.subtask_cancel(async_);
@@ -891,8 +880,8 @@ fn encode_canon_section(
         CanonicalFunction::FutureDropWritable { ty } => {
             canon_sec.future_drop_writable(ty);
         }
-        CanonicalFunction::ThreadYield { cancellable } => {
-            canon_sec.thread_yield(cancellable);
+        CanonicalFunction::ThreadYield => {
+            canon_sec.thread_yield();
         }
         CanonicalFunction::ThreadIndex => {
             canon_sec.thread_index();
@@ -903,20 +892,29 @@ fn encode_canon_section(
         } => {
             canon_sec.thread_new_indirect(func_ty_index, table_index);
         }
-        CanonicalFunction::ThreadSuspend { cancellable } => {
-            canon_sec.thread_suspend(cancellable);
+        CanonicalFunction::ThreadResumeLater => {
+            canon_sec.thread_resume_later();
         }
-        CanonicalFunction::ThreadSuspendToSuspended { cancellable } => {
-            canon_sec.thread_suspend_to_suspended(cancellable);
+        CanonicalFunction::ThreadSuspend => {
+            canon_sec.thread_suspend();
         }
-        CanonicalFunction::ThreadSuspendTo { cancellable } => {
-            canon_sec.thread_suspend_to(cancellable);
+        CanonicalFunction::ThreadSuspendThenResume => {
+            canon_sec.thread_suspend_then_resume();
         }
-        CanonicalFunction::ThreadUnsuspend => {
-            canon_sec.thread_unsuspend();
+        CanonicalFunction::ThreadYieldThenResume => {
+            canon_sec.thread_yield_then_resume();
         }
-        CanonicalFunction::ThreadYieldToSuspended { cancellable } => {
-            canon_sec.thread_yield_to_suspended(cancellable);
+        CanonicalFunction::ThreadSuspendThenPromote => {
+            canon_sec.thread_suspend_then_promote();
+        }
+        CanonicalFunction::ThreadYieldThenPromote => {
+            canon_sec.thread_yield_then_promote();
+        }
+        CanonicalFunction::StreamForward { ty } => {
+            canon_sec.stream_forward(ty);
+        }
+        CanonicalFunction::FutureForward { ty } => {
+            canon_sec.future_forward(ty);
         }
     }
     component.section(&canon_sec);
@@ -951,7 +949,7 @@ fn encode_comp_import_section(
         reencode,
         "component import",
     );
-    imports.import(import.name.0, ty);
+    imports.import(import.name, ty);
 
     component.section(&imports);
 }
@@ -975,7 +973,7 @@ fn encode_comp_export_section(
     });
 
     exports.export(
-        export.name.0,
+        export.name,
         reencode.component_export_kind(export.kind),
         export.index,
         ty,
@@ -1135,7 +1133,7 @@ fn encode_comp_ty_decl(
                 reencode,
                 "component type",
             );
-            new_comp_ty.export(name.0, ty);
+            new_comp_ty.export(*name, ty);
         }
         ComponentTypeDeclaration::Import(i) => {
             let imp = i.fix(ids, cx);
@@ -1145,7 +1143,7 @@ fn encode_comp_ty_decl(
                 reencode,
                 "component type",
             );
-            new_comp_ty.import(imp.name.0, ty);
+            new_comp_ty.import(imp.name, ty);
         }
         ComponentTypeDeclaration::CoreType(_) | ComponentTypeDeclaration::Type(_) => {} // handled explicitly in visitor
     }
@@ -1230,7 +1228,7 @@ fn encode_inst_ty_decl(
         InstanceTypeDeclaration::Export { name, ty: t } => {
             let ty = t.fix(ids, cx);
             ity.export(
-                name.0,
+                *name,
                 do_reencode(
                     ty,
                     RoundtripReencoder::component_type_ref,

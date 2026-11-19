@@ -30,10 +30,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use wasm_encoder::reencode::{Reencode, RoundtripReencoder};
 use wasm_encoder::TagSection;
-use wasmparser::{
-    CompositeInnerType, ExternalKind, GlobalType, MemoryType, Operator, PackedIndex, Parser,
-    Payload, TagType, TypeRef,
-};
+use wasmparser::{CompositeInnerType, ExternalKind, GlobalType, MemoryType, Operator, PackedIndex, Parser, Payload, TagType, TypeRef};
 
 pub mod module_exports;
 pub mod module_functions;
@@ -103,6 +100,8 @@ pub struct Module<'a> {
     pub(crate) data_names: wasm_encoder::NameMap,
     pub(crate) field_names: wasm_encoder::IndirectNameMap,
     pub(crate) tag_names: wasm_encoder::NameMap,
+    pub(crate) parameter_names: wasm_encoder::IndirectNameMap,
+    pub(crate) tag_parameter_names: wasm_encoder::IndirectNameMap,
 }
 
 enum FlagsIter<'a> {
@@ -170,7 +169,7 @@ impl<'a> Module<'a> {
         let op_reader = body.get_operators_reader()?;
         let ops = op_reader
             .into_iter_with_offsets()
-            .collect::<Result<Vec<(Operator, usize)>, _>>()
+            .collect::<Result<Vec<(Operator, u64)>, _>>()
             .expect("ops");
 
         let instructions = Instructions::new(ops, locals_orig, with_offsets);
@@ -239,6 +238,8 @@ impl<'a> Module<'a> {
         let mut data_names = wasm_encoder::NameMap::new();
         let mut field_names = wasm_encoder::IndirectNameMap::new();
         let mut tag_names = wasm_encoder::NameMap::new();
+        let mut parameter_names = wasm_encoder::IndirectNameMap::new();
+        let mut tag_parameter_names = wasm_encoder::IndirectNameMap::new();
         let mut bodies_and_names = vec![];
 
         for payload in parser.parse_all(wasm) {
@@ -271,7 +272,7 @@ impl<'a> Module<'a> {
                                     group_types.push(Types::FuncType {
                                         params,
                                         results,
-                                        super_type: subtype.supertype_idx,
+                                        super_types: subtype.supertype_idxs.clone(),
                                         is_final: subtype.is_final,
                                         shared: subtype.composite_type.shared,
                                         descriptor: unpack(subtype.composite_type.descriptor_idx),
@@ -283,7 +284,7 @@ impl<'a> Module<'a> {
                                     group_types.push(Types::ArrayType {
                                         mutable: aty.0.mutable,
                                         fields: DataType::from(aty.0.element_type),
-                                        super_type: subtype.supertype_idx,
+                                        super_types: subtype.supertype_idxs.clone(),
                                         is_final: subtype.is_final,
                                         shared: subtype.composite_type.shared,
                                         descriptor: unpack(subtype.composite_type.descriptor_idx),
@@ -303,7 +304,7 @@ impl<'a> Module<'a> {
                                             .iter()
                                             .map(|field| DataType::from(field.element_type))
                                             .collect::<Vec<_>>(),
-                                        super_type: subtype.supertype_idx,
+                                        super_types: subtype.supertype_idxs.clone(),
                                         is_final: subtype.is_final,
                                         shared: subtype.composite_type.shared,
                                         descriptor: unpack(subtype.composite_type.descriptor_idx),
@@ -314,7 +315,7 @@ impl<'a> Module<'a> {
                                 CompositeInnerType::Cont(cty) => {
                                     group_types.push(Types::ContType {
                                         packed_index: cty.0,
-                                        super_type: subtype.supertype_idx,
+                                        super_types: subtype.supertype_idxs.clone(),
                                         is_final: subtype.is_final,
                                         shared: subtype.composite_type.shared,
                                         descriptor: unpack(subtype.composite_type.descriptor_idx),
@@ -408,7 +409,7 @@ impl<'a> Module<'a> {
                 }
                 Payload::CodeSectionStart {
                     count,
-                    range: _,
+                    unchecked_range: _,
                     size: _,
                 } => {
                     code_section_count = count as usize;
@@ -504,6 +505,13 @@ impl<'a> Module<'a> {
                                     }
                                     wasmparser::Name::Tag(names) => {
                                         tag_names = namemap_parser2encoder(names);
+                                    }
+                                    wasmparser::Name::Parameter(names) => {
+                                        parameter_names = indirect_namemap_parser2encoder(names);
+                                    }
+                                    wasmparser::Name::TagParameter(names) => {
+                                        tag_parameter_names =
+                                            indirect_namemap_parser2encoder(names);
                                     }
                                     wasmparser::Name::Unknown { .. } => {}
                                 }
@@ -611,7 +619,7 @@ impl<'a> Module<'a> {
         let mut final_funcs = vec![];
         let mut imp_fn_id = 0;
         for (index, imp) in imports.iter().enumerate() {
-            if let TypeRef::Func(u) = imp.ty {
+            if let TypeRef::Func(u) | TypeRef::FuncExact(u) = imp.ty {
                 final_funcs.push(Function::new(
                     FuncKind::Import(ImportedFunction::new(
                         ImportsID(index as u32),
@@ -699,6 +707,8 @@ impl<'a> Module<'a> {
             field_names,
             tag_names,
             label_names,
+            parameter_names,
+            tag_parameter_names,
         })
     }
 
@@ -784,7 +794,7 @@ impl<'a> Module<'a> {
             Types::FuncType {
                 params,
                 results,
-                super_type,
+                super_types,
                 is_final,
                 shared,
                 descriptor,
@@ -802,10 +812,10 @@ impl<'a> Module<'a> {
                 let fty = wasm_encoder::FuncType::new(params, results);
                 wasm_encoder::SubType {
                     is_final: *is_final,
-                    supertype_idx: match super_type {
-                        None => None,
-                        Some(idx) => idx.as_module_index(),
-                    },
+                    supertype_idxs: super_types
+                        .iter()
+                        .filter_map(|idx| idx.as_module_index())
+                        .collect(),
                     composite_type: wasm_encoder::CompositeType {
                         inner: wasm_encoder::CompositeInnerType::Func(fty),
                         shared: *shared,
@@ -817,7 +827,7 @@ impl<'a> Module<'a> {
             Types::ArrayType {
                 fields,
                 mutable,
-                super_type,
+                super_types,
                 is_final,
                 shared,
                 descriptor,
@@ -825,10 +835,10 @@ impl<'a> Module<'a> {
                 ..
             } => wasm_encoder::SubType {
                 is_final: *is_final,
-                supertype_idx: match super_type {
-                    None => None,
-                    Some(idx) => idx.as_module_index(),
-                },
+                supertype_idxs: super_types
+                    .iter()
+                    .filter_map(|idx| idx.as_module_index())
+                    .collect(),
                 composite_type: wasm_encoder::CompositeType {
                     inner: wasm_encoder::CompositeInnerType::Array(wasm_encoder::ArrayType(
                         wasm_encoder::FieldType {
@@ -844,7 +854,7 @@ impl<'a> Module<'a> {
             Types::StructType {
                 fields,
                 mutable,
-                super_type,
+                super_types,
                 is_final,
                 shared,
                 descriptor,
@@ -860,10 +870,10 @@ impl<'a> Module<'a> {
                 }
                 wasm_encoder::SubType {
                     is_final: *is_final,
-                    supertype_idx: match super_type {
-                        None => None,
-                        Some(idx) => idx.as_module_index(),
-                    },
+                    supertype_idxs: super_types
+                        .iter()
+                        .filter_map(|idx| idx.as_module_index())
+                        .collect(),
                     composite_type: wasm_encoder::CompositeType {
                         inner: wasm_encoder::CompositeInnerType::Struct(wasm_encoder::StructType {
                             fields: Box::from(encoded_fields),
@@ -1545,6 +1555,8 @@ impl<'a> Module<'a> {
         names.data(&tmp.data_names);
         names.fields(&tmp.field_names);
         names.tag(&tmp.tag_names);
+        names.parameters(&tmp.parameter_names);
+        names.tag_parameters(&tmp.tag_parameter_names);
 
         module.section(&names);
 

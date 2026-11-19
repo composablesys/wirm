@@ -253,7 +253,7 @@ impl<'a> LocalFunction<'a> {
         }
     }
 
-    pub fn lookup_pc_offset_for(&self, instr_idx: usize) -> Option<usize> {
+    pub fn lookup_pc_offset_for(&self, instr_idx: usize) -> Option<u64> {
         self.body.instructions.lookup_pc_offset_for(instr_idx)
     }
 }

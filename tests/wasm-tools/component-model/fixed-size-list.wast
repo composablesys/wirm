@@ -8,7 +8,7 @@
   (core instance $i (instantiate $m))
 
   (func (export "ret-list") (result (list u32 4))
-    (canon lift (core func $i "ret-list") (memory $i "memory"))
+    (canon lift (core func $i "ret-list") (memory (core memory $i "memory")))
   )
 )
 
@@ -32,7 +32,7 @@
     (core instance $i (instantiate $m))
 
     (func (export "ret-list") (result (list u32 0))
-      (canon lift (core func $i "ret-list") (memory $i "memory"))
+      (canon lift (core func $i "ret-list") (memory (core memory $i "memory")))
     )
   )
   "Fixed size lists must have more than zero elements (at offset 0x54)"

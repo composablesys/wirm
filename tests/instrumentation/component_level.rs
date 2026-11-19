@@ -1,6 +1,6 @@
 use crate::instrumentation::test_module::{try_path, validate_wasm};
 use wasmparser::{
-    CanonicalFunction, ComponentExport, ComponentImportName, ComponentType, ComponentTypeRef,
+    CanonicalFunction, ComponentExport, ComponentExternName, ComponentType, ComponentTypeRef,
     Export, ExternalKind, Instance, InstanceTypeDeclaration, InstantiationArg,
     InstantiationArgKind,
 };
@@ -10,7 +10,7 @@ pub const WHAMM_CORE_LIB_NAME: &str = "whamm_core";
 const TEST_DEBUG_DIR: &str = "output/tests/debug_me/instrumentation/";
 #[test]
 fn whamm_side_effects() {
-    let file = "tests/test_inputs/spin/hello_world.wat";
+    let file = "tests/test_inputs/spin/components/hello_world.wat";
     let output_wasm_path = format!("{TEST_DEBUG_DIR}/whamm_side_effects.wasm");
     let buff = wat::parse_file(file).expect("couldn't convert the input wat to Wasm");
     let mut component = Component::parse(&buff, false, false).expect("Unable to parse");
@@ -91,13 +91,21 @@ pub fn configure_component_libraries<'a>(
 
         // Import the library from an external provider
         let inst_id =
-            wasm.add_import_component_instance(ComponentImportName("whamm-core"), *inst_ty_id);
+            wasm.add_import_component_instance(
+                ComponentExternName {
+                    name: "whamm-core",
+                    implements: None,
+                    version_suffix: None,
+                    external_id: None,
+                },
+                *inst_ty_id,
+            );
 
         // Lower the exported functions using aliases
         let mut exports = vec![];
         for ComponentExport { name, kind, .. } in lib_wasm.exports.iter() {
             let func_id = wasm
-                .add_alias_instance_export(*kind, *inst_id, name.0)
+                .add_alias_instance_export(*kind, *inst_id, name.name)
                 .unwrap_component_func();
             let canon_id = wasm
                 .add_canon_func(CanonicalFunction::Lower {
@@ -107,7 +115,7 @@ pub fn configure_component_libraries<'a>(
                 .unwrap_core();
 
             exports.push(Export {
-                name: name.0,
+                name: name.name,
                 kind: ExternalKind::Func,
                 index: *canon_id,
             });

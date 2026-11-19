@@ -259,7 +259,7 @@ fn test_scoped_resolution_no_panic_fixture_files() {
         "./tests/test_inputs/dfinity/components/exports.wat",
         "./tests/test_inputs/dfinity/components/func.wat",
         "./tests/test_inputs/dfinity/components/func_locals.wat",
-        "./tests/test_inputs/spin/hello_world.wat",
+        "./tests/test_inputs/spin/components/hello_world.wat",
     ];
     for path in fixtures {
         run_paranoid_file(path);

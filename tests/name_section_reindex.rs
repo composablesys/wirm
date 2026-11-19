@@ -2,7 +2,29 @@
 //! when the function index space is reindexed (e.g. when instrumentation inserts imports).
 
 use wasmparser::{Name, Payload};
+use wirm::ir::id::FunctionID;
 use wirm::ir::module::Module;
+
+/// Return `(function_index, name)` for each entry in the module's function-name
+/// subsection.
+fn function_name_entries(wasm: &[u8]) -> Vec<(u32, String)> {
+    let mut entries = vec![];
+    for payload in wasmparser::Parser::new(0).parse_all(wasm) {
+        if let Payload::CustomSection(cs) = payload.unwrap() {
+            if let wasmparser::KnownCustom::Name(reader) = cs.as_known() {
+                for sub in reader {
+                    if let Name::Function(map) = sub.unwrap() {
+                        for naming in map {
+                            let naming = naming.unwrap();
+                            entries.push((naming.index, naming.name.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    entries
+}
 
 /// Return `(function_index, named_local_count)` for each local-name entry in the
 /// module's name section, in encounter order.
@@ -177,4 +199,28 @@ fn local_names_preserved_on_unmodified_roundtrip() {
     let module = Module::parse(&buff, false, false).unwrap();
     let out = module.encode().expect("encode failed");
     assert_eq!(local_name_entries(&out), before);
+}
+
+#[test]
+fn set_fn_name_writes_function_name() {
+    let wat = r#"
+        (module
+          (func $a nop)
+          (func $b nop))
+    "#;
+    let buff = wat::parse_str(wat).unwrap();
+    let mut module = Module::parse(&buff, false, false).unwrap();
+    module.set_fn_name(FunctionID(1), "renamed".to_string());
+    let out = module.encode().expect("encode failed");
+
+    // Function 1's name is updated; function 0's original name is untouched.
+    let names = function_name_entries(&out);
+    assert!(
+        names.contains(&(1, "renamed".to_string())),
+        "function 1 should be named `renamed`, got {names:?}"
+    );
+    assert!(
+        names.contains(&(0, "a".to_string())),
+        "function 0's name should be preserved, got {names:?}"
+    );
 }

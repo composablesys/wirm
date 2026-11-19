@@ -18,7 +18,7 @@ pub enum Error {
     },
     UnhandledPayload(String),
     MissingFunctionEnd {
-        func_range: Range<usize>,
+        func_range: Range<u64>,
     },
     IncorrectDataCount {
         declared_count: usize,
@@ -37,7 +37,7 @@ pub enum Error {
     /// immediate byte will be used to reference other memories in the
     /// multi-memory proposal.
     InvalidMemoryReservedByte {
-        func_range: Range<usize>,
+        func_range: Range<u64>,
     },
 }
 

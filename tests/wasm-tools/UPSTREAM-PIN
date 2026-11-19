@@ -3,6 +3,6 @@
 # Records which wasm-tools snapshot the vendored fixtures were last synced
 # against. Files only in wirm (not present upstream at this SHA) are kept
 # as-is by the sync script -- look for them in the script's output.
-upstream_sha:  42127681cc850a4dc62824efc3786e25aa5f9910
-upstream_desc: v1.245.0
-synced_at:     2026-04-22T17:41:33Z
+upstream_sha:  7a2fa422cdf9aeeaf488a2acac8bc94a078bfa32
+upstream_desc: v1.263.0
+synced_at:     2026-11-19T17:52:34Z
