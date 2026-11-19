@@ -330,6 +330,32 @@ fn test_set_fn_name_import_through_module() {
     );
 }
 
+/// A `FunctionID` counts only function imports, so non-function imports that
+/// come first must not shift which import gets named.
+#[test]
+fn test_set_fn_name_import_after_non_function_import() {
+    let buff = wat::parse_str(
+        r#"(module
+            (import "env" "mem" (memory 1))
+            (import "env" "a" (func))
+            (import "env" "g" (global i32))
+            (import "env" "b" (func))
+        )"#,
+    )
+    .expect("couldn't convert the input wat to Wasm");
+    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+
+    module.set_fn_name(FunctionID(0), "first".to_string());
+    module.set_fn_name(FunctionID(1), "second".to_string());
+
+    let names: Vec<Option<&str>> = module
+        .imports
+        .iter()
+        .map(|import| import.custom_name.as_deref())
+        .collect();
+    assert_eq!(names, vec![None, Some("first"), None, Some("second")]);
+}
+
 #[test]
 fn test_set_fn_name_local_through_functions() {
     let (buff, mut init_state) = setup();
