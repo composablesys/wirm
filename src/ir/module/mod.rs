@@ -428,22 +428,22 @@ impl<'a> Module<'a> {
                                 #[allow(clippy::single_match)]
                                 match subsection? {
                                     wasmparser::Name::Function(names) => {
+                                        // k-th function import -> its position in the import list
+                                        let func_import_pos: Vec<u32> = (0_u32..)
+                                            .zip(imports.iter())
+                                            .filter(|(_, import)| import.is_function())
+                                            .map(|(pos, _)| pos)
+                                            .collect();
                                         for name in names {
                                             let naming = name?;
                                             let abs_idx = naming.index;
-                                            if abs_idx < imports.num_funcs {
-                                                let mut import_func_count = 0;
-                                                // TODO: this is very expensive, can we optimize this?
-                                                for import in imports.iter_mut() {
-                                                    if import.is_function() {
-                                                        if import_func_count == abs_idx {
-                                                            import.custom_name =
-                                                                Some(naming.name.to_string());
-                                                            break;
-                                                        }
-                                                        import_func_count += 1;
-                                                    }
-                                                }
+                                            if let Some(&pos) =
+                                                func_import_pos.get(abs_idx as usize)
+                                            {
+                                                imports.set_name(
+                                                    naming.name.to_string(),
+                                                    ImportsID(pos),
+                                                );
                                             } else {
                                                 // Skip over invalid name section entries in the input module
                                                 let rel_idx =
