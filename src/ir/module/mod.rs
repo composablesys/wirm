@@ -240,6 +240,9 @@ impl<'a> Module<'a> {
         let mut field_names = wasm_encoder::IndirectNameMap::new();
         let mut tag_names = wasm_encoder::NameMap::new();
         let mut bodies_and_names = vec![];
+        // k-th function import -> its position in the import list. Used to
+        // resolve function names; built lazily, reset when the imports change.
+        let mut func_import_pos: Option<Vec<u32>> = None;
 
         for payload in parser.parse_all(wasm) {
             let payload = payload?;
@@ -247,6 +250,7 @@ impl<'a> Module<'a> {
                 Payload::ImportSection(import_section_reader) => {
                     let import_vec = expand_imports(import_section_reader)?;
                     imports = ModuleImports::new(import_vec);
+                    func_import_pos = None;
                 }
                 Payload::TypeSection(type_section_reader) => {
                     for ty in type_section_reader.into_iter() {
@@ -428,12 +432,15 @@ impl<'a> Module<'a> {
                                 #[allow(clippy::single_match)]
                                 match subsection? {
                                     wasmparser::Name::Function(names) => {
-                                        // k-th function import -> its position in the import list
-                                        let func_import_pos: Vec<u32> = (0_u32..)
-                                            .zip(imports.iter())
-                                            .filter(|(_, import)| import.is_function())
-                                            .map(|(pos, _)| pos)
-                                            .collect();
+                                        // Built at most once per import list
+                                        let func_import_pos =
+                                            func_import_pos.get_or_insert_with(|| {
+                                                (0_u32..)
+                                                    .zip(imports.iter())
+                                                    .filter(|(_, import)| import.is_function())
+                                                    .map(|(pos, _)| pos)
+                                                    .collect()
+                                            });
                                         for name in names {
                                             let naming = name?;
                                             let abs_idx = naming.index;
