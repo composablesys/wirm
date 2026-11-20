@@ -511,6 +511,33 @@ fn test_add_imported_global() {
 }
 
 #[test]
+fn test_exported_global_after_adding_imported_global() {
+    let buff = wat::parse_str(
+        r#"(module
+            (global (export "g") i32 (i32.const 7))
+        )"#,
+    )
+    .expect("couldn't convert the input wat to Wasm");
+    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+
+    module.add_imported_global(
+        "env".to_string(),
+        "added".to_string(),
+        DataType::I32,
+        false,
+        false,
+    );
+
+    let encoded = module.encode().expect("Unable to encode");
+    let result = Module::parse(&encoded, false, false).expect("Unable to parse");
+    let export = result
+        .exports
+        .get_by_name("g".to_string())
+        .expect("missing export");
+    assert_eq!(export.index, 1);
+}
+
+#[test]
 fn test_delete_global() {
     let (buff, mut init_state) = setup();
     let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
