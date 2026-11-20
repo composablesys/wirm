@@ -1302,18 +1302,30 @@ impl<'a> Module<'a> {
                     match export.kind {
                         ExternalKind::Func => {
                             // Update the function indices
+                            let Some(new_index) = func_mapping.get(&export.index) else {
+                                return Err(InstrumentationError(format!(
+                                    "Export `{}` references a missing function, ID: {}",
+                                    export.name, export.index
+                                )));
+                            };
                             exports.export(
                                 &export.name,
                                 wasm_encoder::ExportKind::from(export.kind),
-                                *func_mapping.get(&(export.index)).unwrap(),
+                                *new_index,
                             );
                         }
                         ExternalKind::Memory => {
                             // Update the memory indices
+                            let Some(new_index) = memory_mapping.get(&export.index) else {
+                                return Err(InstrumentationError(format!(
+                                    "Export `{}` references a missing memory, ID: {}",
+                                    export.name, export.index
+                                )));
+                            };
                             exports.export(
                                 &export.name,
                                 wasm_encoder::ExportKind::from(export.kind),
-                                *memory_mapping.get(&(export.index)).unwrap(),
+                                *new_index,
                             );
                         }
                         _ => {
@@ -1362,8 +1374,14 @@ impl<'a> Module<'a> {
                     ElementItems::Functions(funcs) => {
                         element_items = funcs
                             .iter()
-                            .map(|f| *func_mapping.get(f).unwrap())
-                            .collect();
+                            .map(|f| {
+                                func_mapping.get(f).copied().ok_or_else(|| {
+                                    InstrumentationError(format!(
+                                        "Element segment references a missing function, ID: {f}"
+                                    ))
+                                })
+                            })
+                            .collect::<types::Result<_>>()?;
                         wasm_encoder::Elements::Functions(Cow::from(element_items.as_slice()))
                     }
                     ElementItems::ConstExprs { ty, exprs } => {

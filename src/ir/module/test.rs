@@ -511,6 +511,19 @@ fn test_add_imported_global() {
 }
 
 #[test]
+fn test_dangling_index_is_an_encode_error() {
+    for wat in [
+        r#"(module (export "f" (func 7)))"#,
+        r#"(module (export "m" (memory 7)))"#,
+        r#"(module (table 1 funcref) (elem (i32.const 0) func 7))"#,
+    ] {
+        let buff = wat::parse_str(wat).expect("couldn't convert the input wat to Wasm");
+        let module = Module::parse(&buff, false, false).expect("Unable to parse");
+        assert!(module.encode().is_err(), "{wat}");
+    }
+}
+
+#[test]
 fn test_delete_global() {
     let (buff, mut init_state) = setup();
     let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
