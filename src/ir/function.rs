@@ -2,7 +2,7 @@
 
 use crate::error::Error::InvalidOperation;
 use crate::ir::id::{FunctionID, ImportsID, LocalID, ModuleID, TypeID};
-use crate::ir::module::module_functions::{add_local, add_locals, LocalFunction};
+use crate::ir::module::module_functions::{add_local, add_locals, FuncKind, LocalFunction};
 use crate::ir::module::{AsVec, Module};
 use crate::ir::types;
 use crate::ir::types::{Body, FuncInstrFlag, FuncInstrMode, Tag};
@@ -101,15 +101,23 @@ impl<'a> FunctionBuilder<'a> {
                 *ty.params()? == self.params && *ty.results()? == self.results,
                 "{err_msg} types are not equivalent."
             );
+            let Some(func_idx) = module.functions.iter().position(
+                |f| matches!(f.kind(), FuncKind::Import(i) if *i.import_id == *import_id),
+            ) else {
+                return Err(InvalidOperation(format!(
+                    "{err_msg} could not find the function of the specified import ID!"
+                )));
+            };
+            let func_id = FunctionID(func_idx as u32);
             let mut local_func = LocalFunction::new(
                 TypeID(imp_ty_id),
-                FunctionID(*import_id),
+                func_id,
                 self.body.clone(),
                 self.params.len(),
                 Some(tag),
             );
             local_func.body.name = Some(imp.name.to_string());
-            module.convert_import_fn_to_local(import_id, local_func);
+            module.convert_import_fn_to_local(func_id, local_func);
             Ok(())
         } else {
             Err(InvalidOperation(format!(
