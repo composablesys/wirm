@@ -538,6 +538,21 @@ fn test_exported_global_after_adding_imported_global() {
 }
 
 #[test]
+fn test_export_of_deleted_global_is_an_error() {
+    let buff = wat::parse_str(
+        r#"(module
+            (global (export "g") i32 (i32.const 7))
+        )"#,
+    )
+    .expect("couldn't convert the input wat to Wasm");
+    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+
+    module.delete_global(GlobalID(0));
+
+    assert!(module.encode().is_err());
+}
+
+#[test]
 fn test_delete_global() {
     let (buff, mut init_state) = setup();
     let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
