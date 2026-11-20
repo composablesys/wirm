@@ -89,9 +89,7 @@ fn test_import_delete() {
     let mut module = Module::parse(&buff, false, false).expect("Unable to parse module");
 
     let id = module.imports.find("bogus".to_string(), "hi".to_string());
-    let fid = module
-        .imports
-        .get_func("bogus".to_string(), "hi".to_string());
+    let fid = module.get_import_func("bogus", "hi");
     assert!(id.is_some());
     assert!(fid.is_some());
 

@@ -235,6 +235,9 @@ impl<'a> ModuleImports<'a> {
     }
 
     /// Get the function ID of an Imported Function
+    #[deprecated(
+        note = "use `Module::get_import_func`, which stays correct after the module is modified"
+    )]
     pub fn get_func(&self, module: String, name: String) -> Option<FunctionID> {
         for (idx, imp) in self.imports.iter().enumerate() {
             if imp.is_function() && imp.module == module.as_str() && *imp.name == name {
