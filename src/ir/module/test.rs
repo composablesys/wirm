@@ -331,6 +331,37 @@ fn test_set_fn_name_import_through_module() {
 }
 
 #[test]
+fn test_set_fn_name_after_adding_import() {
+    let buff = wat::parse_str(
+        r#"(module
+            (import "env" "a" (func))
+            (func)
+            (func)
+        )"#,
+    )
+    .expect("couldn't convert the input wat to Wasm");
+    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+
+    let ty = module.types.add_func_type(&[], &[]);
+    let (added_fid, added_imp_id) = module.add_import_func("env".to_string(), "b".to_string(), ty);
+
+    module.set_fn_name(added_fid, "added".to_string());
+    module.set_fn_name(FunctionID(1), "local".to_string());
+
+    assert_eq!(
+        module.imports.get_import_name(added_imp_id),
+        &Some("added".to_string())
+    );
+    assert_eq!(
+        module.functions.get_name(added_fid),
+        &Some("added".to_string())
+    );
+    assert_eq!(
+        module.functions.get_name(FunctionID(1)),
+        &Some("local".to_string())
+    );
+}
+
 fn test_get_func_after_non_function_import() {
     let buff = wat::parse_str(
         r#"(module
