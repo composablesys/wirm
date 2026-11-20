@@ -172,8 +172,7 @@ impl<'a> Module<'a> {
         let op_reader = body.get_operators_reader()?;
         let ops = op_reader
             .into_iter_with_offsets()
-            .collect::<Result<Vec<(Operator, u64)>, _>>()
-            .expect("ops");
+            .collect::<Result<Vec<(Operator, u64)>, _>>()?;
 
         let instructions = Instructions::new(ops, locals_orig, with_offsets);
         if let Some(last) = instructions.get_ops().last() {
@@ -527,20 +526,6 @@ impl<'a> Module<'a> {
                                 }
                             }
                         }
-                        wasmparser::KnownCustom::Producers(producer_section_reader) => {
-                            let field = producer_section_reader
-                                .into_iter()
-                                .next()
-                                .unwrap()
-                                .expect("producers field");
-                            let _value = field
-                                .values
-                                .into_iter()
-                                .collect::<Result<Vec<_>, _>>()
-                                .expect("values");
-                            custom_sections
-                                .push((custom_section_reader.name(), custom_section_reader.data()));
-                        }
                         _ => {
                             custom_sections
                                 .push((custom_section_reader.name(), custom_section_reader.data()));
@@ -645,12 +630,18 @@ impl<'a> Module<'a> {
         let code_sections_length = code_sections.len();
         for (index, code_sec) in code_sections.into_iter().enumerate() {
             let name = code_sec.name.clone();
+            let ty = types.get(&functions[index]).ok_or_else(|| {
+                Error::UnknownId(format!(
+                    "Could not find type with ID: {}",
+                    *functions[index]
+                ))
+            })?;
             final_funcs.push(Function::new(
                 FuncKind::Local(Box::new(LocalFunction::new(
                     functions[index],
                     FunctionID(imports.num_funcs + index as u32),
                     code_sec,
-                    types[&functions[index]].params()?.len(),
+                    ty.params()?.len(),
                     None,
                 ))),
                 name,
