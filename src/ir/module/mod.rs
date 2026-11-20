@@ -1804,21 +1804,21 @@ impl<'a> Module<'a> {
     }
 
     /// Convert an imported function to a local function.
-    /// The function ID inside the `local_function` parameter should equal the `imports_id` specified.
-    /// Continue using the ImportsID as normal (like in `call` instructions), this library will take care of ID changes for you during encoding.
+    /// The function ID inside the `local_function` parameter should equal the `function_id` specified.
+    /// Continue using the FunctionID as normal (like in `call` instructions), this library will take care of ID changes for you during encoding.
     /// Returns false if it is a local function.
     pub(crate) fn convert_import_fn_to_local(
         &mut self,
-        import_id: ImportsID,
+        function_id: FunctionID,
         local_function: LocalFunction<'a>,
     ) -> bool {
-        if self.functions.is_local(FunctionID(*import_id)) {
+        if self.functions.is_local(function_id) {
             warn!("This is a local function!");
             return false;
         }
-        self.delete_func(FunctionID(*import_id));
+        self.delete_func(function_id);
         self.functions
-            .get_mut(FunctionID(*import_id))
+            .get_mut(function_id)
             .set_kind(FuncKind::Local(Box::new(local_function)));
         true
     }
