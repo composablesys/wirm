@@ -233,9 +233,15 @@ fn global_memory_label_name_indices(wasm: &[u8]) -> (Vec<u32>, Vec<u32>, Vec<u32
             if let wasmparser::KnownCustom::Name(reader) = cs.as_known() {
                 for sub in reader {
                     match sub.unwrap() {
-                        Name::Global(map) => globals.extend(map.into_iter().map(|n| n.unwrap().index)),
-                        Name::Memory(map) => memories.extend(map.into_iter().map(|n| n.unwrap().index)),
-                        Name::Label(map) => labels.extend(map.into_iter().map(|n| n.unwrap().index)),
+                        Name::Global(map) => {
+                            globals.extend(map.into_iter().map(|n| n.unwrap().index))
+                        }
+                        Name::Memory(map) => {
+                            memories.extend(map.into_iter().map(|n| n.unwrap().index))
+                        }
+                        Name::Label(map) => {
+                            labels.extend(map.into_iter().map(|n| n.unwrap().index))
+                        }
                         _ => {}
                     }
                 }
