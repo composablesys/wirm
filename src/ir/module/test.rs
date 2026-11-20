@@ -269,6 +269,31 @@ fn test_convert_import_fn_to_local() {
 }
 
 #[test]
+fn test_convert_import_fn_to_local_after_non_function_import() {
+    let buff = wat::parse_str(
+        r#"(module
+            (import "env" "mem" (memory 1))
+            (import "env" "f" (func))
+            (func (call 0))
+        )"#,
+    )
+    .expect("couldn't convert the input wat to Wasm");
+    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+
+    let mut builder = FunctionBuilder::new(&[], &[]);
+    builder.nop();
+    builder
+        .replace_import_in_module(&mut module, ImportsID(1))
+        .expect("error");
+
+    let encoded = module.encode().expect("Unable to encode");
+    let result = Module::parse(&encoded, false, false).expect("Unable to parse");
+    assert_eq!(result.imports.num_funcs, 0);
+    assert_eq!(result.imports.num_memories, 1);
+    assert_eq!(result.num_local_functions, 2);
+}
+
+#[test]
 fn test_convert_local_fn_to_import() {
     let (buff, mut init_state) = setup();
     let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
