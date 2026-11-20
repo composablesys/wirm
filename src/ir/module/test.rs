@@ -330,6 +330,23 @@ fn test_set_fn_name_import_through_module() {
     );
 }
 
+#[test]
+fn test_get_func_after_non_function_import() {
+    let buff = wat::parse_str(
+        r#"(module
+            (import "env" "mem" (memory 1))
+            (import "env" "f" (func))
+        )"#,
+    )
+    .expect("couldn't convert the input wat to Wasm");
+    let module = Module::parse(&buff, false, false).expect("Unable to parse");
+
+    assert_eq!(
+        module.imports.get_func("env".to_string(), "f".to_string()),
+        Some(FunctionID(0))
+    );
+}
+
 /// A `FunctionID` counts only function imports, so non-function imports that
 /// come first must not shift which import gets named.
 #[test]
