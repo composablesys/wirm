@@ -1316,6 +1316,14 @@ impl<'a> Module<'a> {
                                 *memory_mapping.get(&(export.index)).unwrap(),
                             );
                         }
+                        ExternalKind::Global => {
+                            // Update the global indices
+                            exports.export(
+                                &export.name,
+                                wasm_encoder::ExportKind::from(export.kind),
+                                *global_mapping.get(&(export.index)).unwrap(),
+                            );
+                        }
                         _ => {
                             exports.export(
                                 &export.name,
