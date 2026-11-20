@@ -1316,6 +1316,20 @@ impl<'a> Module<'a> {
                                 *memory_mapping.get(&(export.index)).unwrap(),
                             );
                         }
+                        ExternalKind::Global => {
+                            // Update the global indices
+                            let Some(new_index) = global_mapping.get(&export.index) else {
+                                return Err(InstrumentationError(format!(
+                                    "Export `{}` references a missing global, ID: {}",
+                                    export.name, export.index
+                                )));
+                            };
+                            exports.export(
+                                &export.name,
+                                wasm_encoder::ExportKind::from(export.kind),
+                                *new_index,
+                            );
+                        }
                         _ => {
                             exports.export(
                                 &export.name,
