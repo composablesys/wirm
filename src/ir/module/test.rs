@@ -344,10 +344,7 @@ fn test_get_import_func_after_adding_import() {
     let ty = module.types.add_func_type(&[], &[]);
     let (added_fid, _) = module.add_import_func("env".to_string(), "b".to_string(), ty);
 
-    assert_eq!(
-        module.imports.get_func("env".to_string(), "b".to_string()),
-        Some(added_fid)
-    );
+    assert_eq!(module.get_import_func("env", "b"), Some(added_fid));
 }
 
 /// A `FunctionID` counts only function imports, so non-function imports that
