@@ -1901,9 +1901,9 @@ impl<'a> Module<'a> {
 
     /// Set the name of a function using its ID.
     pub fn set_fn_name(&mut self, id: FunctionID, name: String) {
-        if *id < self.imports.num_funcs {
+        if let FuncKind::Import(ImportedFunction { import_id, .. }) = self.functions.get_kind(id) {
             // the function is an import
-            self.imports.set_fn_name(name.clone(), id);
+            self.imports.set_name(name.clone(), *import_id);
             let ok = self.functions.set_imported_fn_name(id, name);
             debug_assert!(ok);
         } else {
