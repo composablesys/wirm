@@ -343,6 +343,43 @@ fn test_convert_local_fn_to_import() {
 }
 
 #[test]
+fn test_convert_local_fn_to_import_after_adding_import() {
+    let buff = wat::parse_str(
+        r#"(module
+            (import "env" "a" (func))
+            (func (export "caller") (call 2))
+            (func)
+        )"#,
+    )
+    .expect("couldn't convert the input wat to Wasm");
+    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+
+    let ty = module.types.add_func_type(&[], &[]);
+    module.add_import_func("env".to_string(), "added".to_string(), ty);
+    module.convert_local_fn_to_import(
+        FunctionID(2),
+        "env".to_string(),
+        "converted".to_string(),
+        ty,
+    );
+
+    let encoded = module.encode().expect("Unable to encode");
+    let result = Module::parse(&encoded, false, false).expect("Unable to parse");
+    let caller = result
+        .exports
+        .get_func_by_name("caller".to_string())
+        .expect("missing export");
+    let body = &result.functions.unwrap_local(caller).unwrap().body;
+    let wasmparser::Operator::Call { function_index } = body.instructions.get_ops()[0] else {
+        panic!("expected a call");
+    };
+    assert_eq!(
+        &*result.imports.get(ImportsID(function_index)).name,
+        "converted"
+    );
+}
+
+#[test]
 fn test_set_fn_name_import_through_import() {
     let (buff, mut init_state) = setup();
     let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
@@ -395,6 +432,38 @@ fn test_get_import_func_after_adding_import() {
     let (added_fid, _) = module.add_import_func("env".to_string(), "b".to_string(), ty);
 
     assert_eq!(module.get_import_func("env", "b"), Some(added_fid));
+}
+
+#[test]
+fn test_set_fn_name_after_adding_import() {
+    let buff = wat::parse_str(
+        r#"(module
+            (import "env" "a" (func))
+            (func)
+            (func)
+        )"#,
+    )
+    .expect("couldn't convert the input wat to Wasm");
+    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+
+    let ty = module.types.add_func_type(&[], &[]);
+    let (added_fid, added_imp_id) = module.add_import_func("env".to_string(), "b".to_string(), ty);
+
+    module.set_fn_name(added_fid, "added".to_string());
+    module.set_fn_name(FunctionID(1), "local".to_string());
+
+    assert_eq!(
+        module.imports.get_import_name(added_imp_id),
+        &Some("added".to_string())
+    );
+    assert_eq!(
+        module.functions.get_name(added_fid),
+        &Some("added".to_string())
+    );
+    assert_eq!(
+        module.functions.get_name(FunctionID(1)),
+        &Some("local".to_string())
+    );
 }
 
 #[test]
