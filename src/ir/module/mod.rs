@@ -1821,6 +1821,20 @@ impl<'a> Module<'a> {
         (FunctionID(imp_fn_id), imp_id)
     }
 
+    /// Get the function ID of an imported function by its `module` and `name`.
+    pub fn get_import_func(&self, module: &str, name: &str) -> Option<FunctionID> {
+        self.functions
+            .iter()
+            .position(|f| match f.kind() {
+                FuncKind::Import(i) if !f.is_deleted() => {
+                    let import = self.imports.get(i.import_id);
+                    *import.module == *module && *import.name == *name
+                }
+                _ => false,
+            })
+            .map(|idx| FunctionID(idx as u32))
+    }
+
     /// Get the number of imported functions in the module (including any added ones).
     pub fn num_import_func(&self) -> u32 {
         self.imports.num_funcs
