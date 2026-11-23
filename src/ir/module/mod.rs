@@ -1023,6 +1023,11 @@ impl<'a> Module<'a> {
 
         // First fix the ID mappings throughout the module
         let func_mapping = if tmp.functions.recalculate_ids {
+            // imported functions are indexed in the order of the import section
+            tmp.functions.as_vec_mut().sort_by_key(|f| match f.kind() {
+                FuncKind::Import(i) => *i.import_id,
+                FuncKind::Local(_) => u32::MAX,
+            });
             Self::recalculate_ids(&mut tmp.functions)
         } else {
             Self::get_mapping_generic(tmp.functions.as_vec().iter())
@@ -1914,9 +1919,9 @@ impl<'a> Module<'a> {
 
     /// Set the name of a function using its ID.
     pub fn set_fn_name(&mut self, id: FunctionID, name: String) {
-        if *id < self.imports.num_funcs {
+        if let FuncKind::Import(ImportedFunction { import_id, .. }) = self.functions.get_kind(id) {
             // the function is an import
-            self.imports.set_fn_name(name.clone(), id);
+            self.imports.set_name(name.clone(), *import_id);
             let ok = self.functions.set_imported_fn_name(id, name);
             debug_assert!(ok);
         } else {
