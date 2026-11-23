@@ -239,12 +239,11 @@ impl<'a> ModuleImports<'a> {
         note = "use `Module::get_import_func`, which stays correct after the module is modified"
     )]
     pub fn get_func(&self, module: String, name: String) -> Option<FunctionID> {
-        for (idx, imp) in self.imports.iter().enumerate() {
-            if imp.is_function() && imp.module == module.as_str() && *imp.name == name {
-                return Some(FunctionID(idx as u32));
-            }
-        }
-        None
+        self.imports
+            .iter()
+            .filter(|imp| imp.is_function())
+            .position(|imp| imp.module == module.as_str() && *imp.name == name)
+            .map(|idx| FunctionID(idx as u32))
     }
 
     /// Get an Import by its `ImportsID`

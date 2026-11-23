@@ -15,6 +15,31 @@ use std::path::PathBuf;
 #[path = "../../../tests/common/validate.rs"]
 mod validate;
 
+#[test]
+fn test_parse_malformed_module_does_not_panic() {
+    const HEADER: [u8; 8] = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+
+    // a `producers` custom section without any fields
+    let mut empty_producers = HEADER.to_vec();
+    empty_producers.extend([0x00, 0x0b, 0x09]);
+    empty_producers.extend(b"producers");
+    empty_producers.push(0x00);
+    assert!(Module::parse(&empty_producers, false, false).is_ok());
+
+    // a function body containing the illegal opcode 0xff
+    let mut illegal_opcode = HEADER.to_vec();
+    illegal_opcode.extend([0x01, 0x04, 0x01, 0x60, 0x00, 0x00]);
+    illegal_opcode.extend([0x03, 0x02, 0x01, 0x00]);
+    illegal_opcode.extend([0x0a, 0x05, 0x01, 0x03, 0x00, 0xff, 0x0b]);
+    assert!(Module::parse(&illegal_opcode, false, false).is_err());
+
+    // a function of type 5 in a module without types
+    let mut unknown_type = HEADER.to_vec();
+    unknown_type.extend([0x03, 0x02, 0x01, 0x05]);
+    unknown_type.extend([0x0a, 0x04, 0x01, 0x02, 0x00, 0x0b]);
+    assert!(Module::parse(&unknown_type, false, false).is_err());
+}
+
 // FUNCTIONS
 #[test]
 fn test_add_local_func() {
@@ -269,6 +294,31 @@ fn test_convert_import_fn_to_local() {
 }
 
 #[test]
+fn test_convert_import_fn_to_local_after_non_function_import() {
+    let buff = wat::parse_str(
+        r#"(module
+            (import "env" "mem" (memory 1))
+            (import "env" "f" (func))
+            (func (call 0))
+        )"#,
+    )
+    .expect("couldn't convert the input wat to Wasm");
+    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+
+    let mut builder = FunctionBuilder::new(&[], &[]);
+    builder.nop();
+    builder
+        .replace_import_in_module(&mut module, ImportsID(1))
+        .expect("error");
+
+    let encoded = module.encode().expect("Unable to encode");
+    let result = Module::parse(&encoded, false, false).expect("Unable to parse");
+    assert_eq!(result.imports.num_funcs, 0);
+    assert_eq!(result.imports.num_memories, 1);
+    assert_eq!(result.num_local_functions, 2);
+}
+
+#[test]
 fn test_convert_local_fn_to_import() {
     let (buff, mut init_state) = setup();
     let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
@@ -345,6 +395,23 @@ fn test_get_import_func_after_adding_import() {
     let (added_fid, _) = module.add_import_func("env".to_string(), "b".to_string(), ty);
 
     assert_eq!(module.get_import_func("env", "b"), Some(added_fid));
+}
+
+#[test]
+fn test_get_func_after_non_function_import() {
+    let buff = wat::parse_str(
+        r#"(module
+            (import "env" "mem" (memory 1))
+            (import "env" "f" (func))
+        )"#,
+    )
+    .expect("couldn't convert the input wat to Wasm");
+    let module = Module::parse(&buff, false, false).expect("Unable to parse");
+
+    assert_eq!(
+        module.imports.get_func("env".to_string(), "f".to_string()),
+        Some(FunctionID(0))
+    );
 }
 
 /// A `FunctionID` counts only function imports, so non-function imports that
@@ -525,6 +592,48 @@ fn test_add_imported_global() {
         &HashMap::new(),
         "test_add_imported_global",
     );
+}
+
+#[test]
+fn test_exported_global_after_adding_imported_global() {
+    let buff = wat::parse_str(
+        r#"(module
+            (global (export "g") i32 (i32.const 7))
+        )"#,
+    )
+    .expect("couldn't convert the input wat to Wasm");
+    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+
+    module.add_imported_global(
+        "env".to_string(),
+        "added".to_string(),
+        DataType::I32,
+        false,
+        false,
+    );
+
+    let encoded = module.encode().expect("Unable to encode");
+    let result = Module::parse(&encoded, false, false).expect("Unable to parse");
+    let export = result
+        .exports
+        .get_by_name("g".to_string())
+        .expect("missing export");
+    assert_eq!(export.index, 1);
+}
+
+#[test]
+fn test_export_of_deleted_global_is_an_error() {
+    let buff = wat::parse_str(
+        r#"(module
+            (global (export "g") i32 (i32.const 7))
+        )"#,
+    )
+    .expect("couldn't convert the input wat to Wasm");
+    let mut module = Module::parse(&buff, false, false).expect("Unable to parse");
+
+    module.delete_global(GlobalID(0));
+
+    assert!(module.encode().is_err());
 }
 
 #[test]

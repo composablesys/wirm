@@ -17,7 +17,10 @@ use crate::ir::module::module_imports::{expand_imports, Import, ModuleImports};
 use crate::ir::module::module_memories::{ImportedMemory, LocalMemory, MemKind, Memories, Memory};
 use crate::ir::module::module_tables::{Element, ModuleTables, Table};
 use crate::ir::module::module_types::{ModuleTypes, RecGroup, Types};
-use crate::ir::module::names::{indirect_namemap_parser2encoder, namemap_parser2encoder};
+use crate::ir::module::names::{
+    indirect_namemap_parser2encoder, indirect_namemap_parser2vec, namemap_parser2encoder,
+    namemap_parser2vec, remap_names,
+};
 use crate::ir::module::reindex::fix_op_id_mapping;
 use crate::ir::module::side_effects::{InjectType, Injection};
 use crate::ir::types;
@@ -94,11 +97,11 @@ pub struct Module<'a> {
     pub(crate) num_local_memories: u32,
 
     // just a placeholder for round-trip
-    pub(crate) label_names: wasm_encoder::IndirectNameMap,
+    pub(crate) label_names: Vec<(u32, wasm_encoder::NameMap)>,
     pub(crate) type_names: wasm_encoder::NameMap,
     pub(crate) table_names: wasm_encoder::NameMap,
-    pub(crate) memory_names: wasm_encoder::NameMap,
-    pub(crate) global_names: wasm_encoder::NameMap,
+    pub(crate) memory_names: Vec<(u32, String)>,
+    pub(crate) global_names: Vec<(u32, String)>,
     pub(crate) elem_names: wasm_encoder::NameMap,
     pub(crate) data_names: wasm_encoder::NameMap,
     pub(crate) field_names: wasm_encoder::IndirectNameMap,
@@ -172,8 +175,7 @@ impl<'a> Module<'a> {
         let op_reader = body.get_operators_reader()?;
         let ops = op_reader
             .into_iter_with_offsets()
-            .collect::<Result<Vec<(Operator, u64)>, _>>()
-            .expect("ops");
+            .collect::<Result<Vec<(Operator, u64)>, _>>()?;
 
         let instructions = Instructions::new(ops, locals_orig, with_offsets);
         if let Some(last) = instructions.get_ops().last() {
@@ -232,11 +234,11 @@ impl<'a> Module<'a> {
 
         let mut module_name: Option<String> = None;
         // for the other names, we directly encode it without passing them into the IR
-        let mut label_names = wasm_encoder::IndirectNameMap::new();
+        let mut label_names = vec![];
         let mut type_names = wasm_encoder::NameMap::new();
         let mut table_names = wasm_encoder::NameMap::new();
-        let mut memory_names = wasm_encoder::NameMap::new();
-        let mut global_names = wasm_encoder::NameMap::new();
+        let mut memory_names = vec![];
+        let mut global_names = vec![];
         let mut elem_names = wasm_encoder::NameMap::new();
         let mut data_names = wasm_encoder::NameMap::new();
         let mut field_names = wasm_encoder::IndirectNameMap::new();
@@ -490,7 +492,7 @@ impl<'a> Module<'a> {
                                         }
                                     }
                                     wasmparser::Name::Label(names) => {
-                                        label_names = indirect_namemap_parser2encoder(names);
+                                        label_names = indirect_namemap_parser2vec(names);
                                     }
                                     wasmparser::Name::Type(names) => {
                                         type_names = namemap_parser2encoder(names);
@@ -499,10 +501,10 @@ impl<'a> Module<'a> {
                                         table_names = namemap_parser2encoder(names);
                                     }
                                     wasmparser::Name::Memory(names) => {
-                                        memory_names = namemap_parser2encoder(names);
+                                        memory_names = namemap_parser2vec(names);
                                     }
                                     wasmparser::Name::Global(names) => {
-                                        global_names = namemap_parser2encoder(names);
+                                        global_names = namemap_parser2vec(names);
                                     }
                                     wasmparser::Name::Element(names) => {
                                         elem_names = namemap_parser2encoder(names);
@@ -526,20 +528,6 @@ impl<'a> Module<'a> {
                                     wasmparser::Name::Unknown { .. } => {}
                                 }
                             }
-                        }
-                        wasmparser::KnownCustom::Producers(producer_section_reader) => {
-                            let field = producer_section_reader
-                                .into_iter()
-                                .next()
-                                .unwrap()
-                                .expect("producers field");
-                            let _value = field
-                                .values
-                                .into_iter()
-                                .collect::<Result<Vec<_>, _>>()
-                                .expect("values");
-                            custom_sections
-                                .push((custom_section_reader.name(), custom_section_reader.data()));
                         }
                         _ => {
                             custom_sections
@@ -645,12 +633,18 @@ impl<'a> Module<'a> {
         let code_sections_length = code_sections.len();
         for (index, code_sec) in code_sections.into_iter().enumerate() {
             let name = code_sec.name.clone();
+            let ty = types.get(&functions[index]).ok_or_else(|| {
+                Error::UnknownId(format!(
+                    "Could not find type with ID: {}",
+                    *functions[index]
+                ))
+            })?;
             final_funcs.push(Function::new(
                 FuncKind::Local(Box::new(LocalFunction::new(
                     functions[index],
                     FunctionID(imports.num_funcs + index as u32),
                     code_sec,
-                    types[&functions[index]].params()?.len(),
+                    ty.params()?.len(),
                     None,
                 ))),
                 name,
@@ -1316,6 +1310,20 @@ impl<'a> Module<'a> {
                                 *memory_mapping.get(&(export.index)).unwrap(),
                             );
                         }
+                        ExternalKind::Global => {
+                            // Update the global indices
+                            let Some(new_index) = global_mapping.get(&export.index) else {
+                                return Err(InstrumentationError(format!(
+                                    "Export `{}` references a missing global, ID: {}",
+                                    export.name, export.index
+                                )));
+                            };
+                            exports.export(
+                                &export.name,
+                                wasm_encoder::ExportKind::from(export.kind),
+                                *new_index,
+                            );
+                        }
                         _ => {
                             exports.export(
                                 &export.name,
@@ -1556,11 +1564,23 @@ impl<'a> Module<'a> {
         }
         names.functions(&function_names);
         names.locals(&local_names);
-        names.labels(&tmp.label_names);
+        let mut label_names = wasm_encoder::IndirectNameMap::new();
+        for (idx, labels) in remap_names(&tmp.label_names, &func_mapping) {
+            label_names.append(idx, labels);
+        }
+        let mut memory_names = wasm_encoder::NameMap::new();
+        for (idx, name) in remap_names(&tmp.memory_names, &memory_mapping) {
+            memory_names.append(idx, name);
+        }
+        let mut global_names = wasm_encoder::NameMap::new();
+        for (idx, name) in remap_names(&tmp.global_names, &global_mapping) {
+            global_names.append(idx, name);
+        }
+        names.labels(&label_names);
         names.types(&tmp.type_names);
         names.tables(&tmp.table_names);
-        names.memories(&tmp.memory_names);
-        names.globals(&tmp.global_names);
+        names.memories(&memory_names);
+        names.globals(&global_names);
         names.elements(&tmp.elem_names);
         names.data(&tmp.data_names);
         names.fields(&tmp.field_names);
@@ -1818,21 +1838,21 @@ impl<'a> Module<'a> {
     }
 
     /// Convert an imported function to a local function.
-    /// The function ID inside the `local_function` parameter should equal the `imports_id` specified.
-    /// Continue using the ImportsID as normal (like in `call` instructions), this library will take care of ID changes for you during encoding.
+    /// The function ID inside the `local_function` parameter should equal the `function_id` specified.
+    /// Continue using the FunctionID as normal (like in `call` instructions), this library will take care of ID changes for you during encoding.
     /// Returns false if it is a local function.
     pub(crate) fn convert_import_fn_to_local(
         &mut self,
-        import_id: ImportsID,
+        function_id: FunctionID,
         local_function: LocalFunction<'a>,
     ) -> bool {
-        if self.functions.is_local(FunctionID(*import_id)) {
+        if self.functions.is_local(function_id) {
             warn!("This is a local function!");
             return false;
         }
-        self.delete_func(FunctionID(*import_id));
+        self.delete_func(function_id);
         self.functions
-            .get_mut(FunctionID(*import_id))
+            .get_mut(function_id)
             .set_kind(FuncKind::Local(Box::new(local_function)));
         true
     }

@@ -224,3 +224,72 @@ fn set_fn_name_writes_function_name() {
         "function 0's name should be preserved, got {names:?}"
     );
 }
+
+/// Return the indices named by the global, memory and label subsections.
+fn global_memory_label_name_indices(wasm: &[u8]) -> (Vec<u32>, Vec<u32>, Vec<u32>) {
+    let (mut globals, mut memories, mut labels) = (vec![], vec![], vec![]);
+    for payload in wasmparser::Parser::new(0).parse_all(wasm) {
+        if let Payload::CustomSection(cs) = payload.unwrap() {
+            if let wasmparser::KnownCustom::Name(reader) = cs.as_known() {
+                for sub in reader {
+                    match sub.unwrap() {
+                        Name::Global(map) => {
+                            globals.extend(map.into_iter().map(|n| n.unwrap().index))
+                        }
+                        Name::Memory(map) => {
+                            memories.extend(map.into_iter().map(|n| n.unwrap().index))
+                        }
+                        Name::Label(map) => {
+                            labels.extend(map.into_iter().map(|n| n.unwrap().index))
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    (globals, memories, labels)
+}
+
+#[test]
+fn global_memory_and_label_names_follow_reindexing() {
+    let wat = r#"
+        (module
+          (memory $m 1)
+          (global $g i32 (i32.const 0))
+          (func $f (block $l)))
+    "#;
+    let buff = wat::parse_str(wat).unwrap();
+    assert_eq!(
+        global_memory_label_name_indices(&buff),
+        (vec![0], vec![0], vec![0])
+    );
+
+    let mut module = Module::parse(&buff, true, false).unwrap();
+    let ty = module.types.add_func_type(&[], &[]);
+    module.add_import_func("env".to_string(), "f".to_string(), ty);
+    module.add_imported_global(
+        "env".to_string(),
+        "g".to_string(),
+        wirm::DataType::I32,
+        false,
+        false,
+    );
+    module.add_import_memory(
+        "env".to_string(),
+        "m".to_string(),
+        wasmparser::MemoryType {
+            memory64: false,
+            shared: false,
+            initial: 1,
+            maximum: None,
+            page_size_log2: None,
+        },
+    );
+    let out = module.encode().expect("encode failed");
+
+    assert_eq!(
+        global_memory_label_name_indices(&out),
+        (vec![1], vec![1], vec![1])
+    );
+}
