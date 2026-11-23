@@ -1831,6 +1831,10 @@ pub enum InitInstr {
         array_elem_index: u32,
     },
     RefI31,
+    /// Reinterpret an `externref` as the equivalent `anyref`
+    AnyConvertExtern,
+    /// Reinterpret an `anyref` as the equivalent `externref`
+    ExternConvertAny,
 }
 impl InitInstr {
     pub fn fix_id_mapping(
@@ -1919,6 +1923,8 @@ impl InitExpr {
                     array_elem_index,
                 },
                 RefI31 => InitInstr::RefI31,
+                AnyConvertExtern => InitInstr::AnyConvertExtern,
+                ExternConvertAny => InitInstr::ExternConvertAny,
                 End => break,
                 other => {
                     return Err(Error::ConversionError(format!(
@@ -2106,6 +2112,12 @@ impl InitExpr {
                     .encode(&mut bytes);
                 }
                 InitInstr::RefI31 => wasm_encoder::Instruction::RefI31.encode(&mut bytes),
+                InitInstr::AnyConvertExtern => {
+                    wasm_encoder::Instruction::AnyConvertExtern.encode(&mut bytes)
+                }
+                InitInstr::ExternConvertAny => {
+                    wasm_encoder::Instruction::ExternConvertAny.encode(&mut bytes)
+                }
             }
         }
         wasm_encoder::ConstExpr::raw(bytes)
