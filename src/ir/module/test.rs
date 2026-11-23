@@ -412,6 +412,7 @@ fn test_set_fn_name_after_adding_import() {
     );
 }
 
+#[test]
 fn test_get_func_after_non_function_import() {
     let buff = wat::parse_str(
         r#"(module
