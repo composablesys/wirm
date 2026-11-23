@@ -15,16 +15,16 @@
 
 use libfuzzer_sys::fuzz_target;
 use wasm_smith::Component as SmithComponent;
-use wasmparser::{
-    CanonicalFunction, ComponentAlias, ComponentExport, ComponentImport, ComponentInstance,
-    ComponentStartFunction, ComponentType, ComponentTypeDeclaration, CoreType,
-    Instance as WpInstance, InstanceTypeDeclaration, ModuleTypeDeclaration, Parser, Payload,
-    SubType,
-};
 use wirm::ir::component::visitor::{
     walk_structural, walk_topological, ComponentVisitor, ItemKind, VisitCtx,
 };
 use wirm::ir::types::CustomSection;
+use wirm::wasmparser::{
+    self, CanonicalFunction, ComponentAlias, ComponentExport, ComponentImport, ComponentInstance,
+    ComponentStartFunction, ComponentType, ComponentTypeDeclaration, CoreType,
+    Instance as WpInstance, InstanceTypeDeclaration, ModuleTypeDeclaration, Parser, Payload,
+    SubType,
+};
 
 // --- Recording visitor --------------------------------------------------
 
@@ -38,30 +38,106 @@ use wirm::ir::types::CustomSection;
 enum Evt {
     EnterRootComp,
     ExitRootComp,
-    EnterComp { id: u32, sec: Option<usize> },
-    ExitComp { id: u32, sec: Option<usize> },
-    Module { id: u32, sec: Option<usize> },
-    CompType { id: u32, sec: Option<usize> },
-    EnterCompTypeInst { id: u32, sec: Option<usize> },
-    ExitCompTypeInst { id: u32, sec: Option<usize> },
-    EnterCompTypeComp { id: u32, sec: Option<usize> },
-    ExitCompTypeComp { id: u32, sec: Option<usize> },
-    CompTypeDecl { decl_idx: usize, id: u32, sec: Option<usize> },
-    InstTypeDecl { decl_idx: usize, id: u32, sec: Option<usize> },
-    CompInstance { id: u32, sec: Option<usize> },
-    Canon { kind: ItemKind, id: u32, sec: Option<usize> },
-    Alias { kind: ItemKind, id: u32, sec: Option<usize> },
-    CompImport { kind: ItemKind, id: u32, sec: Option<usize> },
-    CompExport { kind: ItemKind, id: u32, sec: Option<usize> },
-    EnterCoreRecGroup { count: usize, sec: Option<usize> },
-    ExitCoreRecGroup { sec: Option<usize> },
-    CoreSubtype { id: u32, sec: Option<usize> },
-    EnterCoreModuleType { id: u32, sec: Option<usize> },
-    ExitCoreModuleType { id: u32, sec: Option<usize> },
-    ModuleTypeDecl { decl_idx: usize, id: u32, sec: Option<usize> },
-    CoreInstance { id: u32, sec: Option<usize> },
-    CustomSection { sec: Option<usize> },
-    StartSection { sec: Option<usize> },
+    EnterComp {
+        id: u32,
+        sec: Option<usize>,
+    },
+    ExitComp {
+        id: u32,
+        sec: Option<usize>,
+    },
+    Module {
+        id: u32,
+        sec: Option<usize>,
+    },
+    CompType {
+        id: u32,
+        sec: Option<usize>,
+    },
+    EnterCompTypeInst {
+        id: u32,
+        sec: Option<usize>,
+    },
+    ExitCompTypeInst {
+        id: u32,
+        sec: Option<usize>,
+    },
+    EnterCompTypeComp {
+        id: u32,
+        sec: Option<usize>,
+    },
+    ExitCompTypeComp {
+        id: u32,
+        sec: Option<usize>,
+    },
+    CompTypeDecl {
+        decl_idx: usize,
+        id: u32,
+        sec: Option<usize>,
+    },
+    InstTypeDecl {
+        decl_idx: usize,
+        id: u32,
+        sec: Option<usize>,
+    },
+    CompInstance {
+        id: u32,
+        sec: Option<usize>,
+    },
+    Canon {
+        kind: ItemKind,
+        id: u32,
+        sec: Option<usize>,
+    },
+    Alias {
+        kind: ItemKind,
+        id: u32,
+        sec: Option<usize>,
+    },
+    CompImport {
+        kind: ItemKind,
+        id: u32,
+        sec: Option<usize>,
+    },
+    CompExport {
+        kind: ItemKind,
+        id: u32,
+        sec: Option<usize>,
+    },
+    EnterCoreRecGroup {
+        count: usize,
+        sec: Option<usize>,
+    },
+    ExitCoreRecGroup {
+        sec: Option<usize>,
+    },
+    CoreSubtype {
+        id: u32,
+        sec: Option<usize>,
+    },
+    EnterCoreModuleType {
+        id: u32,
+        sec: Option<usize>,
+    },
+    ExitCoreModuleType {
+        id: u32,
+        sec: Option<usize>,
+    },
+    ModuleTypeDecl {
+        decl_idx: usize,
+        id: u32,
+        sec: Option<usize>,
+    },
+    CoreInstance {
+        id: u32,
+        sec: Option<usize>,
+    },
+    CustomSection {
+        sec: Option<usize>,
+    },
+    StartSection {
+        sec: Option<usize>,
+    },
 }
 
 struct Recorder {
@@ -76,28 +152,52 @@ impl<'a> ComponentVisitor<'a> for Recorder {
         self.events.push(Evt::ExitRootComp);
     }
     fn enter_component(&mut self, cx: &VisitCtx<'a>, id: u32, _c: &wirm::Component<'a>) {
-        self.events.push(Evt::EnterComp { id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::EnterComp {
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn exit_component(&mut self, cx: &VisitCtx<'a>, id: u32, _c: &wirm::Component<'a>) {
-        self.events.push(Evt::ExitComp { id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::ExitComp {
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn visit_module(&mut self, cx: &VisitCtx<'a>, id: u32, _m: &wirm::Module<'a>) {
-        self.events.push(Evt::Module { id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::Module {
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn visit_comp_type(&mut self, cx: &VisitCtx<'a>, id: u32, _t: &ComponentType<'a>) {
-        self.events.push(Evt::CompType { id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::CompType {
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn enter_component_type_inst(&mut self, cx: &VisitCtx<'a>, id: u32, _t: &ComponentType<'a>) {
-        self.events.push(Evt::EnterCompTypeInst { id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::EnterCompTypeInst {
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn exit_component_type_inst(&mut self, cx: &VisitCtx<'a>, id: u32, _t: &ComponentType<'a>) {
-        self.events.push(Evt::ExitCompTypeInst { id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::ExitCompTypeInst {
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn enter_component_type_comp(&mut self, cx: &VisitCtx<'a>, id: u32, _t: &ComponentType<'a>) {
-        self.events.push(Evt::EnterCompTypeComp { id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::EnterCompTypeComp {
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn exit_component_type_comp(&mut self, cx: &VisitCtx<'a>, id: u32, _t: &ComponentType<'a>) {
-        self.events.push(Evt::ExitCompTypeComp { id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::ExitCompTypeComp {
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn visit_comp_type_decl(
         &mut self,
@@ -107,7 +207,11 @@ impl<'a> ComponentVisitor<'a> for Recorder {
         _p: &ComponentType<'a>,
         _d: &ComponentTypeDeclaration<'a>,
     ) {
-        self.events.push(Evt::CompTypeDecl { decl_idx, id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::CompTypeDecl {
+            decl_idx,
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn visit_inst_type_decl(
         &mut self,
@@ -117,16 +221,31 @@ impl<'a> ComponentVisitor<'a> for Recorder {
         _p: &ComponentType<'a>,
         _d: &InstanceTypeDeclaration<'a>,
     ) {
-        self.events.push(Evt::InstTypeDecl { decl_idx, id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::InstTypeDecl {
+            decl_idx,
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn visit_comp_instance(&mut self, cx: &VisitCtx<'a>, id: u32, _i: &ComponentInstance<'a>) {
-        self.events.push(Evt::CompInstance { id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::CompInstance {
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn visit_canon(&mut self, cx: &VisitCtx<'a>, kind: ItemKind, id: u32, _c: &CanonicalFunction) {
-        self.events.push(Evt::Canon { kind, id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::Canon {
+            kind,
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn visit_alias(&mut self, cx: &VisitCtx<'a>, kind: ItemKind, id: u32, _a: &ComponentAlias<'a>) {
-        self.events.push(Evt::Alias { kind, id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::Alias {
+            kind,
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn visit_comp_import(
         &mut self,
@@ -135,7 +254,11 @@ impl<'a> ComponentVisitor<'a> for Recorder {
         id: u32,
         _i: &ComponentImport<'a>,
     ) {
-        self.events.push(Evt::CompImport { kind, id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::CompImport {
+            kind,
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn visit_comp_export(
         &mut self,
@@ -144,19 +267,34 @@ impl<'a> ComponentVisitor<'a> for Recorder {
         id: u32,
         _e: &ComponentExport<'a>,
     ) {
-        self.events.push(Evt::CompExport { kind, id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::CompExport {
+            kind,
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn enter_core_rec_group(&mut self, cx: &VisitCtx<'a>, count: usize, _t: &CoreType<'a>) {
-        self.events.push(Evt::EnterCoreRecGroup { count, sec: cx.curr_section_idx() });
+        self.events.push(Evt::EnterCoreRecGroup {
+            count,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn visit_core_subtype(&mut self, cx: &VisitCtx<'a>, id: u32, _s: &SubType) {
-        self.events.push(Evt::CoreSubtype { id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::CoreSubtype {
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn exit_core_rec_group(&mut self, cx: &VisitCtx<'a>) {
-        self.events.push(Evt::ExitCoreRecGroup { sec: cx.curr_section_idx() });
+        self.events.push(Evt::ExitCoreRecGroup {
+            sec: cx.curr_section_idx(),
+        });
     }
     fn enter_core_module_type(&mut self, cx: &VisitCtx<'a>, id: u32, _t: &CoreType<'a>) {
-        self.events.push(Evt::EnterCoreModuleType { id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::EnterCoreModuleType {
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn visit_module_type_decl(
         &mut self,
@@ -166,19 +304,33 @@ impl<'a> ComponentVisitor<'a> for Recorder {
         _p: &CoreType<'a>,
         _d: &ModuleTypeDeclaration<'a>,
     ) {
-        self.events.push(Evt::ModuleTypeDecl { decl_idx, id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::ModuleTypeDecl {
+            decl_idx,
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn exit_core_module_type(&mut self, cx: &VisitCtx<'a>, id: u32, _t: &CoreType<'a>) {
-        self.events.push(Evt::ExitCoreModuleType { id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::ExitCoreModuleType {
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn visit_core_instance(&mut self, cx: &VisitCtx<'a>, id: u32, _i: &WpInstance<'a>) {
-        self.events.push(Evt::CoreInstance { id, sec: cx.curr_section_idx() });
+        self.events.push(Evt::CoreInstance {
+            id,
+            sec: cx.curr_section_idx(),
+        });
     }
     fn visit_custom_section(&mut self, cx: &VisitCtx<'a>, _s: &CustomSection<'a>) {
-        self.events.push(Evt::CustomSection { sec: cx.curr_section_idx() });
+        self.events.push(Evt::CustomSection {
+            sec: cx.curr_section_idx(),
+        });
     }
     fn visit_start_section(&mut self, cx: &VisitCtx<'a>, _s: &ComponentStartFunction) {
-        self.events.push(Evt::StartSection { sec: cx.curr_section_idx() });
+        self.events.push(Evt::StartSection {
+            sec: cx.curr_section_idx(),
+        });
     }
 }
 
@@ -297,9 +449,9 @@ fn kind_of_event(evt: &Evt) -> Option<Kind> {
         | Evt::ExitCoreModuleType { .. } => Kind::CoreType,
         // These only appear strictly inside a nested body — kind is
         // never checked at nested-depth 0.
-        Evt::CompTypeDecl { .. }
-        | Evt::InstTypeDecl { .. }
-        | Evt::ModuleTypeDecl { .. } => return None,
+        Evt::CompTypeDecl { .. } | Evt::InstTypeDecl { .. } | Evt::ModuleTypeDecl { .. } => {
+            return None
+        }
         Evt::EnterRootComp | Evt::ExitRootComp => return None,
     })
 }

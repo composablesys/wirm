@@ -55,3 +55,21 @@ jobs:
 
       - name: Run tests (release)
         run: cargo test --release --locked --all-features --verbose
+
+
+  # Does the fuzzer still compile?
+  fuzz-check:
+    name: Fuzz targets compile
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "fuzz -> target"
+
+      - name: Check fuzz targets
+        run: cargo check --manifest-path fuzz/Cargo.toml --all-targets

@@ -28,9 +28,9 @@
 
 use libfuzzer_sys::fuzz_target;
 use wasm_smith::Module as SmithModule;
-use wasmparser::MemoryType;
 use wirm::iterator::iterator_trait::{IteratingInstrumenter, Iterator};
 use wirm::iterator::module_iterator::ModuleIterator;
+use wirm::wasmparser::{self, MemoryType};
 use wirm::{DataType, Opcode};
 use wirm_fuzz::{assert_no_reference_to, count_ops};
 
@@ -117,10 +117,5 @@ fuzz_target!(|smith: SmithModule| {
          pre={pre_count}, injected={injected}, post={post_count}",
     );
 
-    assert_no_reference_to(
-        &encoded,
-        forbidden_func,
-        forbidden_global,
-        forbidden_mem,
-    );
+    assert_no_reference_to(&encoded, forbidden_func, forbidden_global, forbidden_mem);
 });

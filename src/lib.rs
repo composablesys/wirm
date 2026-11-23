@@ -269,6 +269,6 @@ pub use crate::ir::types::DataType;
 pub use crate::ir::types::InitInstr;
 pub use crate::ir::types::Location;
 
-// Re-export wasmparser so users can have the same types for e.g.
-// `wasmparser::Operator` as we use internally.
+// Re-export so users can have the same types that we use internally.
+pub use wasm_encoder;
 pub use wasmparser;

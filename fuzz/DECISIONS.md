@@ -59,13 +59,6 @@ If a specific feature starts dominating the fuzzer's time in
 uninteresting ways (e.g. too many legacy-exceptions skips), narrow
 the config.
 
-### Version pinning
-
-`wasm-smith` in `fuzz/Cargo.toml` is pinned to the same `0.X` version
-as `wasmparser` / `wasm-encoder` in the parent crate. When bumping
-`wasmparser` in `../Cargo.toml`, bump `wasm-smith` to match — the
-wasm-tools crates release in lockstep.
-
 ### CI: periodic, not per-PR
 
 Fuzzing runs on a weekly cron in `.github/workflows/fuzz.yml`, not
