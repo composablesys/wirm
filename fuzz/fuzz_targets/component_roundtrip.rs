@@ -10,6 +10,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use wasm_smith::Component as SmithComponent;
+use wirm::wasmparser;
 
 fuzz_target!(|smith: SmithComponent| {
     let bytes = smith.to_bytes();
@@ -31,9 +32,7 @@ fuzz_target!(|smith: SmithComponent| {
         Err(_) => return,
     };
 
-    let encoded = comp
-        .encode()
-        .expect("parsed component failed to re-encode");
+    let encoded = comp.encode().expect("parsed component failed to re-encode");
 
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(&encoded)

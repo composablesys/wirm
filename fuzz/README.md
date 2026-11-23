@@ -94,9 +94,3 @@ cargo +nightly fuzz run module_roundtrip \
 
 The filename only has to match what you pass on the command line — the
 hash from the CI log is convenient but not required.
-
-## When upgrading wasmparser
-
-`wasm-smith`'s version in `fuzz/Cargo.toml` must stay in sync with the
-`wasmparser` version in the parent crate's `Cargo.toml`. The wasm-tools
-crates release in lockstep; bump both together.

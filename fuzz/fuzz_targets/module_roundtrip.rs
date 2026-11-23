@@ -13,6 +13,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use wasm_smith::Module as SmithModule;
+use wirm::wasmparser;
 
 fuzz_target!(|smith: SmithModule| {
     let bytes = smith.to_bytes();
@@ -33,9 +34,7 @@ fuzz_target!(|smith: SmithModule| {
         Err(_) => return,
     };
 
-    let encoded = module
-        .encode()
-        .expect("parsed module failed to re-encode");
+    let encoded = module.encode().expect("parsed module failed to re-encode");
 
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(&encoded)

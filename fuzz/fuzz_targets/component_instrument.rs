@@ -43,19 +43,29 @@
 
 use libfuzzer_sys::fuzz_target;
 use wasm_smith::Component as SmithComponent;
-use wasmparser::{
-    CanonicalFunction, ComponentDefinedType, ComponentExportName, ComponentExternalKind,
-    ComponentFuncType, ComponentImportName, ComponentInstance, ComponentInstantiationArg,
-    ComponentOuterAliasKind, ComponentType, ComponentValType, CoreType, Export, ExternalKind,
-    Import, Instance, InstantiationArg, InstantiationArgKind, MemoryType, ModuleTypeDeclaration,
-    PrimitiveValType, TypeBounds, TypeRef, ValType, VariantCase,
-};
 use wirm::ir::id::{
     ComponentFunctionId, ComponentId, ComponentInstanceId, ComponentTypeId, CoreInstanceId,
     ModuleID, ValueID,
 };
 use wirm::ir::types::CustomSection;
+use wirm::wasm_encoder;
+use wirm::wasmparser::{
+    self, CanonicalFunction, ComponentDefinedType, ComponentExternName, ComponentExternalKind,
+    ComponentFuncType, ComponentInstance, ComponentInstantiationArg, ComponentOuterAliasKind,
+    ComponentType, ComponentValType, CoreType, Export, ExternalKind, Import, Instance,
+    InstantiationArg, InstantiationArgKind, MemoryType, ModuleTypeDeclaration, PrimitiveValType,
+    TypeBounds, TypeRef, ValType, VariantCase,
+};
 use wirm::{Component, Module};
+
+fn extern_name(name: &str) -> ComponentExternName<'_> {
+    ComponentExternName {
+        name,
+        implements: None,
+        version_suffix: None,
+        external_id: None,
+    }
+}
 
 /// Forward-reference dep-chain depth used by every chained recipe.
 /// Distinct from wasm-smith's own size/depth knob — that one bounds
@@ -178,10 +188,8 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8, u8, u8, u8, u8)| {
         params: Vec::new().into_boxed_slice(),
         result: Some(ComponentValType::Primitive(PrimitiveValType::U32)),
     }));
-    let start_func_producer = comp.add_import_component_func(
-        ComponentImportName("wirm_start_p"),
-        *start_ty_producer,
-    );
+    let start_func_producer =
+        comp.add_import_component_func(extern_name("wirm_start_p"), *start_ty_producer);
     let produced = comp.add_start_section(start_func_producer, Vec::new(), 1);
     if let Some(&vid) = produced.first() {
         let start_ty_consumer = comp.add_component_type(ComponentType::Func(ComponentFuncType {
@@ -190,10 +198,8 @@ fuzz_target!(|input: (SmithComponent, u8, u8, u8, u8, u8, u8, u8, u8)| {
                 .into_boxed_slice(),
             result: None,
         }));
-        let start_func_consumer = comp.add_import_component_func(
-            ComponentImportName("wirm_start_c"),
-            *start_ty_consumer,
-        );
+        let start_func_consumer =
+            comp.add_import_component_func(extern_name("wirm_start_c"), *start_ty_consumer);
         let _ = comp.add_start_section(start_func_consumer, vec![vid], 0);
     }
 
@@ -323,7 +329,7 @@ fn mutate_from_exports_per_scope<'a>(comp: &mut Component<'a>) {
         if let ComponentInstance::FromExports(exports) = &mut comp.component_instance[i] {
             if let Some(first) = exports.first() {
                 let extra = wasmparser::ComponentExport {
-                    name: ComponentExportName("wirm_g_dup"),
+                    name: extern_name("wirm_g_dup"),
                     kind: first.kind,
                     index: first.index,
                     ty: None,
@@ -383,8 +389,7 @@ fn duplicate_and_redirect_core<'a>(comp: &mut Component<'a>) {
         for _ in 0..depth.max(1) {
             let mut new_exports = Vec::with_capacity(exports.len());
             for e in &exports {
-                let alias =
-                    comp.add_alias_core_instance_export(e.kind, current_idx, e.name);
+                let alias = comp.add_alias_core_instance_export(e.kind, current_idx, e.name);
                 let raw_idx = match e.kind {
                     ExternalKind::Func | ExternalKind::FuncExact => *alias.unwrap_core_func(),
                     ExternalKind::Table => *alias.unwrap_core_table(),
@@ -398,8 +403,7 @@ fn duplicate_and_redirect_core<'a>(comp: &mut Component<'a>) {
                     index: raw_idx,
                 });
             }
-            let dup = comp
-                .add_core_instance(Instance::FromExports(new_exports.into_boxed_slice()));
+            let dup = comp.add_core_instance(Instance::FromExports(new_exports.into_boxed_slice()));
             current_idx = *dup;
         }
         redirects.push((src_idx as u32, current_idx));
@@ -408,9 +412,7 @@ fn duplicate_and_redirect_core<'a>(comp: &mut Component<'a>) {
         if let Instance::Instantiate { args, .. } = &mut comp.instances[c] {
             let mut next = args.to_vec();
             for arg in next.iter_mut() {
-                if let Some(&(_, dup)) =
-                    redirects.iter().find(|(orig, _)| *orig == arg.index)
-                {
+                if let Some(&(_, dup)) = redirects.iter().find(|(orig, _)| *orig == arg.index) {
                     arg.index = dup;
                 }
             }
@@ -432,7 +434,7 @@ fn duplicate_and_redirect_component<'a>(comp: &mut Component<'a>) {
         for _ in 0..depth.max(1) {
             let mut new_exports = Vec::with_capacity(exports.len());
             for e in &exports {
-                let alias = comp.add_alias_instance_export(e.kind, current_idx, e.name.0);
+                let alias = comp.add_alias_instance_export(e.kind, current_idx, e.name.name);
                 let raw_idx = match e.kind {
                     ComponentExternalKind::Module => *alias.unwrap_core_module(),
                     ComponentExternalKind::Component => *alias.unwrap_component(),
@@ -456,14 +458,11 @@ fn duplicate_and_redirect_component<'a>(comp: &mut Component<'a>) {
         redirects.push((src_idx as u32, current_idx));
     }
     for c in 0..comp.component_instance.len() {
-        if let ComponentInstance::Instantiate { args, .. } = &mut comp.component_instance[c]
-        {
+        if let ComponentInstance::Instantiate { args, .. } = &mut comp.component_instance[c] {
             let mut next = args.to_vec();
             for arg in next.iter_mut() {
                 if arg.kind == ComponentExternalKind::Instance {
-                    if let Some(&(_, dup)) =
-                        redirects.iter().find(|(orig, _)| *orig == arg.index)
-                    {
+                    if let Some(&(_, dup)) = redirects.iter().find(|(orig, _)| *orig == arg.index) {
                         arg.index = dup;
                     }
                 }
@@ -555,7 +554,7 @@ fn ensure_core_alias_source<'a>(comp: &mut Component<'a>) -> (u32, ExternalKind,
         }]
         .into_boxed_slice(),
     ));
-    let imported = comp.add_import_core_module(ComponentImportName("wirm_src_mod"), *module_type);
+    let imported = comp.add_import_core_module(extern_name("wirm_src_mod"), *module_type);
     let inst = comp.add_core_instance(Instance::Instantiate {
         module_index: *imported,
         args: Vec::new().into_boxed_slice(),
@@ -614,8 +613,7 @@ fn recipe_core_instantiate_chain<'a>(comp: &mut Component<'a>, depth: usize) -> 
         }]
         .into_boxed_slice(),
     ));
-    let src_module =
-        comp.add_import_core_module(ComponentImportName("wirm_chain_src"), *src_module_type);
+    let src_module = comp.add_import_core_module(extern_name("wirm_chain_src"), *src_module_type);
     let chain_module_type = comp.add_core_type(CoreType::Module(
         vec![
             ModuleTypeDeclaration::Import(Import {
@@ -631,7 +629,7 @@ fn recipe_core_instantiate_chain<'a>(comp: &mut Component<'a>, depth: usize) -> 
         .into_boxed_slice(),
     ));
     let chain_module =
-        comp.add_import_core_module(ComponentImportName("wirm_chain_mod"), *chain_module_type);
+        comp.add_import_core_module(extern_name("wirm_chain_mod"), *chain_module_type);
 
     let mut current = comp.add_core_instance(Instance::Instantiate {
         module_index: *src_module,
@@ -742,8 +740,7 @@ fn append_component_arg<'a>(
     index: u32,
 ) {
     let arg = ComponentInstantiationArg { name, kind, index };
-    if let ComponentInstance::Instantiate { args, .. } = &mut comp.component_instance[target_idx]
-    {
+    if let ComponentInstance::Instantiate { args, .. } = &mut comp.component_instance[target_idx] {
         let mut next = args.to_vec();
         next.push(arg);
         *args = next.into_boxed_slice();
@@ -781,22 +778,22 @@ fn export_injected<'a>(comp: &mut Component<'a>, injected: Injected, round_tag: 
     };
     match injected {
         Injected::Module(id) => {
-            comp.add_export_core_module(ComponentExportName(names[0]), id, None);
+            comp.add_export_core_module(extern_name(names[0]), id, None);
         }
         Injected::Component(id) => {
-            comp.add_export_component(ComponentExportName(names[1]), id, None);
+            comp.add_export_component(extern_name(names[1]), id, None);
         }
         Injected::Func(id) => {
-            comp.add_export_component_func(ComponentExportName(names[2]), id, None);
+            comp.add_export_component_func(extern_name(names[2]), id, None);
         }
         Injected::Type(id) => {
-            comp.add_export_component_type(ComponentExportName(names[3]), id, None);
+            comp.add_export_component_type(extern_name(names[3]), id, None);
         }
         Injected::Value(id) => {
-            comp.add_export_component_value(ComponentExportName(names[4]), id, None);
+            comp.add_export_component_value(extern_name(names[4]), id, None);
         }
         Injected::Instance(id) => {
-            comp.add_export_component_instance(ComponentExportName(names[5]), id, None);
+            comp.add_export_component_instance(extern_name(names[5]), id, None);
         }
     }
 }
@@ -842,7 +839,7 @@ fn recipe_module_local<'a>(comp: &mut Component<'a>) -> ModuleID {
 /// Two-hop dep chain; the import is what the new arg points at.
 fn recipe_module_import<'a>(comp: &mut Component<'a>) -> ModuleID {
     let core_type = comp.add_core_type(CoreType::Module(Vec::new().into_boxed_slice()));
-    comp.add_import_core_module(ComponentImportName("wirm_m"), *core_type)
+    comp.add_import_core_module(extern_name("wirm_m"), *core_type)
 }
 
 /// Sub 1: branching. Build `depth` independent (core_type, import)
@@ -863,7 +860,7 @@ fn recipe_module_branching<'a>(
     let mut last = None;
     for i in 0..n {
         let core_type = comp.add_core_type(CoreType::Module(Vec::new().into_boxed_slice()));
-        let m = comp.add_import_core_module(ComponentImportName("wirm_m"), *core_type);
+        let m = comp.add_import_core_module(extern_name("wirm_m"), *core_type);
         if i + 1 < n {
             // Append as an extra arg under an aux name. `aux_names`
             // is sized depth-1 by the caller, so indexing 0..n-1 is
@@ -913,9 +910,9 @@ fn recipe_component_nested<'a>(comp: &mut Component<'a>, depth: usize) -> Compon
     fn build(c: &mut Component<'_>, levels_remaining: usize) -> ComponentId {
         if levels_remaining <= 1 {
             return c.add_component(|inner| {
-                inner.add_component_type(ComponentType::Defined(
-                    ComponentDefinedType::Primitive(PrimitiveValType::U32),
-                ));
+                inner.add_component_type(ComponentType::Defined(ComponentDefinedType::Primitive(
+                    PrimitiveValType::U32,
+                )));
             });
         }
         c.add_component(|inner| {
@@ -929,7 +926,7 @@ fn recipe_component_nested<'a>(comp: &mut Component<'a>, depth: usize) -> Compon
 /// type. Two-hop dep chain.
 fn recipe_component_import<'a>(comp: &mut Component<'a>) -> ComponentId {
     let ty = comp.add_component_type(ComponentType::Component(Vec::new().into_boxed_slice()));
-    comp.add_import_component(ComponentImportName("wirm_c"), *ty)
+    comp.add_import_component(extern_name("wirm_c"), *ty)
 }
 
 // ── kind 2: Func ────────────────────────────────────────────────────
@@ -952,7 +949,7 @@ fn recipe_kind_func<'a>(
 /// Sub 0: empty `ComponentType::Func` then an import of that type.
 fn recipe_func_import<'a>(comp: &mut Component<'a>) -> ComponentFunctionId {
     let func_ty = comp.add_component_type(ComponentType::Func(empty_func_type()));
-    comp.add_import_component_func(ComponentImportName("wirm_f"), *func_ty)
+    comp.add_import_component_func(extern_name("wirm_f"), *func_ty)
 }
 
 /// Sub 1: build a fresh comp-instance with three Func exports
@@ -962,25 +959,25 @@ fn recipe_func_import<'a>(comp: &mut Component<'a>) -> ComponentFunctionId {
 /// `FromExports` export list rather than just single-entry.
 fn recipe_func_alias_instance_export<'a>(comp: &mut Component<'a>) -> ComponentFunctionId {
     let func_ty = comp.add_component_type(ComponentType::Func(empty_func_type()));
-    let imported_a = comp.add_import_component_func(ComponentImportName("wirm_f_a"), *func_ty);
-    let imported_b = comp.add_import_component_func(ComponentImportName("wirm_f_b"), *func_ty);
-    let imported_c = comp.add_import_component_func(ComponentImportName("wirm_f_c"), *func_ty);
+    let imported_a = comp.add_import_component_func(extern_name("wirm_f_a"), *func_ty);
+    let imported_b = comp.add_import_component_func(extern_name("wirm_f_b"), *func_ty);
+    let imported_c = comp.add_import_component_func(extern_name("wirm_f_c"), *func_ty);
     let inst = comp.add_component_instance(ComponentInstance::FromExports(
         vec![
             wasmparser::ComponentExport {
-                name: ComponentExportName("fa"),
+                name: extern_name("fa"),
                 kind: ComponentExternalKind::Func,
                 index: *imported_a,
                 ty: None,
             },
             wasmparser::ComponentExport {
-                name: ComponentExportName("fb"),
+                name: extern_name("fb"),
                 kind: ComponentExternalKind::Func,
                 index: *imported_b,
                 ty: None,
             },
             wasmparser::ComponentExport {
-                name: ComponentExportName("fc"),
+                name: extern_name("fc"),
                 kind: ComponentExternalKind::Func,
                 index: *imported_c,
                 ty: None,
@@ -997,10 +994,7 @@ fn recipe_func_alias_instance_export<'a>(comp: &mut Component<'a>) -> ComponentF
 /// whose result is that defined type, then a func import of that
 /// func type. The final import transitively depends on the whole
 /// defined-type chain, so the encoder must reorder `~3*depth` items.
-fn recipe_func_import_chain<'a>(
-    comp: &mut Component<'a>,
-    depth: usize,
-) -> ComponentFunctionId {
+fn recipe_func_import_chain<'a>(comp: &mut Component<'a>, depth: usize) -> ComponentFunctionId {
     let mut latest_defined = comp.add_component_type(ComponentType::Defined(
         ComponentDefinedType::Primitive(PrimitiveValType::U32),
     ));
@@ -1014,7 +1008,7 @@ fn recipe_func_import_chain<'a>(
             params: Vec::new().into_boxed_slice(),
             result: Some(ComponentValType::Type(*latest_defined)),
         }));
-        last = Some(comp.add_import_component_func(ComponentImportName("wirm_f"), *func_ty));
+        last = Some(comp.add_import_component_func(extern_name("wirm_f"), *func_ty));
     }
     last.expect("depth >= 1")
 }
@@ -1066,7 +1060,7 @@ fn recipe_type_via_outer_alias<'a>(comp: &mut Component<'a>) -> ComponentTypeId 
     let sub_comp = comp.add_component(|inner| {
         let alias = inner.add_alias_outer(ComponentOuterAliasKind::Type, 1, parent_ty_idx);
         let aliased_ty = alias.unwrap_component_type();
-        inner.add_export_component_type(ComponentExportName("t"), aliased_ty, None);
+        inner.add_export_component_type(extern_name("t"), aliased_ty, None);
     });
     let inst = comp.add_component_instance(ComponentInstance::Instantiate {
         component_index: *sub_comp,
@@ -1085,7 +1079,7 @@ fn recipe_type_primitive<'a>(comp: &mut Component<'a>) -> ComponentTypeId {
 
 /// Sub 1: `add_import_component_type` with `SubResource` bounds.
 fn recipe_type_import_bounds<'a>(comp: &mut Component<'a>) -> ComponentTypeId {
-    comp.add_import_component_type(ComponentImportName("wirm_t"), TypeBounds::SubResource)
+    comp.add_import_component_type(extern_name("wirm_t"), TypeBounds::SubResource)
 }
 
 /// Sub 2: depth-N chain of `Defined::List(Type(prev))`. Each level
@@ -1112,9 +1106,9 @@ fn recipe_type_list_chain<'a>(comp: &mut Component<'a>, depth: usize) -> Compone
 /// it's visited from the second chain. A bug in the dedup logic
 /// would either re-emit the shared item or skip it entirely.
 fn recipe_type_diamond<'a>(comp: &mut Component<'a>, depth: usize) -> ComponentTypeId {
-    let shared = comp.add_component_type(ComponentType::Defined(
-        ComponentDefinedType::Primitive(PrimitiveValType::U32),
-    ));
+    let shared = comp.add_component_type(ComponentType::Defined(ComponentDefinedType::Primitive(
+        PrimitiveValType::U32,
+    )));
     let left = list_chain_to(comp, *shared, depth);
     let right = list_chain_to(comp, *shared, depth);
     comp.add_component_type(ComponentType::Defined(ComponentDefinedType::Tuple(
@@ -1148,9 +1142,9 @@ fn list_chain_to<'a>(comp: &mut Component<'a>, start_idx: u32, depth: usize) -> 
 /// fresh Primitive defined type where applicable. Spreads coverage
 /// across the defined-type enum without dedicated recipes for each.
 fn recipe_type_defined_variants<'a>(comp: &mut Component<'a>, sub: u8) -> ComponentTypeId {
-    let prim = comp.add_component_type(ComponentType::Defined(
-        ComponentDefinedType::Primitive(PrimitiveValType::U32),
-    ));
+    let prim = comp.add_component_type(ComponentType::Defined(ComponentDefinedType::Primitive(
+        PrimitiveValType::U32,
+    )));
     let val = ComponentValType::Type(*prim);
     let key_str = ComponentValType::Primitive(PrimitiveValType::String);
     let defined = match sub % 11 {
@@ -1263,11 +1257,7 @@ fn recipe_type_resource<'a>(comp: &mut Component<'a>, sub: u8) -> ComponentTypeI
 
 const NUM_KIND_VALUE_SUBS: u8 = 2;
 
-fn recipe_kind_value<'a>(
-    comp: &mut Component<'a>,
-    sub: u8,
-    depth: usize,
-) -> Option<ValueID> {
+fn recipe_kind_value<'a>(comp: &mut Component<'a>, sub: u8, depth: usize) -> Option<ValueID> {
     match sub % NUM_KIND_VALUE_SUBS {
         0 => Some(recipe_value_primitive(comp)),
         1 => Some(recipe_value_via_list_chain(comp, depth)),
@@ -1278,7 +1268,7 @@ fn recipe_kind_value<'a>(
 /// Sub 0: import a value of primitive type. Single-hop forward ref.
 fn recipe_value_primitive<'a>(comp: &mut Component<'a>) -> ValueID {
     comp.add_import_component_value(
-        ComponentImportName("wirm_v"),
+        extern_name("wirm_v"),
         ComponentValType::Primitive(PrimitiveValType::U32),
     )
 }
@@ -1294,10 +1284,7 @@ fn recipe_value_via_list_chain<'a>(comp: &mut Component<'a>, depth: usize) -> Va
             ComponentValType::Type(*current),
         )));
     }
-    comp.add_import_component_value(
-        ComponentImportName("wirm_v"),
-        ComponentValType::Type(*current),
-    )
+    comp.add_import_component_value(extern_name("wirm_v"), ComponentValType::Type(*current))
 }
 
 // ── kind 5: Instance ────────────────────────────────────────────────
@@ -1343,10 +1330,10 @@ fn recipe_instance_cross_kind_chain<'a>(
         params: Vec::new().into_boxed_slice(),
         result: Some(ComponentValType::Type(*latest_defined)),
     }));
-    let imported_func = comp.add_import_component_func(ComponentImportName("wirm_f"), *func_ty);
+    let imported_func = comp.add_import_component_func(extern_name("wirm_f"), *func_ty);
     comp.add_component_instance(ComponentInstance::FromExports(
         vec![wasmparser::ComponentExport {
-            name: ComponentExportName("f"),
+            name: extern_name("f"),
             kind: ComponentExternalKind::Func,
             index: *imported_func,
             ty: None,
@@ -1384,21 +1371,18 @@ fn recipe_instance_via_subcomponent<'a>(
 /// type. Two-hop dep chain.
 fn recipe_instance_import<'a>(comp: &mut Component<'a>) -> ComponentInstanceId {
     let ty = comp.add_component_type(ComponentType::Instance(Vec::new().into_boxed_slice()));
-    comp.add_import_component_instance(ComponentImportName("wirm_i"), *ty)
+    comp.add_import_component_instance(extern_name("wirm_i"), *ty)
 }
 
 /// Sub 3: chain of `FromExports` component instances where each
 /// aliases a Func export of the previous. Real depth-N chain via
 /// instance-export aliases.
-fn recipe_instance_alias_chain<'a>(
-    comp: &mut Component<'a>,
-    depth: usize,
-) -> ComponentInstanceId {
+fn recipe_instance_alias_chain<'a>(comp: &mut Component<'a>, depth: usize) -> ComponentInstanceId {
     let func_ty = comp.add_component_type(ComponentType::Func(empty_func_type()));
-    let mut current_func = *comp.add_import_component_func(ComponentImportName("wirm_f"), *func_ty);
+    let mut current_func = *comp.add_import_component_func(extern_name("wirm_f"), *func_ty);
     let mut last_inst = comp.add_component_instance(ComponentInstance::FromExports(
         vec![wasmparser::ComponentExport {
-            name: ComponentExportName("f"),
+            name: extern_name("f"),
             kind: ComponentExternalKind::Func,
             index: current_func,
             ty: None,
@@ -1410,7 +1394,7 @@ fn recipe_instance_alias_chain<'a>(
         current_func = *alias.unwrap_component_func();
         last_inst = comp.add_component_instance(ComponentInstance::FromExports(
             vec![wasmparser::ComponentExport {
-                name: ComponentExportName("f"),
+                name: extern_name("f"),
                 kind: ComponentExternalKind::Func,
                 index: current_func,
                 ty: None,

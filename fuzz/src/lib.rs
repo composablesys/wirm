@@ -1,6 +1,6 @@
 //! Shared helpers for the wirm-fuzz targets.
 
-use wasmparser::{Operator, Parser, Payload};
+use wirm::wasmparser::{self, Operator, Parser, Payload};
 
 /// Total number of operators across every function body in a core wasm
 /// module or in every nested core module of a component. Used by the
@@ -98,11 +98,13 @@ macro_rules! check_op_match {
     };
     (@scan $op:ident, $ff:ident, $fg:ident, $fm:ident, $op_name:ident [memarg $($_rest:ident)*]) => {
         if let Operator::$op_name { memarg, .. } = $op {
-            assert_ne!(
-                memarg.memory, $fm,
-                "operator references the just-added imported memory (idx {}); reindex appears to have skipped this op",
-                $fm,
-            );
+            if let wasmparser::MemArgTarget::Memory(mem) = memarg.target {
+                assert_ne!(
+                    mem, $fm,
+                    "operator references the just-added imported memory (idx {}); reindex appears to have skipped this op",
+                    $fm,
+                );
+            }
             return;
         }
     };

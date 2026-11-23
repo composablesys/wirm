@@ -14,6 +14,7 @@
 
 use libfuzzer_sys::fuzz_target;
 use wasm_smith::Component as SmithComponent;
+use wirm::wasmparser;
 
 fuzz_target!(|smith: SmithComponent| {
     let bytes = smith.to_bytes();
@@ -31,9 +32,9 @@ fuzz_target!(|smith: SmithComponent| {
     };
 
     for import in comp.imports.iter() {
-        let _ = comp.concretize_import(import.name.0);
+        let _ = comp.concretize_import(import.name.name);
     }
     for export in comp.exports.iter() {
-        let _ = comp.concretize_export(export.name.0);
+        let _ = comp.concretize_export(export.name.name);
     }
 });

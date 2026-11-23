@@ -248,9 +248,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-encoder"
-version = "0.247.0"
+version = "0.263.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30b6733b8b91d010a6ac5b0fb237dc46a19650bc4c67db66857e2e787d437204"
+checksum = "0b883a26aea02eaabe2d2c3fba7eb039ef5cdcb5d5201ae5551e73d5e251a81f"
 dependencies = [
  "leb128fmt",
  "wasmparser",
@@ -258,9 +258,9 @@ dependencies = [
 
 [[package]]
 name = "wasm-smith"
-version = "0.247.0"
+version = "0.263.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d73849650a48c574f68c429fedaa363b4acff38dc1c28b213b6f7c8b22ab7ceb"
+checksum = "1102593f74a5b8b496683ea553f55a899a54461a5ad370d1a9eafd32e698a29d"
 dependencies = [
  "anyhow",
  "arbitrary",
@@ -270,9 +270,9 @@ dependencies = [
 
 [[package]]
 name = "wasmparser"
-version = "0.247.0"
+version = "0.263.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e6fb4c2bee46c5ea4d40f8cdb5c131725cd976718ec56f1c8e82fbde5fa2a80"
+checksum = "4f5fa0a054ae153606df820eb0a84213e28cda41bbe04ba2628e71b6ba100fcb"
 dependencies = [
  "bitflags",
  "hashbrown",
@@ -283,7 +283,7 @@ dependencies = [
 
 [[package]]
 name = "wirm"
-version = "5.0.0"
+version = "5.2.0"
 dependencies = [
  "log",
  "paste",
@@ -296,9 +296,7 @@ name = "wirm-fuzz"
 version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
- "wasm-encoder",
  "wasm-smith",
- "wasmparser",
  "wirm",
 ]
 
