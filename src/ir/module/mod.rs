@@ -1023,6 +1023,11 @@ impl<'a> Module<'a> {
 
         // First fix the ID mappings throughout the module
         let func_mapping = if tmp.functions.recalculate_ids {
+            // imported functions are indexed in the order of the import section
+            tmp.functions.as_vec_mut().sort_by_key(|f| match f.kind() {
+                FuncKind::Import(i) => *i.import_id,
+                FuncKind::Local(_) => u32::MAX,
+            });
             Self::recalculate_ids(&mut tmp.functions)
         } else {
             Self::get_mapping_generic(tmp.functions.as_vec().iter())
