@@ -408,10 +408,7 @@ fn test_get_func_after_non_function_import() {
     .expect("couldn't convert the input wat to Wasm");
     let module = Module::parse(&buff, false, false).expect("Unable to parse");
 
-    assert_eq!(
-        module.imports.get_func("env".to_string(), "f".to_string()),
-        Some(FunctionID(0))
-    );
+    assert_eq!(module.get_import_func("env", "f"), Some(FunctionID(0)));
 }
 
 /// A `FunctionID` counts only function imports, so non-function imports that
